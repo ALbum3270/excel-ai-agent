@@ -190,16 +190,16 @@ Public Class PostFlushValidator
     Private Function ValidateProofreadJson(content As String) As ParseResult
         Try
             ' 使用新的统一解析器
-            Dim parseResult = ProofreadJsonParser.Parse(content)
+            Dim proofreadResult = ProofreadJsonParser.Parse(content)
 
-            If Not parseResult.Success Then
+            If Not proofreadResult.Success Then
                 Return ParseResult.Failure(New InstructionError(
-                    ErrorLevel.Critical, parseResult.ErrorMessage))
+                    ErrorLevel.Critical, proofreadResult.ErrorMessage))
             End If
 
             ' 转换成DSL指令
             Dim instructions As New List(Of Instruction)()
-            For Each issue In parseResult.Issues
+            For Each issue In proofreadResult.Issues
                 Dim instruction = New Instruction("suggestCorrection", Nothing)
 
                 ' 设置target
