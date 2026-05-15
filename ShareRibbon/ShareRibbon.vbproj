@@ -398,6 +398,7 @@
     <Compile Include="Services\UnifiedMemoryService.vb" />
     <Compile Include="Services\Proofread\ProofreadModels.vb" />
     <Compile Include="Services\Proofread\ProofreadPromptBuilder.vb" />
+    <Compile Include="Services\Proofread\ProofreadJsonParser.vb" />
     <Compile Include="Services\Proofread\SmartProofreadFocusMode.vb" />
     <!-- WordDocumentService.vb 移至WordAi项目（需Word Interop） -->
     <Compile Include="Loop\LoopPhase.vb" />

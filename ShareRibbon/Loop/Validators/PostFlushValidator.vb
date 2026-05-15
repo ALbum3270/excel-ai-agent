@@ -185,29 +185,43 @@ Public Class PostFlushValidator
     End Function
 
     ''' <summary>
-    ''' 校验校对JSON格式
+    ''' 校验校对JSON格式（支持多种格式）
     ''' </summary>
     Private Function ValidateProofreadJson(content As String) As ParseResult
         Try
-            Dim jsonArray = JArray.Parse(content)
+            ' 使用新的统一解析器
+            Dim parseResult = ProofreadJsonParser.Parse(content)
+
+            If Not parseResult.Success Then
+                Return ParseResult.Failure(New InstructionError(
+                    ErrorLevel.Critical, parseResult.ErrorMessage))
+            End If
+
+            ' 转换成DSL指令
             Dim instructions As New List(Of Instruction)()
+            For Each issue In parseResult.Issues
+                Dim instruction = New Instruction("suggestCorrection", Nothing)
 
-            For i = 0 To jsonArray.Count - 1
-                Dim item = jsonArray(i)
-                If item.Type <> JTokenType.Object Then
-                    Continue For
-                End If
-
-                Dim itemObj = CType(item, JObject)
-
-                ' 将校对结果转换为DSL指令
-                Dim instruction = New Instruction("suggestCorrection", itemObj)
+                ' 设置target
                 instruction.Target = New JObject From {
                     {"type", "textMatch"},
-                    {"match", itemObj("original")?.ToString()}
+                    {"match", issue.Original}
                 }
+
+                ' 设置params
+                instruction.Params = New JObject From {
+                    {"original", issue.Original},
+                    {"suggestion", issue.Suggestion},
+                    {"issueType", issue.IssueType.ToString()},
+                    {"severity", issue.Severity.ToString()},
+                    {"explanation", issue.Explanation}
+                }
+
+                ' 设置expected描述
+                Dim originalPreview = If(issue.Original.Length > 20, issue.Original.Substring(0, 20) & "...", issue.Original)
+                Dim suggestionPreview = If(issue.Suggestion.Length > 20, issue.Suggestion.Substring(0, 20) & "...", issue.Suggestion)
                 instruction.Expected = New JObject From {
-                    {"description", $"建议将'{itemObj("original")}'修正为'{itemObj("suggestion")}'"}
+                    {"description", $"建议将'{originalPreview}'修正为'{suggestionPreview}'"}
                 }
 
                 instructions.Add(instruction)
@@ -215,8 +229,9 @@ Public Class PostFlushValidator
 
             Return ParseResult.Success(instructions)
 
-        Catch ex As JsonException
-            Return ParseResult.Failure(New InstructionError(ErrorLevel.Critical, $"校对JSON解析失败: {ex.Message}"))
+        Catch ex As Exception
+            Return ParseResult.Failure(New InstructionError(
+                ErrorLevel.Critical, $"校对处理失败: {ex.Message}"))
         End Try
     End Function
 

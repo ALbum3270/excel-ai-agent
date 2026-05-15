@@ -46,7 +46,9 @@ Public Class ProofreadPromptBuilder
         sb.AppendLine()
         
         sb.AppendLine("【输出要求】")
-        sb.AppendLine("请以JSON数组格式返回校对结果：")
+        sb.AppendLine("请以JSON格式返回校对结果，支持以下两种格式之一：")
+        sb.AppendLine()
+        sb.AppendLine("格式A：纯数组（推荐）")
         sb.AppendLine("[")
         sb.AppendLine("  {")
         sb.AppendLine("    ""paragraphIndex"": 0,")
@@ -57,6 +59,21 @@ Public Class ProofreadPromptBuilder
         sb.AppendLine("    ""explanation"": ""简要说明修改原因""")
         sb.AppendLine("  }")
         sb.AppendLine("]")
+        sb.AppendLine()
+        sb.AppendLine("格式B：对象包装（也可以）")
+        sb.AppendLine("{")
+        sb.AppendLine("  ""issues"": [")
+        sb.AppendLine("    {")
+        sb.AppendLine("      ""paragraphIndex"": 0,")
+        sb.AppendLine("      ""original"": ""需要修正的原文片段（必须精确匹配）"",")
+        sb.AppendLine("      ""suggestion"": ""修正后的文本（只写修正内容，不要加说明）"",")
+        sb.AppendLine("      ""issueType"": ""WordUsageError"",")
+        sb.AppendLine("      ""severity"": ""High"",")
+        sb.AppendLine("      ""explanation"": ""简要说明修改原因""")
+        sb.AppendLine("    }")
+        sb.AppendLine("  ],")
+        sb.AppendLine("  ""summary"": ""可选的摘要说明""")
+        sb.AppendLine("}")
         sb.AppendLine()
         
         sb.AppendLine("【issueType可选值】")
@@ -84,66 +101,27 @@ Public Class ProofreadPromptBuilder
     End Function
 
     ''' <summary>
-    ''' 解析AI返回的校对结果
+    ''' 解析AI返回的校对结果（使用统一解析器）
     ''' </summary>
     Public Shared Function ParseProofreadResponse(
         aiResponse As String,
         Optional paragraphs As List(Of String) = Nothing) As List(Of ProofreadIssue)
-        
-        Dim issues As New List(Of ProofreadIssue)()
-        
+
         Try
-            ' 清理响应，提取JSON
-            Dim jsonContent = ExtractJson(aiResponse)
-            If String.IsNullOrEmpty(jsonContent) Then Return issues
-            
-            ' 解析JSON数组
-            Dim jsonArray = JArray.Parse(jsonContent)
-            
-            For Each item In jsonArray
-                Dim issue As New ProofreadIssue()
-                
-                ' 解析基本字段
-                If item("paragraphIndex") IsNot Nothing Then
-                    issue.ParagraphIndex = CInt(item("paragraphIndex"))
-                End If
-                
-                If item("original") IsNot Nothing Then
-                    issue.Original = item("original").ToString()
-                End If
-                
-                If item("suggestion") IsNot Nothing Then
-                    issue.Suggestion = item("suggestion").ToString()
-                End If
-                
-                If item("issueType") IsNot Nothing Then
-                    issue.IssueType = ParseIssueType(item("issueType").ToString())
-                End If
-                
-                If item("severity") IsNot Nothing Then
-                    issue.Severity = ParseSeverity(item("severity").ToString())
-                End If
-                
-                If item("explanation") IsNot Nothing Then
-                    issue.Explanation = item("explanation").ToString()
-                End If
-                
-                ' 生成唯一ID
-                issue.Id = Guid.NewGuid().ToString()
-                
-                ' 验证数据有效性
-                If Not String.IsNullOrEmpty(issue.Original) AndAlso 
-                   Not String.IsNullOrEmpty(issue.Suggestion) AndAlso
-                   issue.ParagraphIndex >= 0 Then
-                    issues.Add(issue)
-                End If
-            Next
-            
+            ' 使用新的统一解析器
+            Dim parseResult = ProofreadJsonParser.Parse(aiResponse)
+
+            If Not parseResult.Success Then
+                Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果失败: {parseResult.ErrorMessage}")
+                Return New List(Of ProofreadIssue)()
+            End If
+
+            Return parseResult.Issues
+
         Catch ex As Exception
-            Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果失败: {ex.Message}")
+            Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果异常: {ex.Message}")
+            Return New List(Of ProofreadIssue)()
         End Try
-        
-        Return issues
     End Function
 
     ''' <summary>

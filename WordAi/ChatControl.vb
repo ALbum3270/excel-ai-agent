@@ -73,62 +73,62 @@ Public Class ChatControl
     Protected Overrides Sub HandlePreviewTemplateInWord(jsonDoc As Newtonsoft.Json.Linq.JObject)
         Dim templateId As String = jsonDoc("templateId")?.ToString()
         If String.IsNullOrEmpty(templateId) Then
-                GlobalStatusStrip.ShowWarning("模板ID不能为空")
+            GlobalStatusStrip.ShowWarning("模板ID不能为空")
+            Return
+        End If
+
+        ' docx映射卡片：直接打开关联的.docx文件预览
+        If templateId.StartsWith("docx_") Then
+            Dim mappingId = templateId.Substring(5)
+            Dim mapping = SemanticMappingManager.Instance.GetMappingById(mappingId)
+            If mapping Is Nothing Then
+                GlobalStatusStrip.ShowWarning("语义映射不存在")
+                Return
+            End If
+            If String.IsNullOrEmpty(mapping.SourceFilePath) OrElse Not IO.File.Exists(mapping.SourceFilePath) Then
+                GlobalStatusStrip.ShowWarning("原始模板文件已丢失，请重新上传")
                 Return
             End If
 
-            ' docx映射卡片：直接打开关联的.docx文件预览
-            If templateId.StartsWith("docx_") Then
-                Dim mappingId = templateId.Substring(5)
-                Dim mapping = SemanticMappingManager.Instance.GetMappingById(mappingId)
-                If mapping Is Nothing Then
-                    GlobalStatusStrip.ShowWarning("语义映射不存在")
-                    Return
-                End If
-                If String.IsNullOrEmpty(mapping.SourceFilePath) OrElse Not IO.File.Exists(mapping.SourceFilePath) Then
-                    GlobalStatusStrip.ShowWarning("原始模板文件已丢失，请重新上传")
-                    Return
-                End If
-
-                ' 直接用系统默认方式打开文档（新Word实例）
-                Try
-                    Process.Start(mapping.SourceFilePath)
-                    GlobalStatusStrip.ShowInfo($"已打开模板文档预览: {mapping.Name}")
-                Catch ex As Exception
-                    GlobalStatusStrip.ShowWarning($"打开文档失败: {ex.Message}")
-                End Try
-                Return
-            End If
-
-            ' 常规模板预览：先保存为临时文件，然后用系统默认方式打开
-            Dim template As ReformatTemplate = ReformatTemplateManager.Instance.GetTemplateById(templateId)
-            If template Is Nothing Then
-                GlobalStatusStrip.ShowWarning($"找不到ID为 {templateId} 的模板")
-                Return
-            End If
-
+            ' 直接用系统默认方式打开文档（新Word实例）
             Try
-                ' 创建临时文件
-                Dim tempPath = IO.Path.Combine(IO.Path.GetTempPath(), $"模板预览_{template.Name}_{DateTime.Now:yyyyMMddHHmmss}.docx")
-
-                ' 使用当前Word实例创建临时文档
-                Dim currentApp = Globals.ThisAddIn.Application
-                Dim tempDoc = currentApp.Documents.Add()
-
-                ApplyTemplateToDocument(tempDoc, template)
-
-                ' 保存并关闭临时文档
-                tempDoc.SaveAs2(tempPath)
-                tempDoc.Close(SaveChanges:=False)
-
-                ' 用系统默认方式打开（新Word实例）
-                Process.Start(tempPath)
-
-                GlobalStatusStrip.ShowInfo($"已打开模板预览: {template.Name}")
+                Process.Start(mapping.SourceFilePath)
+                GlobalStatusStrip.ShowInfo($"已打开模板文档预览: {mapping.Name}")
             Catch ex As Exception
-                GlobalStatusStrip.ShowWarning($"预览模板失败: {ex.Message}")
-                Debug.WriteLine($"HandlePreviewTemplateInWord 错误: {ex.Message}")
+                GlobalStatusStrip.ShowWarning($"打开文档失败: {ex.Message}")
             End Try
+            Return
+        End If
+
+        ' 常规模板预览：先保存为临时文件，然后用系统默认方式打开
+        Dim template As ReformatTemplate = ReformatTemplateManager.Instance.GetTemplateById(templateId)
+        If template Is Nothing Then
+            GlobalStatusStrip.ShowWarning($"找不到ID为 {templateId} 的模板")
+            Return
+        End If
+
+        Try
+            ' 创建临时文件
+            Dim tempPath = IO.Path.Combine(IO.Path.GetTempPath(), $"模板预览_{template.Name}_{DateTime.Now:yyyyMMddHHmmss}.docx")
+
+            ' 使用当前Word实例创建临时文档
+            Dim currentApp = Globals.ThisAddIn.Application
+            Dim tempDoc = currentApp.Documents.Add()
+
+            ApplyTemplateToDocument(tempDoc, template)
+
+            ' 保存并关闭临时文档
+            tempDoc.SaveAs2(tempPath)
+            tempDoc.Close(SaveChanges:=False)
+
+            ' 用系统默认方式打开（新Word实例）
+            Process.Start(tempPath)
+
+            GlobalStatusStrip.ShowInfo($"已打开模板预览: {template.Name}")
+        Catch ex As Exception
+            GlobalStatusStrip.ShowWarning($"预览模板失败: {ex.Message}")
+            Debug.WriteLine($"HandlePreviewTemplateInWord 错误: {ex.Message}")
+        End Try
     End Sub
 
     ''' <summary>
