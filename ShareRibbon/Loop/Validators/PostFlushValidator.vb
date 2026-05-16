@@ -117,7 +117,9 @@ Public Class PostFlushValidator
     ''' </summary>
     Private Function ValidateDslJson(content As String) As ParseResult
         Try
-            Dim json = JObject.Parse(content)
+            ' 清理JSON内容，移除末尾多余的逗号等不规范字符
+            Dim cleanedContent = CleanJsonContent(content)
+            Dim json = JObject.Parse(cleanedContent)
 
             ' 必须有version和instructions
             If json("version") Is Nothing Then
@@ -182,6 +184,54 @@ Public Class PostFlushValidator
         Catch ex As JsonException
             Return ParseResult.Failure(New InstructionError(ErrorLevel.Critical, $"JSON解析失败: {ex.Message}"))
         End Try
+    End Function
+
+    ''' <summary>
+    ''' 清理JSON内容，移除不规范字符
+    ''' </summary>
+    Private Function CleanJsonContent(content As String) As String
+        If String.IsNullOrWhiteSpace(content) Then
+            Return content
+        End If
+
+        Dim result = content.Trim()
+
+        ' 找到最外层的{}或[]
+        Dim startBrace = result.IndexOf("{"c)
+        Dim startBracket = result.IndexOf("["c)
+        Dim realStart = -1
+
+        If startBrace >= 0 AndAlso startBracket >= 0 Then
+            realStart = Math.Min(startBrace, startBracket)
+        ElseIf startBrace >= 0 Then
+            realStart = startBrace
+        ElseIf startBracket >= 0 Then
+            realStart = startBracket
+        End If
+
+        If realStart >= 0 Then
+            ' 从真正的JSON开始位置截取
+            result = result.Substring(realStart)
+        End If
+
+        ' 处理结束位置：找到匹配的结束括号
+        If result.StartsWith("{") Then
+            Dim lastBrace = result.LastIndexOf("}"c)
+            If lastBrace >= 0 Then
+                result = result.Substring(0, lastBrace + 1)
+            End If
+        ElseIf result.StartsWith("[") Then
+            Dim lastBracket = result.LastIndexOf("]"c)
+            If lastBracket >= 0 Then
+                result = result.Substring(0, lastBracket + 1)
+            End If
+        End If
+
+        ' 移除末尾多余的逗号（常见问题）
+        ' 查找数组或对象末尾可能存在的多余逗号
+        result = System.Text.RegularExpressions.Regex.Replace(result, ",\s*([\}\]])", "$1")
+
+        Return result
     End Function
 
     ''' <summary>

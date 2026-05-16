@@ -140,13 +140,13 @@ Public Class ProofreadJsonParser
         ' 格式1: ```json ... ```
         Dim codeBlockMatch = Regex.Match(content, "```(?:json)?\s*([\s\S]*?)\s*```", RegexOptions.IgnoreCase)
         If codeBlockMatch.Success Then
-            Return codeBlockMatch.Groups(1).Value.Trim()
+            content = codeBlockMatch.Groups(1).Value.Trim()
         End If
 
         ' 格式2: ` ... `
         Dim inlineMatch = Regex.Match(content, "`\s*([\s\S]*?)\s*`")
         If inlineMatch.Success Then
-            Return inlineMatch.Groups(1).Value.Trim()
+            content = inlineMatch.Groups(1).Value.Trim()
         End If
 
         ' 尝试找到第一个 [ 或 {
@@ -154,8 +154,12 @@ Public Class ProofreadJsonParser
         Dim lastBracket = Math.Max(content.LastIndexOf("]"c), content.LastIndexOf("}"c))
 
         If firstBracket >= 0 AndAlso lastBracket > firstBracket Then
-            Return content.Substring(firstBracket, lastBracket - firstBracket + 1)
+            content = content.Substring(firstBracket, lastBracket - firstBracket + 1)
         End If
+
+        ' 移除末尾多余的逗号（常见问题）
+        ' 查找数组或对象末尾可能存在的多余逗号
+        content = Regex.Replace(content, ",\s*([\}\]])", "$1")
 
         Return content
     End Function
