@@ -549,10 +549,8 @@ Public MustInherit Class BaseChatControl
     Protected Sub WebView2_WebMessageReceived(sender As Object, e As CoreWebView2WebMessageReceivedEventArgs)
         Try
             Dim rawJson As String = e.WebMessageAsJson
-            Debug.WriteLine($"[DEBUG WebMessageReceived] raw={If(rawJson?.Length > 200, rawJson.Substring(0, 200), rawJson)}")
             Dim jsonDoc As JObject = JObject.Parse(rawJson)
             Dim messageType As String = jsonDoc("type").ToString()
-            Debug.WriteLine($"[DEBUG WebMessageReceived] messageType={messageType}")
 
             Select Case messageType
                 Case "checkedChange"
@@ -748,7 +746,6 @@ Public MustInherit Class BaseChatControl
                     Debug.WriteLine($"未知消息类型: {messageType}")
             End Select
         Catch ex As Exception
-            Debug.WriteLine($"[DEBUG WebMessageReceived] 处理消息出错: {ex.Message}")
             Debug.WriteLine($"[DEBUG WebMessageReceived] StackTrace: {ex.StackTrace}")
         End Try
     End Sub
