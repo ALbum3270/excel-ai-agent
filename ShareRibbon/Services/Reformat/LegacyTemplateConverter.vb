@@ -36,6 +36,11 @@ Public Class LegacyTemplateConverter
         ' 确保基础标签
         EnsureBasicTags(mapping)
 
+        ' 公文场景：添加公文特有的语义标签
+        If template.Category = "公文" OrElse template.Name.Contains("公文") Then
+            AddOfficialDocumentTags(mapping)
+        End If
+
         ' 缓存转换结果
         SemanticMappingManager.Instance.AddMapping(mapping)
 
@@ -134,6 +139,91 @@ Public Class LegacyTemplateConverter
             mapping.SemanticTags.Add(New SemanticTag(
                 SemanticTagRegistry.TAG_TITLE_1, "一级标题",
                 SemanticTagRegistry.TAG_TITLE, 2, "主要章节标题"))
+        End If
+    End Sub
+
+    ''' <summary>添加公文特有的语义标签</summary>
+    Private Shared Sub AddOfficialDocumentTags(mapping As SemanticStyleMapping)
+        ' 发文机关标志（红色大字）
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "header.org") Then
+            Dim tag = New SemanticTag("header.org", "发文机关标志", "header", 2,
+                "发文机关全称+文件字样，如'XX市人民政府文件'，通常居中红色大号字体")
+            tag.Font = New FontConfig("方正小标宋简体", "Arial", 22, True)
+            tag.Paragraph = New ParagraphConfig("center", 0, 1.5) With {.SpaceBefore = 2}
+            tag.Color = New ColorConfig("#C00000")
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 发文字号
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "header.refno") Then
+            Dim tag = New SemanticTag("header.refno", "发文字号", "header", 2,
+                "公文发文字号，格式如'×政发〔2024〕15号'，通常位于红色分隔线下方")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("center", 0, 1.0)
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 签发人（上行文）
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "header.signer") Then
+            Dim tag = New SemanticTag("header.signer", "签发人", "header", 2,
+                "上行文才有的签发人信息，格式'签发人：×××'，通常右对齐")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("right", 0, 1.0) With {.SpaceBefore = 0.5}
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 文件标题
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "title.main") Then
+            Dim tag = New SemanticTag("title.main", "文件标题", "title", 2,
+                "公文的主标题，如'关于加强安全生产工作的通知'，通常居中")
+            tag.Font = New FontConfig("方正小标宋简体", "Arial", 22, True)
+            tag.Paragraph = New ParagraphConfig("center", 0, 1.5) With {.SpaceBefore = 1.5, .SpaceAfter = 1.5}
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 主送机关
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "title.recipient") Then
+            Dim tag = New SemanticTag("title.recipient", "主送机关", "title", 2,
+                "公文的主送机关，如'各区县人民政府：'，通常顶格左对齐")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("left", 0, 1.0)
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 附件说明
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "body.attachment") Then
+            Dim tag = New SemanticTag("body.attachment", "附件说明", "body", 2,
+                "附件说明段落，格式'附件：1. ××××'，通常首行缩进")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("left", 2, 1.875) With {.SpaceBefore = 1}
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 发文机关署名
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "footer.signature") Then
+            Dim tag = New SemanticTag("footer.signature", "发文机关署名", "footer", 2,
+                "公文末尾的发文机关署名，如'XX市人民政府'，通常右对齐")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("right", 2, 1.0) With {.SpaceBefore = 2}
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 成文日期
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "footer.date") Then
+            Dim tag = New SemanticTag("footer.date", "成文日期", "footer", 2,
+                "公文成文日期，格式'2024年1月15日'，通常右对齐")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 16)
+            tag.Paragraph = New ParagraphConfig("right", 0, 1.0)
+            mapping.SemanticTags.Add(tag)
+        End If
+
+        ' 抄送
+        If Not mapping.SemanticTags.Any(Function(t) t.TagId = "footer.cc") Then
+            Dim tag = New SemanticTag("footer.cc", "抄送机关", "footer", 2,
+                "版记中的抄送信息，格式'抄送：×××，×××。'")
+            tag.Font = New FontConfig("仿宋_GB2312", "Times New Roman", 14)
+            tag.Paragraph = New ParagraphConfig("left", 2, 1.0)
+            mapping.SemanticTags.Add(tag)
         End If
     End Sub
 End Class

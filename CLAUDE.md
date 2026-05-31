@@ -53,17 +53,6 @@ AiHelper/
 | **JSON** | Newtonsoft.Json, System.Text.Json |
 | **Markdown** | Markdig |
 
-## Key Features
-
-### Core Capabilities
-- **AI 翻译**: 多语言、多模型 AI 翻译（段落/整页）
-- **智能排版**: 文档/PPT 内容排版，支持模板定制
-- **AI 续写**: 智能续写文档或 PPT 内容
-- **内容校对**: 错句词审阅修订
-- **Ralph Loop**: 首个将智能规划 Ralph Loop 集成到 Office 的插件
-- **MCP 客户端**: 支持 MCP-Server 配置
-- **DeepSeek/Doubao 增强**: 针对这两个模型优化
-
 ### Excel 特有功能
 - 数据分析、图表生成、公式辅助
 - ALLM/CLLM 函数（ExcelDNA）
@@ -107,32 +96,6 @@ msbuild PowerPointAi/PowerPointAi.vbproj
 - 查看 `docs/VS2025-VSTO-Migration-Guide.md` 了解 VSTO 迁移指南
 
 ## Key Architecture
-
-### ShareRibbon Core Namespaces
-
-| Namespace | Purpose |
-|-----------|---------|
-| `ShareRibbon.Config` | 配置管理 (ConfigManager, PromptManager, ModelApiClient, ChatSettings) |
-| `ShareRibbon.Controls` | UI组件 (BaseChatControl, BaseDeepseekChat, BaseDoubaoChat) |
-| `ShareRibbon.Controls.Services` | 核心服务 (HttpStreamService, MessageService, IntentRecognitionService, MemoryService, McpService, AgentKernelService) |
-| `ShareRibbon.Controls.Models` | 数据模型 (SelectionInfo, HistoryMessage, ExecutionStep) |
-| `ShareRibbon.Mcp` | MCP协议 (StreamJsonRpcMCPClient, MCPConnectionConfig) |
-| `ShareRibbon.Storage` | 数据存储 (OfficeAiDatabase, ConversationRepository, FormatTemplateRepository) |
-| `ShareRibbon.Loop` | Ralph Loop 智能体 (RalphLoopController, RalphAgentController) |
-| `ShareRibbon.Ribbon` | 共享 Ribbon 基类 (BaseOfficeRibbon) |
-| `ShareRibbon.Agent` | 智能体核心 (AgentKernel, AgentMemory, LoopEngine, ToolRegistry, SkillRegistry) |
-| `ShareRibbon.Services` | 业务服务 (EmbeddingService, SkillsService, UnifiedMemoryService) |
-| `ShareRibbon.Services.Reformat` | 排版服务 (DocumentParserService, FormatPreviewService) |
-| `ShareRibbon.Translate` | 翻译服务 (TranslateActionForm, TranslateSettings) |
-| `ShareRibbon.Formatting` | 格式化服务 |
-| `ShareRibbon.Common` | 公共工具 (LLMUtil) |
-| `ShareRibbon.Log` | 日志 (SimpleLogger) |
-| `ShareRibbon.Prompts` | 提示词模板 |
-| `ShareRibbon.Skills` | Skills 定义 |
-| `ShareRibbon.Tools` | 工具类 |
-| `ShareRibbon.Continuation` | 续写服务 (ContinuationService) |
-| `ShareRibbon.Resources` | 共享资源 (ShareResources) |
-
 ### Office Application-Specific Structure
 
 Each Office app plugin (ExcelAi/WordAi/PowerPointAi) references ShareRibbon and provides:
@@ -189,37 +152,42 @@ Each Office app plugin (ExcelAi/WordAi/PowerPointAi) references ShareRibbon and 
 - `Async Sub ... As Task` 不合法，必须用 `Async Function ... As Task`
 - `Async Function` 中不能有 `ByRef` 参数
 
-### 意图识别流程
-- 需要结合 `referenceSummary` + `ragSnippets` + 当前会话上下文
-- 发送前应收集「内容区引用 + RAG 相关记忆 + 当前会话」
-- 意图确认后可进入「请求 Spec 步骤 → 解析 JSON steps → 按 RalphLoopController 逐步执行」
-
-### 中文交互
-- 请用中文与项目维护者交互
-- 代码注释也使用中文
-
-## Reference Documents
-
-| 文档 | 说明 |
-|------|------|
-| `AGENTS.md` | 更详细的代码库知识库 |
-| `docs/roadmap.md` | 产品路线图 |
-| `docs/01Memory.md` | 记忆能力设计文档 |
-| `docs/02SkillsConfig.md` | Skills 配置文档 |
-| `docs/03ChatAi.md` | Chat AI 设计文档 |
-| `docs/agent-architecture-redesign.md` | 智能体架构重设计文档 |
-| `docs/smart-reformat-design.md` | 智能排版设计文档 |
-| `docs/smart-reformat-v2.md` | 智能排版 V2 设计文档 |
-| `docs/CODE_ANALYSIS.md` | 代码分析与优化报告 |
-| `docs/VS2025-VSTO-Migration-Guide.md` | VSTO 迁移指南 |
-| `docs/WordAi-Startup-Optimization.md` | Word 启动优化文档 |
-| `docs/需求整理与设计方案.md` | 需求整理与设计方案 |
-| `docs/VisualStudio调试问题诊断.md` | VS 调试问题诊断 |
-| `.github/copilot-instructions.md` | Copilot 指令 |
-
 ## 代码审查重点 (AI Agent 协作时)
 
 1. **VB.NET 语法检查**: 确认没有 C# 语法污染
 2. **新文件注册**: 确认新增 .vb/.js 文件已加入 .vbproj
 3. **API 一致性**: 多 Agent 协作时验证类型 API 一致性
 4. **上下文完整**: 给 Agent 的 prompt 必须包含语言、关键类型、文件路径、边界
+
+## CodeGraph
+
+CodeGraph builds a semantic knowledge graph of codebases for faster, smarter code exploration.
+
+### If `.codegraph/` exists in the project
+
+**NEVER call `codegraph_explore` or `codegraph_context` directly in the main session.** These tools return large amounts of source code that fills up main session context. Instead, ALWAYS spawn an Explore agent for any exploration question (e.g., "how does X work?", "explain the Y system", "where is Z implemented?").
+
+**When spawning Explore agents**, include this instruction in the prompt:
+
+> This project has CodeGraph initialized (.codegraph/ exists). Use `codegraph_explore` as your PRIMARY tool — it returns full source code sections from all relevant files in one call.
+>
+> **Rules:**
+> 1. Follow the explore call budget in the `codegraph_explore` tool description — it scales automatically based on project size.
+> 2. Do NOT re-read files that codegraph_explore already returned source code for. The source sections are complete and authoritative.
+> 3. Only fall back to grep/glob/read for files listed under "Additional relevant files" if you need more detail, or if codegraph returned no results.
+
+**The main session may only use these lightweight tools directly** (for targeted lookups before making edits, not for exploration):
+
+| Tool | Use For |
+|------|---------|
+| `codegraph_search` | Find symbols by name |
+| `codegraph_callers` / `codegraph_callees` | Trace call flow |
+| `codegraph_impact` | Check what's affected before editing |
+| `codegraph_node` | Get a single symbol's details |
+
+### If `.codegraph/` does NOT exist
+
+At the start of a session, ask the user if they'd like to initialize CodeGraph:
+
+"I notice this project doesn't have CodeGraph initialized. Would you like me to run `codegraph init -i` to build a code knowledge graph?"
+

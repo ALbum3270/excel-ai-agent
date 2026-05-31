@@ -43,13 +43,7 @@ Public Class Ribbon1
         MessageBox.Show("批量数据生成功能仅适用于 Excel。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
-    Protected Overrides Sub MCPButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' 创建并显示MCP配置表单
-        Dim mcpConfigForm As New MCPConfigForm()
-        If mcpConfigForm.ShowDialog() = DialogResult.OK Then
-            ' 在需要时可以集成到ChatControl调用MCP服务
-        End If
-    End Sub
+    ' MCPButton_Click 已在 BaseOfficeRibbon 中提供共用实现，Word 不需要差异化逻辑，故不再重写。
 
     ' Proofread 按钮 — 校对专注模式入口
     Protected Overrides Async Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
@@ -206,25 +200,27 @@ Public Class Ribbon1
     End Sub
 
     ' AI续写功能
-    Protected Overrides Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
+    ' 注意：原实现使用 Task.Run(Async Function() ...) 把 WebView2 的 ExecuteScriptAsync 抛到线程池线程执行，
+    ' 而 WebView2 是 STA / 必须在 UI 线程调度的，这种写法在某些机器上会偶发 COMException 或错误吞异常。
+    ' 改为 Async Sub + Await Task.Delay，让续写脚本调用回到 UI 线程同步上下文执行。
+    Protected Overrides Async Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
             ' 确保侧栏已打开
             Globals.ThisAddIn.ShowChatTaskPane()
 
             ' 获取ChatControl并触发续写（自动模式，显示对话框）
             Dim chatCtrl = ThisAddIn.chatControl
-            If chatCtrl IsNot Nothing Then
-                ' 稍等一下让WebView2加载完成，然后显示续写按钮并触发续写对话框
-                Task.Run(Async Function()
-                             Await Task.Delay(300)
-                             ' 先显示续写按钮
-                             Await chatCtrl.ExecuteJavaScriptAsyncJS("setContinuationButtonVisible(true);")
-                             ' 再触发续写对话框
-                             Await chatCtrl.ExecuteJavaScriptAsyncJS("triggerContinuation(true);")
-                         End Function)
-            Else
+            If chatCtrl Is Nothing Then
                 MessageBox.Show("请先打开AI助手面板", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
             End If
+
+            ' 稍等一下让WebView2加载完成，然后显示续写按钮并触发续写对话框
+            Await Task.Delay(300)
+            ' 先显示续写按钮
+            Await chatCtrl.ExecuteJavaScriptAsyncJS("setContinuationButtonVisible(true);")
+            ' 再触发续写对话框
+            Await chatCtrl.ExecuteJavaScriptAsyncJS("triggerContinuation(true);")
         Catch ex As Exception
             MessageBox.Show("触发AI续写时出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try

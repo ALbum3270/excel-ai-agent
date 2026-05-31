@@ -827,6 +827,82 @@ Public Class SmartFormattingOrchestrator
     '  内部辅助 —— 生成变更
     ' ============================================================
 
+    ''' <summary>
+    ''' 根据段落位置和内容推断合理的默认语义标签（公开版本，供ChatFormatterAgent等外部调用）
+    ''' </summary>
+    Public Shared Function InferDefaultTagPublic(
+        paraIndex As Integer,
+        totalParagraphs As Integer,
+        text As String,
+        standard As FormattingStandard) As String
+        Return InferDefaultTag(paraIndex, totalParagraphs, text, standard)
+    End Function
+
+    ''' <summary>
+    ''' 根据段落位置和内容推断合理的默认语义标签
+    ''' </summary>
+    Private Shared Function InferDefaultTag(
+        paraIndex As Integer,
+        totalParagraphs As Integer,
+        text As String,
+        standard As FormattingStandard) As String
+
+        Dim trimmed = text.Trim()
+        Dim mapping = standard?.SemanticMapping
+        If mapping Is Nothing Then Return "body.normal"
+
+        ' 文档末尾附近（最后3个非空段落）的短段落可能是署名/日期
+        If paraIndex >= totalParagraphs - 4 Then
+            If trimmed.Length <= 30 Then
+                ' 匹配日期格式：2024年1月15日
+                If System.Text.RegularExpressions.Regex.IsMatch(trimmed, "^\d{4}年\d{1,2}月\d{1,2}日") Then
+                    If mapping.FindTag("footer.date") IsNot Nothing Then Return "footer.date"
+                End If
+                ' 匹配机构署名：以"政府""办公室""局""部""厅""委员会"结尾
+                If System.Text.RegularExpressions.Regex.IsMatch(trimmed, "(政府|办公室|局|部|厅|委员会|党委)$") Then
+                    If mapping.FindTag("footer.signature") IsNot Nothing Then Return "footer.signature"
+                End If
+                ' 抄送
+                If trimmed.StartsWith("抄送") Then
+                    If mapping.FindTag("footer.cc") IsNot Nothing Then Return "footer.cc"
+                End If
+            End If
+        End If
+
+        ' 包含发文字号格式
+        If System.Text.RegularExpressions.Regex.IsMatch(trimmed, ".+发〔\d{4}〕\d*号") Then
+            If mapping.FindTag("header.refno") IsNot Nothing Then Return "header.refno"
+        End If
+
+        ' 包含"签发人"
+        If trimmed.StartsWith("签发人") Then
+            If mapping.FindTag("header.signer") IsNot Nothing Then Return "header.signer"
+        End If
+
+        ' 主送机关（以"各"开头且以"："结尾）
+        If trimmed.StartsWith("各") AndAlso trimmed.EndsWith("：") Then
+            If mapping.FindTag("title.recipient") IsNot Nothing Then Return "title.recipient"
+        End If
+
+        ' 附件说明
+        If trimmed.StartsWith("附件") Then
+            If mapping.FindTag("body.attachment") IsNot Nothing Then Return "body.attachment"
+        End If
+
+        ' 摘要区域（文档开头附近的非标题段落）
+        If paraIndex < 5 Then
+            If trimmed.StartsWith("摘要") OrElse trimmed.StartsWith("摘　要") Then
+                If mapping.FindTag("title.abstract") IsNot Nothing Then Return "title.abstract"
+            End If
+            If trimmed.StartsWith("关键词") OrElse trimmed.StartsWith("关键字") Then
+                If mapping.FindTag("title.keywords") IsNot Nothing Then Return "title.keywords"
+            End If
+        End If
+
+        ' 默认：正文
+        Return "body.normal"
+    End Function
+
     ''' <summary>根据标题结构生成格式变更条目</summary>
     Private Function BuildHeadingChanges(
         analysis As DocumentAnalysisResult,
@@ -875,7 +951,7 @@ Public Class SmartFormattingOrchestrator
             excludeIndices.Add(idx)
         Next
 
-        ' 每个正文段落尝试映射到 body.normal
+        ' 每个正文段落尝试映射到合适的语义标签
         Dim bodyTag = standard?.SemanticMapping?.FindTag("body.normal")
 
         For i = 0 To paragraphTexts.Count - 1
@@ -887,10 +963,16 @@ Public Class SmartFormattingOrchestrator
             change.ParagraphIndex = i
             change.ParagraphPreview = TruncateText(text, 50)
             change.OldTag = "body.normal"
-            change.NewTag = "" ' 待AI语义标注确定
 
-            If bodyTag IsNot Nothing Then
-                ResolveChangeFromTag(change, bodyTag)
+            ' 根据段落位置和内容推断合理的默认标签
+            Dim inferredTag = InferDefaultTag(i, paragraphTexts.Count, text, standard)
+            change.NewTag = inferredTag
+
+            ' 用推断的标签解析格式信息
+            Dim targetTag = standard?.SemanticMapping?.FindTag(inferredTag)
+            If targetTag Is Nothing Then targetTag = bodyTag
+            If targetTag IsNot Nothing Then
+                ResolveChangeFromTag(change, targetTag)
             End If
 
             changes.Add(change)

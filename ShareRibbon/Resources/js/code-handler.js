@@ -431,18 +431,8 @@ function showBatchDeleteChat() {
 
 // ========== AI续写功能 ==========
 
-/**
- * 触发AI续写
- */
-function triggerContinuation() {
-    try {
-        window.chrome.webview.postMessage({
-            type: 'triggerContinuation'
-        });
-    } catch (err) {
-        console.error('triggerContinuation error:', err);
-    }
-}
+// 注：triggerContinuation / setContinuationButtonVisible 的真正实现在本文件下方（约 906 行处），
+// 支持 autoTrigger 参数与续写模式状态判断。早期的简化重复实现已删除以避免 JS 函数覆盖混淆。
 
 /**
  * 显示续写预览界面 - 在AI响应完成后调用
@@ -943,21 +933,27 @@ function setContinuationButtonVisible(visible) {
 function showProofreadModeIndicator() {
     // 移除其他模式指示器
     hideAllModeIndicators();
-    
+
     if (document.getElementById('proofread-mode-indicator')) return;
-    
+
     const indicator = document.createElement('div');
     indicator.id = 'proofread-mode-indicator';
     indicator.innerHTML = `
-        <div style="background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); color: white; 
+        <div style="background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); color: white;
                     padding: 8px 12px; font-size: 12px; display: flex; align-items: center; justify-content: center;
-                    position: fixed; top: 0; left: 0; right: 0; z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
             <span>🔍 校对模式 - AI正在帮您检查语法、拼写和表达问题</span>
+            <button onclick="proofreadExit()" style="margin-left:12px; background:rgba(255,255,255,0.3); border:none; color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;">退出校对</button>
         </div>
     `;
-    
-    document.body.appendChild(indicator);
-    document.body.style.paddingTop = '36px';
+
+    // 插入到 chat-container 之前，作为文档流的一部分（不遮挡内容）
+    var chatContainer = document.getElementById('chat-container');
+    if (chatContainer && chatContainer.parentNode) {
+        chatContainer.parentNode.insertBefore(indicator, chatContainer);
+    } else {
+        document.body.appendChild(indicator);
+    }
 }
 
 /**
@@ -967,8 +963,12 @@ function hideProofreadModeIndicator() {
     const indicator = document.getElementById('proofread-mode-indicator');
     if (indicator) {
         indicator.remove();
-        document.body.style.paddingTop = '';
     }
+    // 清除校对模式标记
+    window.proofreadModeActive = false;
+    window.proofreadSelectedText = '';
+    window.proofreadIssueCount = 0;
+    document.body.classList.remove('proofread-panel-open');
 }
 
 /**
@@ -977,21 +977,27 @@ function hideProofreadModeIndicator() {
 function showReformatModeIndicator() {
     // 移除其他模式指示器
     hideAllModeIndicators();
-    
+
     if (document.getElementById('reformat-mode-indicator')) return;
-    
+
     const indicator = document.createElement('div');
     indicator.id = 'reformat-mode-indicator';
     indicator.innerHTML = `
-        <div style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; 
+        <div style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white;
                     padding: 8px 12px; font-size: 12px; display: flex; align-items: center; justify-content: center;
-                    position: fixed; top: 0; left: 0; right: 0; z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
             <span>📐 排版模式 - AI正在帮您优化文档结构和格式</span>
+            <button onclick="exitReformatMode()" style="margin-left:12px; background:rgba(255,255,255,0.3); border:none; color:white; padding:2px 10px; border-radius:4px; cursor:pointer; font-size:12px;">退出排版</button>
         </div>
     `;
-    
-    document.body.appendChild(indicator);
-    document.body.style.paddingTop = '36px';
+
+    // 插入到 chat-container 之前，作为文档流的一部分（不遮挡内容）
+    var chatContainer = document.getElementById('chat-container');
+    if (chatContainer && chatContainer.parentNode) {
+        chatContainer.parentNode.insertBefore(indicator, chatContainer);
+    } else {
+        document.body.appendChild(indicator);
+    }
 }
 
 /**
@@ -1001,7 +1007,6 @@ function hideReformatModeIndicator() {
     const indicator = document.getElementById('reformat-mode-indicator');
     if (indicator) {
         indicator.remove();
-        document.body.style.paddingTop = '';
     }
 }
 
@@ -1011,17 +1016,15 @@ function hideReformatModeIndicator() {
 function hideAllModeIndicators() {
     const indicators = [
         'continuation-mode-indicator',
-        'proofread-mode-indicator', 
+        'proofread-mode-indicator',
         'reformat-mode-indicator',
         'template-mode-indicator'
     ];
-    
+
     indicators.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.remove();
     });
-    
-    document.body.style.paddingTop = '';
 }
 
 // ==================== 模板渲染模式相关函数 ====================

@@ -14,8 +14,9 @@ Public Class Ribbon1
         Globals.ThisAddIn.ShowChatTaskPane()
     End Sub
     Protected Overrides Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
-        Globals.ThisAddIn.ShowChatTaskPane()
-    End Sub ' 修改 SpotlightButton_Click 方法处理单击和双击
+        ' Excel 暂未实现独立网页爬取面板，按钮已隐藏。保留事件防止 Designer 解绑异常。
+        MessageBox.Show("Excel 暂未实现独立的网页爬取面板，请在 Word 中使用此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    End Sub
     Protected Overrides Sub SpotlightButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
             ' 获取聚光灯实例
@@ -282,14 +283,7 @@ Public Class Ribbon1
         Return result
     End Function
 
-    ' MCP按钮点击事件实现
-    Protected Overrides Sub MCPButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' 创建并显示MCP配置表单
-        Dim mcpConfigForm As New MCPConfigForm()
-        If mcpConfigForm.ShowDialog() = DialogResult.OK Then
-            ' 在需要时可以集成到ChatControl调用MCP服务
-        End If
-    End Sub
+    ' MCPButton_Click 已在 BaseOfficeRibbon 中提供共用实现，Excel 不需要差异化逻辑，故不再重写。
 
     Protected Overrides Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
         MessageBox.Show("Excel校对功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)

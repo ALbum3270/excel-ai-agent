@@ -211,6 +211,15 @@ Public Class ParagraphConfig
     ''' <summary>行距（1.0, 1.5, 2.0等）</summary>
     Public Property LineSpacing As Double = 1.5
 
+    ''' <summary>与下段同页（防止标题单独出现在页底）</summary>
+    Public Property KeepWithNext As Boolean = False
+
+    ''' <summary>段前分页（如一级标题前强制分页）</summary>
+    Public Property PageBreakBefore As Boolean = False
+
+    ''' <summary>段中不分页（保持段落完整在同一页）</summary>
+    Public Property KeepLinesTogether As Boolean = False
+
     Public Sub New()
     End Sub
 

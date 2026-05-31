@@ -76,10 +76,15 @@ Public Class SmartProofreadFocusMode
     ''' <summary>
     ''' 执行校对分析
     ''' </summary>
+    ''' <param name="aiResponse">AI返回的校对JSON</param>
+    ''' <param name="paragraphs">段落文本列表</param>
+    ''' <param name="wordApp">Word应用对象</param>
+    ''' <param name="selectionStartOffset">选区在文档中的起始位置偏移（用于精确定位波浪线）</param>
     Public Async Function AnalyzeAsync(
         aiResponse As String,
         paragraphs As List(Of String),
-        wordApp As Object) As Task
+        wordApp As Object,
+        Optional selectionStartOffset As Integer = 0) As Task
         
         Try
             ' 1. 解析AI返回的校对问题
@@ -88,14 +93,18 @@ Public Class SmartProofreadFocusMode
             
             If _state.CurrentIssues Is Nothing OrElse _state.CurrentIssues.Count = 0 Then
                 Await ShowNoIssuesMessageAsync()
+                Await _executeScript("window.proofreadIssueCount = 0;")
                 Return
             End If
+
+            ' 将问题数量传递到JS端，供校对模式下聊天时注入上下文
+            Await _executeScript($"window.proofreadIssueCount = {_state.CurrentIssues.Count};")
             
-            ' 2. 计算位置信息
-            CalculatePositions(_state.CurrentIssues, paragraphs)
+            ' 2. 计算位置信息（传入选区起始偏移）
+            CalculatePositions(_state.CurrentIssues, paragraphs, selectionStartOffset)
             
-            ' 3. 在Word中创建内联标注
-            Await CreateInlineAnnotationsAsync(_state.CurrentIssues, wordApp)
+            ' 3. 在Word中创建内联标注（在当前线程执行，避免COM跨线程）
+            CreateInlineAnnotations(_state.CurrentIssues, wordApp)
             
             ' 4. 显示问题列表面板
             Await ShowProofreadListPanelAsync(_state.CurrentIssues)
@@ -200,8 +209,11 @@ Public Class SmartProofreadFocusMode
     ''' <summary>
     ''' 计算问题在文档中的位置
     ''' </summary>
-    Private Sub CalculatePositions(issues As List(Of ProofreadIssue), paragraphs As List(Of String))
-        Dim offset As Integer = 0
+    ''' <param name="issues">问题列表</param>
+    ''' <param name="paragraphs">段落文本列表</param>
+    ''' <param name="selectionStartOffset">选区在文档中的起始位置（绝对偏移）</param>
+    Private Sub CalculatePositions(issues As List(Of ProofreadIssue), paragraphs As List(Of String), selectionStartOffset As Integer)
+        Dim offset As Integer = selectionStartOffset
         
         For i = 0 To paragraphs.Count - 1
             Dim para = paragraphs(i)
@@ -217,18 +229,16 @@ Public Class SmartProofreadFocusMode
     End Sub
 
     ''' <summary>
-    ''' 在Word中创建内联标注
+    ''' 在Word中创建内联标注（必须在UI线程执行，避免COM跨线程异常）
     ''' </summary>
-    Private Async Function CreateInlineAnnotationsAsync(
+    Private Sub CreateInlineAnnotations(
         issues As List(Of ProofreadIssue),
-        wordApp As Object) As Task
+        wordApp As Object)
         
-        Await Task.Run(Sub()
-            For Each issue In issues
-                CreateWavyUnderline(issue, wordApp)
-            Next
-        End Sub)
-    End Function
+        For Each issue In issues
+            CreateWavyUnderline(issue, wordApp)
+        Next
+    End Sub
 
     ''' <summary>
     ''' 创建波浪线标注

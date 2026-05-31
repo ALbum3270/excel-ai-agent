@@ -278,7 +278,7 @@ Public Class DocumentAnalyzer
             existingHeadingIndices.Add(h.ParagraphIndex)
         Next
 
-        For i = 0 To Math.Min(paragraphs.Count - 1, paragraphStyles.Count - 1) - 1
+        For i = 0 To Math.Min(paragraphs.Count, paragraphStyles.Count) - 1
             If existingHeadingIndices.Contains(i) Then Continue For
             Dim text = paragraphs(i)
             If String.IsNullOrWhiteSpace(text) Then Continue For

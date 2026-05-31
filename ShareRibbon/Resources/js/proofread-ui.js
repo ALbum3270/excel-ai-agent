@@ -13,18 +13,24 @@ function showProofreadSidePanel() {
     if (typeof hideTemplateEditorPane === 'function') {
         hideTemplateEditorPane();
     }
-    
+
     // 检查是否已存在
     if (document.getElementById('proofread-side-panel')) return;
-    
+
+    // 标记校对模式激活（供 message-sender.js 检测）
+    window.proofreadModeActive = true;
+
     // 创建侧边面板容器
     var panel = document.createElement('div');
     panel.id = 'proofread-side-panel';
     panel.className = 'proofread-side-panel';
     panel.innerHTML = '<div class="proofread-panel-content" id="proofread-panel-content"></div>';
-    
+
     document.body.appendChild(panel);
-    
+
+    // 调整主体布局，让出右侧空间
+    document.body.classList.add('proofread-panel-open');
+
     // 添加面板样式（如果尚未添加）
     injectProofreadStyles();
 }
@@ -35,6 +41,14 @@ function showProofreadSidePanel() {
 function hideProofreadSidePanel() {
     var panel = document.getElementById('proofread-side-panel');
     if (panel) panel.remove();
+
+    // 清除校对模式标记
+    window.proofreadModeActive = false;
+    window.proofreadSelectedText = '';
+    window.proofreadIssueCount = 0;
+
+    // 恢复主体布局
+    document.body.classList.remove('proofread-panel-open');
 }
 
 /**
@@ -142,7 +156,13 @@ function proofreadExit() {
         issueId: ''
     };
     sendProofreadAction(payload);
-    
+
+    // 清除校对模式标记和布局
+    window.proofreadModeActive = false;
+    window.proofreadSelectedText = '';
+    window.proofreadIssueCount = 0;
+    document.body.classList.remove('proofread-panel-open');
+
     hideProofreadSidePanel();
     hideProofreadModeIndicator();
 }
@@ -209,7 +229,13 @@ function injectProofreadStyles() {
     
     var style = document.createElement('style');
     style.id = 'proofread-styles';
-    style.textContent = 
+    style.textContent =
+/* ========== 校对面板打开时主体布局避让 ========== */
+'body.proofread-panel-open {' +
+'    margin-right: 380px !important;' +
+'    transition: margin-right 0.3s ease;' +
+'}' +
+'' +
 /* ========== 校对面板样式 ========== */
 '.proofread-side-panel {' +
 '    position: fixed;' +

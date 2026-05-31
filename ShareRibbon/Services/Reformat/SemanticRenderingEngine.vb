@@ -93,10 +93,10 @@ Public Class SemanticRenderingEngine
                 Dim para = paragraphs(i)
                 Dim rng = para.Range
 
-                ' 恢复字体
+                ' 恢复字体（无论值是否为0都恢复，保证完整撤销）
                 If Not String.IsNullOrEmpty(snap.FontNameFarEast) Then rng.Font.NameFarEast = snap.FontNameFarEast
                 If Not String.IsNullOrEmpty(snap.FontNameEN) Then rng.Font.Name = snap.FontNameEN
-                If snap.FontSize > 0 Then rng.Font.Size = snap.FontSize
+                If snap.FontSize >= 0 Then rng.Font.Size = snap.FontSize
                 rng.Font.Bold = snap.Bold
                 rng.Font.Italic = snap.Italic
                 rng.Font.Underline = snap.Underline
@@ -104,23 +104,31 @@ Public Class SemanticRenderingEngine
                     Try : rng.Font.Color = snap.FontColor : Catch : End Try
                 End If
 
-                ' 恢复段落格式
+                ' 恢复段落格式（无论值是否为0都恢复）
                 If snap.Alignment IsNot Nothing Then
                     Try : rng.ParagraphFormat.Alignment = snap.Alignment : Catch : End Try
                 End If
-                If snap.CharacterUnitFirstLineIndent > 0 Then
-                    rng.ParagraphFormat.CharacterUnitFirstLineIndent = snap.CharacterUnitFirstLineIndent
-                ElseIf snap.FirstLineIndent > 0 Then
-                    rng.ParagraphFormat.FirstLineIndent = snap.FirstLineIndent
+                ' 首行缩进：优先恢复字符单位缩进，否则恢复磅值缩进
+                If snap.CharacterUnitFirstLineIndent > 0 OrElse snap.FirstLineIndent > 0 Then
+                    If snap.CharacterUnitFirstLineIndent > 0 Then
+                        rng.ParagraphFormat.CharacterUnitFirstLineIndent = snap.CharacterUnitFirstLineIndent
+                    Else
+                        rng.ParagraphFormat.FirstLineIndent = snap.FirstLineIndent
+                    End If
+                Else
+                    ' 如果原始值都是0，确保清除缩进
+                    Try : rng.ParagraphFormat.CharacterUnitFirstLineIndent = 0 : Catch : End Try
+                    Try : rng.ParagraphFormat.FirstLineIndent = 0 : Catch : End Try
                 End If
                 If snap.LineSpacingRule IsNot Nothing Then
                     rng.ParagraphFormat.LineSpacingRule = snap.LineSpacingRule
                 End If
-                If snap.LineSpacing > 0 Then
+                If snap.LineSpacing >= 0 Then
                     rng.ParagraphFormat.LineSpacing = snap.LineSpacing
                 End If
-                If snap.SpaceBefore > 0 Then rng.ParagraphFormat.SpaceBefore = snap.SpaceBefore
-                If snap.SpaceAfter > 0 Then rng.ParagraphFormat.SpaceAfter = snap.SpaceAfter
+                ' 段前段后间距（包括0值）
+                rng.ParagraphFormat.SpaceBefore = snap.SpaceBefore
+                rng.ParagraphFormat.SpaceAfter = snap.SpaceAfter
 
                 restoredCount += 1
             Catch ex As Exception
@@ -168,7 +176,8 @@ Public Class SemanticRenderingEngine
     End Class
 
     ''' <summary>
-    ''' 应用语义排版到Word段落
+    ''' 应用语义排版到Word段落（通过指令方式）
+    ''' 为每个段落生成Instruction对象（含Rollback信息），再执行格式应用
     ''' </summary>
     ''' <param name="taggedParagraphs">AI标注结果: List of (paraIndex, tagId)</param>
     ''' <param name="mapping">语义样式映射</param>
@@ -177,92 +186,6 @@ Public Class SemanticRenderingEngine
     ''' <param name="wordApp">Word Application对象（用于页面设置）</param>
     ''' <param name="onProgress">进度回调 (当前序号1-based, 总数, tagId)</param>
     Public Shared Function ApplySemanticFormatting(
-        taggedParagraphs As List(Of TaggedParagraph),
-        mapping As SemanticStyleMapping,
-        wordParagraphs As List(Of Object),
-        paragraphTypes As List(Of String),
-        Optional wordApp As Object = Nothing,
-        Optional onProgress As Action(Of Integer, Integer, String) = Nothing) As RenderResult
-
-        Dim result As New RenderResult()
-
-        ' 构建 tagId → SemanticTag 查找字典
-        Dim tagDict As New Dictionary(Of String, SemanticTag)()
-        For Each tag In mapping.SemanticTags
-            If Not tagDict.ContainsKey(tag.TagId) Then
-                tagDict(tag.TagId) = tag
-            End If
-        Next
-
-        ' 遍历标注结果，逐段落应用格式
-        Dim i As Integer = 0
-        For Each tagged In taggedParagraphs
-            If tagged.ParaIndex < 0 OrElse tagged.ParaIndex >= wordParagraphs.Count Then
-                result.Errors.Add($"段落索引越界: {tagged.ParaIndex}")
-                onProgress?.Invoke(i + 1, taggedParagraphs.Count, tagged.TagId)
-                i += 1
-                Continue For
-            End If
-
-            ' 跳过非文本段落
-            If paragraphTypes IsNot Nothing AndAlso tagged.ParaIndex < paragraphTypes.Count Then
-                Dim pType = paragraphTypes(tagged.ParaIndex)
-                If pType <> "text" Then
-                    result.SkippedCount += 1
-                    onProgress?.Invoke(i + 1, taggedParagraphs.Count, tagged.TagId)
-                    i += 1
-                    Continue For
-                End If
-            End If
-
-            ' 查找语义标签（精确匹配 → 父级回退）
-            Dim semanticTag = FindTagWithFallback(tagged.TagId, tagDict, mapping)
-            If semanticTag Is Nothing Then
-                result.Errors.Add($"未找到标签: {tagged.TagId}")
-                result.SkippedCount += 1
-                onProgress?.Invoke(i + 1, taggedParagraphs.Count, tagged.TagId)
-                i += 1
-                Continue For
-            End If
-
-            ' 应用格式到段落
-            Try
-                Dim para = wordParagraphs(tagged.ParaIndex)
-                Dim range = para.Range
-                ApplyFormatToRange(range, semanticTag)
-                result.AppliedCount += 1
-
-                ' 记录标签使用次数
-                If result.TagUsage.ContainsKey(tagged.TagId) Then
-                    result.TagUsage(tagged.TagId) += 1
-                Else
-                    result.TagUsage(tagged.TagId) = 1
-                End If
-            Catch ex As Exception
-                result.Errors.Add($"段落{tagged.ParaIndex}格式应用失败: {ex.Message}")
-            End Try
-
-            onProgress?.Invoke(i + 1, taggedParagraphs.Count, tagged.TagId)
-            i += 1
-        Next
-
-        ' 应用页面设置（如果提供了Word应用对象）
-        If wordApp IsNot Nothing AndAlso mapping.PageConfig IsNot Nothing Then
-            Try
-                ApplyPageConfig(wordApp, mapping.PageConfig)
-            Catch ex As Exception
-                result.Errors.Add($"页面设置应用失败: {ex.Message}")
-            End Try
-        End If
-
-        Return result
-    End Function
-
-    ''' <summary>
-    ''' 通过指令方式应用语义排版：为每个段落生成Instruction对象，再调用ApplyFormatToRange执行
-    ''' 指令自带Rollback信息（原始值），支持逐条撤销和重放
-    ''' </summary>
-    Public Shared Function ApplySemanticFormattingViaInstructions(
         taggedParagraphs As List(Of TaggedParagraph),
         mapping As SemanticStyleMapping,
         wordParagraphs As List(Of Object),
@@ -548,17 +471,43 @@ Public Class SemanticRenderingEngine
                 End Select
             End If
 
-            ' 首行缩进
+            ' 获取当前字号（用于精确计算）
+            Dim currentFontSize As Single = 12.0F
+            Try
+                currentFontSize = CSng(targetRange.Font.Size)
+                If currentFontSize <= 0 Then currentFontSize = 12.0F
+            Catch
+            End Try
+
+            ' 首行缩进（字符数 → 字符单位或磅值）
             If para.FirstLineIndent > 0 Then
                 Try
+                    ' 优先使用字符单位（最精确，不受字号影响）
                     targetRange.ParagraphFormat.CharacterUnitFirstLineIndent = CSng(para.FirstLineIndent)
-                Catch
-                    ' 回退: 使用磅值（1字符约10.5磅）
-                    targetRange.ParagraphFormat.FirstLineIndent = CSng(para.FirstLineIndent * 10.5)
+                Catch ex As Exception
+                    ' 回退: 使用磅值（1中文字符 ≈ 字号 × 0.5 磅）
+                    Dim indentPt As Single = CSng(para.FirstLineIndent * currentFontSize * 0.5)
+                    targetRange.ParagraphFormat.FirstLineIndent = indentPt
                 End Try
             End If
 
-            ' 行距
+            ' 左缩进
+            If para.LeftIndent > 0 Then
+                Try
+                    targetRange.ParagraphFormat.LeftIndent = CSng(para.LeftIndent * 28.35) ' cm → 磅
+                Catch
+                End Try
+            End If
+
+            ' 右缩进
+            If para.RightIndent > 0 Then
+                Try
+                    targetRange.ParagraphFormat.RightIndent = CSng(para.RightIndent * 28.35) ' cm → 磅
+                Catch
+                End Try
+            End If
+
+            ' 行距（使用当前字号作为基准）
             If para.LineSpacing > 0 Then
                 If para.LineSpacing = 1.0 Then
                     targetRange.ParagraphFormat.LineSpacingRule = 0 ' wdLineSpaceSingle
@@ -567,19 +516,45 @@ Public Class SemanticRenderingEngine
                 ElseIf para.LineSpacing = 2.0 Then
                     targetRange.ParagraphFormat.LineSpacingRule = 2 ' wdLineSpaceDouble
                 Else
+                    ' 精确倍行距：值 = 基准字号 × 倍数
                     targetRange.ParagraphFormat.LineSpacingRule = 5 ' wdLineSpaceMultiple
-                    targetRange.ParagraphFormat.LineSpacing = CSng(12 * para.LineSpacing)
+                    targetRange.ParagraphFormat.LineSpacing = CSng(currentFontSize * para.LineSpacing)
                 End If
             End If
 
             ' 段前间距
             If para.SpaceBefore > 0 Then
-                targetRange.ParagraphFormat.SpaceBefore = CSng(para.SpaceBefore * 12) ' 行→磅
+                If para.SpaceBefore < 10 Then
+                    ' 小于10认为是"行"单位
+                    targetRange.ParagraphFormat.SpaceBefore = CSng(para.SpaceBefore * currentFontSize * para.LineSpacing)
+                Else
+                    ' 大于等于10认为是"磅"单位
+                    targetRange.ParagraphFormat.SpaceBefore = CSng(para.SpaceBefore)
+                End If
             End If
 
             ' 段后间距
             If para.SpaceAfter > 0 Then
-                targetRange.ParagraphFormat.SpaceAfter = CSng(para.SpaceAfter * 12) ' 行→磅
+                If para.SpaceAfter < 10 Then
+                    targetRange.ParagraphFormat.SpaceAfter = CSng(para.SpaceAfter * currentFontSize * para.LineSpacing)
+                Else
+                    targetRange.ParagraphFormat.SpaceAfter = CSng(para.SpaceAfter)
+                End If
+            End If
+
+            ' 孤行控制：与下段同页（防止标题单独出现在页底）
+            If para.KeepWithNext Then
+                Try : targetRange.ParagraphFormat.KeepWithNext = -1 : Catch : End Try
+            End If
+
+            ' 段前分页（如一级标题前强制分页）
+            If para.PageBreakBefore Then
+                Try : targetRange.ParagraphFormat.PageBreakBefore = -1 : Catch : End Try
+            End If
+
+            ' 段中不分页（保持段落完整在同一页）
+            If para.KeepLinesTogether Then
+                Try : targetRange.ParagraphFormat.KeepLinesTogether = -1 : Catch : End Try
             End If
         Catch ex As Exception
             Debug.WriteLine($"应用段落配置失败: {ex.Message}")
@@ -670,11 +645,20 @@ Public Class TaggedParagraph
     ''' <summary>语义标签ID</summary>
     Public Property TagId As String = ""
 
+    ''' <summary>AI标注理由（可选，用于UI展示）</summary>
+    Public Property Reason As String = ""
+
     Public Sub New()
     End Sub
 
     Public Sub New(paraIndex As Integer, tagId As String)
         Me.ParaIndex = paraIndex
         Me.TagId = tagId
+    End Sub
+
+    Public Sub New(paraIndex As Integer, tagId As String, reason As String)
+        Me.ParaIndex = paraIndex
+        Me.TagId = tagId
+        Me.Reason = reason
     End Sub
 End Class

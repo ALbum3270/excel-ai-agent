@@ -25,7 +25,7 @@ End Class
 
 Public Class FormatMirrorService
 
-    Private Const MaxSamplesToExtract As Integer = 80   ' 最多采样段落数
+    Private Const MaxSamplesToExtract As Integer = 200   ' 最多采样段落数
     Private Const PointsPerCm As Double = 28.35
 
     ''' <summary>
@@ -49,7 +49,15 @@ Public Class FormatMirrorService
             If docCount = 0 Then Return result
 
             Dim doc As Object = wordApp.[GetType]().InvokeMember("ActiveDocument", Reflection.BindingFlags.GetProperty, Nothing, wordApp, Nothing)
-            Dim paragraphs As Object = doc.[GetType]().InvokeMember("Paragraphs", Reflection.BindingFlags.GetProperty, Nothing, doc, Nothing)
+
+            ' 根据selectionOnly参数选择段落来源
+            Dim paragraphs As Object
+            If selectionOnly Then
+                Dim selection As Object = wordApp.[GetType]().InvokeMember("Selection", Reflection.BindingFlags.GetProperty, Nothing, wordApp, Nothing)
+                paragraphs = selection.[GetType]().InvokeMember("Paragraphs", Reflection.BindingFlags.GetProperty, Nothing, selection, Nothing)
+            Else
+                paragraphs = doc.[GetType]().InvokeMember("Paragraphs", Reflection.BindingFlags.GetProperty, Nothing, doc, Nothing)
+            End If
             Dim paraCount As Integer = CInt(paragraphs.[GetType]().InvokeMember("Count", Reflection.BindingFlags.GetProperty, Nothing, paragraphs, Nothing))
 
             Dim count As Integer = 0
@@ -67,13 +75,6 @@ Public Class FormatMirrorService
                 Dim fontSize As Object = fontObj.[GetType]().InvokeMember("Size", Reflection.BindingFlags.GetProperty, Nothing, fontObj, Nothing)
                 Dim fontBold As Object = fontObj.[GetType]().InvokeMember("Bold", Reflection.BindingFlags.GetProperty, Nothing, fontObj, Nothing)
                 Dim alignment As Object = p.[GetType]().InvokeMember("Alignment", Reflection.BindingFlags.GetProperty, Nothing, p, Nothing)
-
-                Dim key As String = styleName & "|" & fontSize.ToString() & "|" & fontBold.ToString() & "|" & alignment.ToString()
-
-                If styleMap.ContainsKey(key) Then
-                    styleMap(key).OccurrenceCount += 1
-                    Continue For
-                End If
 
                 Dim fmt As New ExtractedParagraphFormat()
                 fmt.StyleName = styleName
@@ -114,6 +115,21 @@ Public Class FormatMirrorService
                 Catch
                 End Try
 
+                ' 使用改进的分组key：包含字体名和缩进，区分更多格式差异
+                Dim key As String = String.Join("|", {
+                    styleName,
+                    fmt.FontSize.ToString(),
+                    fmt.Bold.ToString(),
+                    fmt.AlignmentStr,
+                    fmt.FontNameCN,
+                    fmt.FirstLineIndentCm.ToString("F1")
+                })
+
+                If styleMap.ContainsKey(key) Then
+                    styleMap(key).OccurrenceCount += 1
+                    Continue For
+                End If
+
                 styleMap(key) = fmt
             Next
 
@@ -130,19 +146,40 @@ Public Class FormatMirrorService
     ''' <summary>
     ''' 构建让 AI 将提取的格式规则转换为 SemanticStyleMapping 的提示词
     ''' </summary>
-    Public Shared Function BuildClonePrompt(extracted As List(Of ExtractedParagraphFormat)) As String
+    ''' <param name="extracted">从文档提取的格式信息列表</param>
+    ''' <param name="availableTags">可用语义标签列表（从SemanticStyleMapping动态获取）</param>
+    Public Shared Function BuildClonePrompt(extracted As List(Of ExtractedParagraphFormat),
+                                            Optional availableTags As List(Of SemanticTag) = Nothing) As String
         Dim sb As New StringBuilder()
         sb.AppendLine("你是排版专家。根据以下从真实文档中提取的段落格式信息，生成一个SemanticStyleMapping JSON。")
         sb.AppendLine()
+
+        ' 可用语义标签（动态生成，不再硬编码）
         sb.AppendLine("【可用语义标签】")
-        sb.AppendLine("title.1（一级标题）、title.2（二级标题）、title.3（三级标题）")
-        sb.AppendLine("body.normal（正文）、body.emphasis（强调正文）")
-        sb.AppendLine("list.ordered（有序列表）、list.unordered（无序列表）")
-        sb.AppendLine("quote（引用/摘要）、caption（图表说明）")
+        If availableTags IsNot Nothing AndAlso availableTags.Count > 0 Then
+            For Each tag In availableTags
+                sb.Append($"- {tag.TagId}: {tag.DisplayName}")
+                If Not String.IsNullOrEmpty(tag.MatchHint) Then
+                    sb.Append($"（{tag.MatchHint}）")
+                End If
+                sb.AppendLine()
+            Next
+        Else
+            ' 降级：使用基础标签集
+            sb.AppendLine("title.main（主标题）、title.1（一级标题）、title.2（二级标题）、title.3（三级标题）")
+            sb.AppendLine("heading.1（一级标题）、heading.2（二级标题）、heading.3（三级标题）")
+            sb.AppendLine("body.normal（正文）、body.emphasis（强调正文）")
+            sb.AppendLine("body.abstract（摘要正文）、body.keywords（关键词）")
+            sb.AppendLine("list.ordered（有序列表）、list.unordered（无序列表）")
+            sb.AppendLine("quote（引用/摘要）、caption（图表说明）")
+            sb.AppendLine("header.org（发文机关）、header.refno（发文字号）")
+            sb.AppendLine("footer.signature（署名）、footer.date（日期）")
+        End If
         sb.AppendLine()
+
         sb.AppendLine("【从文档提取的格式规则（按出现频率排序）】")
 
-        For Each f In extracted.Take(20)
+        For Each f In extracted.Take(30)
             sb.AppendLine($"- 样式名:{f.StyleName} | 出现{f.OccurrenceCount}次 | 样本:「{f.SampleText}」")
             sb.AppendLine($"  字体: CN={f.FontNameCN} EN={f.FontNameEN} 大小={f.FontSize}pt Bold={f.Bold} Italic={f.Italic}")
             sb.AppendLine($"  段落: 对齐={f.AlignmentStr} 首行={f.FirstLineIndentCm}cm 行距={f.LineSpacingPt}pt 前={f.SpaceBeforePt}pt 后={f.SpaceAfterPt}pt")

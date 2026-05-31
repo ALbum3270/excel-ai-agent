@@ -40,8 +40,6 @@ Public Class ConfigManager
                             ConfigSettings.mcpable = item_m.mcpable
                             ConfigSettings.fimSupported = item_m.fimSupported
                             ConfigSettings.fimUrl = If(String.IsNullOrEmpty(item_m.fimUrl), item.url, item_m.fimUrl)
-                        ElseIf item_m.modelType = ModelType.Embedding Then
-                            ConfigSettings.EmbeddingModel = item_m.modelName
                         End If
                     End If
                 Next

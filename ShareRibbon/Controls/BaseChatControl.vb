@@ -715,8 +715,6 @@ Public MustInherit Class BaseChatControl
                     HandleUploadDocxTemplate()
                 Case "deleteDocxMapping"
                     HandleDeleteDocxMapping(jsonDoc)
-                Case "undoReformat"
-                    HandleUndoReformat()
 
                 ' AI模板编辑器功能消息处理（Plan A: 在普通聊天中创建模板）
                 Case "startAiTemplateChat"
@@ -951,6 +949,38 @@ Public MustInherit Class BaseChatControl
             sb.AppendLine()
             sb.AppendLine("请根据以上模板结构，按照用户的内容需求生成相应格式的文档内容。直接输出纯文本，不要使用任何Markdown格式。")
         End If
+
+        Return sb.ToString()
+    End Function
+
+    ''' <summary>
+    ''' 构建校对模式追问的系统提示词
+    ''' 当用户在校对模式下发送消息时，让AI理解当前是校对上下文
+    ''' </summary>
+    Private Function BuildProofreadFollowUpPrompt(selectedText As String, issueCount As String) As String
+        Dim sb As New StringBuilder()
+        sb.AppendLine("你是专业的中文文档校对专家。用户当前正在使用校对模式，已选中一段文本进行校对。")
+        sb.AppendLine()
+        sb.AppendLine("【当前校对上下文】")
+
+        If Not String.IsNullOrWhiteSpace(selectedText) Then
+            sb.AppendLine("用户选中的文本内容（节选）：")
+            sb.AppendLine(selectedText)
+            sb.AppendLine()
+        End If
+
+        Dim count As Integer
+        If Integer.TryParse(issueCount, count) AndAlso count > 0 Then
+            sb.AppendLine($"AI已检测出 {count} 处校对问题，问题列表显示在右侧校对面板中。")
+            sb.AppendLine()
+        End If
+
+        sb.AppendLine("【交互规则】")
+        sb.AppendLine("1. 用户的消息是在校对模式下发送的，可能是对校对结果的追问、请求解释、或要求重新检查")
+        sb.AppendLine("2. 如果用户问的是关于某个具体校对问题，请基于选中内容的上下文给出专业解释")
+        sb.AppendLine("3. 如果用户要求补充检查某些方面（如专有名词、数据一致性），请给出针对性建议")
+        sb.AppendLine("4. 回答要简洁专业，不要重复列出校对面板已显示的问题")
+        sb.AppendLine("5. 严禁使用Markdown代码块格式（禁止使用```符号），直接输出纯文本")
 
         Return sb.ToString()
     End Function
@@ -1401,6 +1431,14 @@ Public MustInherit Class BaseChatControl
             Dim templateSystemPrompt = GetTemplateRenderSystemPrompt(templateContext)
             Task.Run(Async Function()
                          Await Send(finalMessageToLLM, templateSystemPrompt, False, "template_render")
+                     End Function)
+        ElseIf responseMode = "proofread" Then
+            ' 校对模式：用户在校对模式下发送消息，注入校对上下文
+            Dim proofreadSelectedText = If(messageValue("proofreadSelectedText")?.ToString(), "")
+            Dim proofreadIssueCount = If(messageValue("proofreadIssueCount")?.ToString(), "0")
+            Dim proofreadSystemPrompt = BuildProofreadFollowUpPrompt(proofreadSelectedText, proofreadIssueCount)
+            Task.Run(Async Function()
+                         Await Send(finalMessageToLLM, proofreadSystemPrompt, False, "proofread_followup")
                      End Function)
         Else
             ' 智能模式：统一消息处理，自动路由到 AgentKernel 或普通聊天

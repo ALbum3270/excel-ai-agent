@@ -38,7 +38,6 @@ Public Class ConfigApiForm
     Private cloudApiKeyTextBox As TextBox
     Private cloudGetApiKeyButton As Button
     Private cloudChatModelCheckedListBox As CheckedListBox
-    Private cloudEmbeddingModelCheckedListBox As CheckedListBox
     Private cloudRefreshModelsButton As Button
     Private cloudAddModelButton As Button
     Private cloudTranslateCheckBox As CheckBox
@@ -52,7 +51,6 @@ Public Class ConfigApiForm
     Private localApiKeyTextBox As TextBox
     Private localDefaultKeyLabel As Label
     Private localChatModelCheckedListBox As CheckedListBox
-    Private localEmbeddingModelCheckedListBox As CheckedListBox
     Private localRefreshModelsButton As Button
     Private localAddModelButton As Button
     Private localTranslateCheckBox As CheckBox
@@ -228,23 +226,7 @@ Public Class ConfigApiForm
         AddHandler cloudChatModelCheckedListBox.MouseDown, AddressOf CloudModelList_MouseDown
         cloudTab.Controls.Add(cloudChatModelCheckedListBox)
 
-        ' 向量模型列表标题
-        Dim embeddingModelLabel As New Label()
-        embeddingModelLabel.Text = "向量模型："
-        embeddingModelLabel.Location = New Point(rightX + 305, 150)
-        embeddingModelLabel.AutoSize = True
-        cloudTab.Controls.Add(embeddingModelLabel)
-
-        ' 向量模型CheckedListBox
-        cloudEmbeddingModelCheckedListBox = New CheckedListBox()
-        cloudEmbeddingModelCheckedListBox.Location = New Point(rightX + 305, 175)
-        cloudEmbeddingModelCheckedListBox.Size = New Size(285, 180)
-        cloudEmbeddingModelCheckedListBox.CheckOnClick = True
-        AddHandler cloudEmbeddingModelCheckedListBox.ItemCheck, AddressOf CloudEmbeddingModelCheckedListBox_ItemCheck
-        AddHandler cloudEmbeddingModelCheckedListBox.MouseDown, AddressOf CloudModelList_MouseDown
-        cloudTab.Controls.Add(cloudEmbeddingModelCheckedListBox)
-
-        ' 刷新模型按钮（向量模型标题右侧，与标题同行）
+        ' 刷新模型按钮（对话模型标题右侧，与标题同行）
         cloudRefreshModelsButton = New Button()
         cloudRefreshModelsButton.Text = "刷新列表"
         cloudRefreshModelsButton.Location = New Point(rightX + 400, 148)
@@ -382,23 +364,7 @@ Public Class ConfigApiForm
         AddHandler localChatModelCheckedListBox.MouseDown, AddressOf LocalModelList_MouseDown
         localTab.Controls.Add(localChatModelCheckedListBox)
 
-        ' 向量模型列表标题
-        Dim embeddingModelLabel As New Label()
-        embeddingModelLabel.Text = "向量模型："
-        embeddingModelLabel.Location = New Point(rightX + 305, 195)
-        embeddingModelLabel.AutoSize = True
-        localTab.Controls.Add(embeddingModelLabel)
-
-        ' 向量模型CheckedListBox
-        localEmbeddingModelCheckedListBox = New CheckedListBox()
-        localEmbeddingModelCheckedListBox.Location = New Point(rightX + 305, 220)
-        localEmbeddingModelCheckedListBox.Size = New Size(285, 130)
-        localEmbeddingModelCheckedListBox.CheckOnClick = True
-        AddHandler localEmbeddingModelCheckedListBox.ItemCheck, AddressOf LocalEmbeddingModelCheckedListBox_ItemCheck
-        AddHandler localEmbeddingModelCheckedListBox.MouseDown, AddressOf LocalModelList_MouseDown
-        localTab.Controls.Add(localEmbeddingModelCheckedListBox)
-
-        ' 刷新模型按钮（向量模型标题右侧，与标题同行）
+        ' 刷新模型按钮（对话模型标题右侧，与标题同行）
         localRefreshModelsButton = New Button()
         localRefreshModelsButton.Text = "刷新列表"
         localRefreshModelsButton.Location = New Point(rightX + 400, 193)
@@ -1192,7 +1158,6 @@ Public Class ConfigApiForm
 
     Private Sub RefreshCloudModelLists()
         cloudChatModelCheckedListBox.Items.Clear()
-        cloudEmbeddingModelCheckedListBox.Items.Clear()
         If currentCloudConfig Is Nothing Then Return
 
         Dim sortedModels = SortModelsByVersion(currentCloudConfig.model)
@@ -1200,8 +1165,6 @@ Public Class ConfigApiForm
         For Each model In sortedModels
             If model.modelType = ModelType.Chat Then
                 cloudChatModelCheckedListBox.Items.Add(model, model.selected)
-            ElseIf model.modelType = ModelType.Embedding Then
-                cloudEmbeddingModelCheckedListBox.Items.Add(model, model.selected)
             End If
         Next
     End Sub
@@ -1290,16 +1253,6 @@ Public Class ConfigApiForm
         End If
     End Sub
 
-    Private Sub CloudEmbeddingModelCheckedListBox_ItemCheck(sender As Object, e As ItemCheckEventArgs)
-        If e.NewValue = CheckState.Checked Then
-            For i = 0 To cloudEmbeddingModelCheckedListBox.Items.Count - 1
-                If i <> e.Index Then
-                    cloudEmbeddingModelCheckedListBox.SetItemChecked(i, False)
-                End If
-            Next
-        End If
-    End Sub
-
     Private Async Sub CloudSaveButton_Click(sender As Object, e As EventArgs)
         If currentCloudConfig Is Nothing Then Return
 
@@ -1343,15 +1296,6 @@ Public Class ConfigApiForm
             Return
         End If
 
-        Dim selectedEmbeddingModelName As String = ""
-        For i = 0 To cloudEmbeddingModelCheckedListBox.Items.Count - 1
-            If cloudEmbeddingModelCheckedListBox.GetItemChecked(i) Then
-                Dim model = CType(cloudEmbeddingModelCheckedListBox.Items(i), ConfigItemModel)
-                selectedEmbeddingModelName = model.modelName
-                Exit For
-            End If
-        Next
-
         cloudSaveButton.Enabled = False
         cloudSaveButton.Text = "验证中..."
         Cursor = Cursors.WaitCursor
@@ -1374,8 +1318,6 @@ Public Class ConfigApiForm
                 For Each model In currentCloudConfig.model
                     If model.modelType = ModelType.Chat Then
                         model.selected = (model.modelName = selectedChatModelName)
-                    ElseIf model.modelType = ModelType.Embedding Then
-                        model.selected = (model.modelName = selectedEmbeddingModelName)
                     End If
                 Next
 
@@ -1396,18 +1338,7 @@ Public Class ConfigApiForm
                     ConfigSettings.mcpable = selectedChatModel.mcpable
                 End If
 
-                If Not String.IsNullOrEmpty(selectedEmbeddingModelName) Then
-                    ConfigSettings.EmbeddingModel = selectedEmbeddingModelName
-                Else
-                    ConfigSettings.EmbeddingModel = ""
-                End If
-
                 SaveConfig()
-
-                'If String.IsNullOrEmpty(selectedEmbeddingModelName) AndAlso Not EmbeddingService.IsEmbeddingAvailable() Then
-                '    MessageBox.Show("未选择向量模型且当前API可能不支持Embedding，Memory/RAG功能将仅使用关键词检索。" & vbCrLf &
-                '                    "如需向量检索，请选择一个向量模型。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
-                'End If
 
                 MessageBox.Show("配置已保存", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
                 Me.DialogResult = DialogResult.OK
@@ -1546,7 +1477,6 @@ Public Class ConfigApiForm
 
     Private Sub RefreshLocalModelLists()
         localChatModelCheckedListBox.Items.Clear()
-        localEmbeddingModelCheckedListBox.Items.Clear()
         If currentLocalConfig Is Nothing Then Return
 
         Dim sortedModels = SortModelsByVersion(currentLocalConfig.model)
@@ -1554,8 +1484,6 @@ Public Class ConfigApiForm
         For Each model In sortedModels
             If model.modelType = ModelType.Chat Then
                 localChatModelCheckedListBox.Items.Add(model, model.selected)
-            ElseIf model.modelType = ModelType.Embedding Then
-                localEmbeddingModelCheckedListBox.Items.Add(model, model.selected)
             End If
         Next
     End Sub
@@ -1620,16 +1548,6 @@ Public Class ConfigApiForm
         End If
     End Sub
 
-    Private Sub LocalEmbeddingModelCheckedListBox_ItemCheck(sender As Object, e As ItemCheckEventArgs)
-        If e.NewValue = CheckState.Checked Then
-            For i = 0 To localEmbeddingModelCheckedListBox.Items.Count - 1
-                If i <> e.Index Then
-                    localEmbeddingModelCheckedListBox.SetItemChecked(i, False)
-                End If
-            Next
-        End If
-    End Sub
-
     Private Async Sub LocalSaveButton_Click(sender As Object, e As EventArgs)
         If currentLocalConfig Is Nothing Then Return
 
@@ -1664,15 +1582,6 @@ Public Class ConfigApiForm
             Return
         End If
 
-        Dim selectedEmbeddingModelName As String = ""
-        For i = 0 To localEmbeddingModelCheckedListBox.Items.Count - 1
-            If localEmbeddingModelCheckedListBox.GetItemChecked(i) Then
-                Dim model = CType(localEmbeddingModelCheckedListBox.Items(i), ConfigItemModel)
-                selectedEmbeddingModelName = model.modelName
-                Exit For
-            End If
-        Next
-
         localSaveButton.Enabled = False
         localSaveButton.Text = "验证中..."
         Cursor = Cursors.WaitCursor
@@ -1690,8 +1599,6 @@ Public Class ConfigApiForm
                 For Each model In currentLocalConfig.model
                     If model.modelType = ModelType.Chat Then
                         model.selected = (model.modelName = selectedChatModelName)
-                    ElseIf model.modelType = ModelType.Embedding Then
-                        model.selected = (model.modelName = selectedEmbeddingModelName)
                     End If
                 Next
 
@@ -1712,18 +1619,7 @@ Public Class ConfigApiForm
                     ConfigSettings.mcpable = selectedChatModel.mcpable
                 End If
 
-                If Not String.IsNullOrEmpty(selectedEmbeddingModelName) Then
-                    ConfigSettings.EmbeddingModel = selectedEmbeddingModelName
-                Else
-                    ConfigSettings.EmbeddingModel = ""
-                End If
-
                 SaveConfig()
-
-                'If String.IsNullOrEmpty(selectedEmbeddingModelName) AndAlso Not EmbeddingService.IsEmbeddingAvailable() Then
-                '    MessageBox.Show("未选择向量模型且当前API可能不支持Embedding，Memory/RAG功能将仅使用关键词检索。" & vbCrLf &
-                '                    "如需向量检索，请选择一个向量模型。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
-                'End If
 
                 MessageBox.Show("配置已保存", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
                 Me.DialogResult = DialogResult.OK

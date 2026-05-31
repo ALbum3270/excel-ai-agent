@@ -434,7 +434,12 @@ Public Class ReformatTemplateManager
             .MatchCondition = "以'一、'、'二、'等汉字数字加顿号开头的标题",
             .SortOrder = 2,
             .Font = New FontConfig("黑体", "Arial", 16, True),
-            .Paragraph = New ParagraphConfig("left", 0, 1.875) With {.SpaceBefore = 0.5, .SpaceAfter = 0.5},
+            .Paragraph = New ParagraphConfig("left", 0, 1.875) With {
+                .SpaceBefore = 0.5,
+                .SpaceAfter = 0.5,
+                .KeepWithNext = True,
+                .PageBreakBefore = False
+            },
             .Color = New ColorConfig("#000000")
         })
         template.BodyStyles.Add(New StyleRule With {
@@ -728,7 +733,12 @@ Public Class ReformatTemplateManager
             .MatchCondition = "汉字数字加顿号开头的标题，如'一、'",
             .SortOrder = 2,
             .Font = New FontConfig("黑体", "Arial", 16, True),
-            .Paragraph = New ParagraphConfig("left", 0, 1.875) With {.SpaceBefore = 0.5, .SpaceAfter = 0.5},
+            .Paragraph = New ParagraphConfig("left", 0, 1.875) With {
+                .SpaceBefore = 0.5,
+                .SpaceAfter = 0.5,
+                .KeepWithNext = True,
+                .PageBreakBefore = False
+            },
             .Color = New ColorConfig("#000000")
         })
         template.BodyStyles.Add(New StyleRule With {

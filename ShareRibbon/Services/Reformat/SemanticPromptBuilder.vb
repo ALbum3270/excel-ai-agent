@@ -29,88 +29,100 @@ Public Class SemanticPromptBuilder
 
         Dim sb As New StringBuilder()
 
-        ' 系统角色 — 极其重要，必须前置
-        sb.AppendLine("你是一个严格的JSON输出器。你必须只输出一个JSON数组，不要输出任何其他内容。")
-        sb.AppendLine()
-        sb.AppendLine("【绝对禁止】")
-        sb.AppendLine("- 禁止输出VBA代码、Sub/End Sub、宏代码")
-        sb.AppendLine("- 禁止输出Python代码、JavaScript代码")
-        sb.AppendLine("- 禁止输出markdown代码块（```json 或 ```）")
-        sb.AppendLine("- 禁止输出任何解释、说明、注释")
-        sb.AppendLine("- 禁止输出格式参数（字体名、字号数值、颜色代码等），只输出语义标签")
-        sb.AppendLine("- 如果文档类型不明，仍然要标注，使用最通用的body.normal标签")
+        ' ===== 1. 角色定义 =====
+        sb.AppendLine("你是一位文档结构分析专家，擅长识别中文文档的结构和语义角色。")
+        sb.AppendLine("你的任务是分析文档内容，识别每个段落的语义角色，以便系统自动应用对应的标准格式。")
         sb.AppendLine()
 
-        ' 文档类型上下文 — 帮助AI理解应该用什么视角标注
+        ' ===== 2. 任务说明 =====
+        sb.AppendLine("【任务】")
+        sb.AppendLine("请按以下步骤分析文档：")
+        sb.AppendLine("步骤1：判断文档类型和整体结构")
+        sb.AppendLine("步骤2：识别文档中的关键结构元素（标题、正文、署名、日期等）")
+        sb.AppendLine("步骤3：为每个段落分配合适的语义标签")
+        sb.AppendLine()
+
+        ' ===== 3. 文档类型上下文 =====
         If Not String.IsNullOrEmpty(documentTypeContext) Then
-            sb.AppendLine("【文档类型与排版标准】")
+            sb.AppendLine("【排版标准】")
             sb.AppendLine(documentTypeContext)
-            sb.AppendLine("请基于上述文档类型和排版标准进行语义标注。例如公文中的「发文字号」段应标注为header.refno，而非简单的heading。")
             sb.AppendLine()
         End If
 
-        sb.AppendLine("【你的唯一输出格式】")
-        sb.AppendLine("[{""paraIndex"":0, ""tag"":""body.normal""}, {""paraIndex"":1, ""tag"":""heading.1""}]")
-        sb.AppendLine()
-        sb.AppendLine("【重要提示】")
-        sb.AppendLine("1. 每个段落给出了「原文样式」和「原文格式线索」，请结合文本内容综合判断该段落的语义角色。")
-        sb.AppendLine("2. 原文样式名为「标题 1」「Heading 1」「标题 2」等的段落，大概率就是对应级别的标题。")
-        sb.AppendLine("3. 原文样式名为「正文」「Normal」且字数多(>100字)的段落，通常是正文。")
-        sb.AppendLine("4. 加粗且字号偏大的短段落，大概率是标题。")
-        sb.AppendLine("5. 字数很少(<30字)、居中的段落，通常是标题。")
-        sb.AppendLine("6. 包含发文号格式(如「XX发〔20XX〕X号」)的段落，是公文发文字号。")
-        sb.AppendLine("7. 包含日期且位于文末的短段落，通常是落款/署名。")
-        sb.AppendLine()
-
-        ' ===== 新增：中文排版规则 =====
-        sb.AppendLine("【中文排版规则】")
-        sb.AppendLine("- 标点符号不能出现在行首（句号、逗号、顿号等不能独占一行开头）")
-        sb.AppendLine("- 中英文之间需有空格（中文和英文单词之间要加空格）")
-        sb.AppendLine("- 标题不能出现在页面底部成为「孤标题」（标题下方至少需要一行正文）")
-        sb.AppendLine("- 段落长度要合理：正文每段一般不超过500字，过长应分段")
-        sb.AppendLine("- 公文正文每段开头应首行缩进2字符（除非是标题性质的段落）")
+        ' ===== 4. 输出格式 =====
+        sb.AppendLine("【输出格式】")
+        sb.AppendLine("只输出纯JSON数组，不要输出其他内容（不要使用markdown代码块，不要输出解释）。")
+        sb.AppendLine("[")
+        sb.AppendLine("  {""paraIndex"":0, ""tag"":""header.org"", ""reason"":""位于文档开头，文本符合发文机关标志模式""},")
+        sb.AppendLine("  {""paraIndex"":1, ""tag"":""header.refno"", ""reason"":""包含发文字号格式""},")
+        sb.AppendLine("  ...")
+        sb.AppendLine("]")
+        sb.AppendLine("要求：")
+        sb.AppendLine("- reason字段简短说明判断依据（不超过30字）")
+        sb.AppendLine("- 每个段落必须且只能有一个标签")
+        sb.AppendLine("- paraIndex使用【文档段落】中给出的索引号")
         sb.AppendLine()
 
-        ' ===== 新增：Few-Shot示例 =====
-        sb.AppendLine("【标注示例】")
-        sb.AppendLine("以下是根据不同文档类型的标注示例，请参考这些模式进行标注：")
-        sb.AppendLine()
-
-        ' 根据文档类型选择示例
-        Dim examples As String = GetExamplesByDocumentType(documentTypeContext, mapping)
-        sb.Append(examples)
-        sb.AppendLine()
-
-        ' 可用标签列表
-        sb.AppendLine("【可用标签】")
+        ' ===== 5. 可用标签 =====
+        sb.AppendLine("【可用语义标签】")
         For Each tag In mapping.SemanticTags
             sb.Append($"- {tag.TagId}: {tag.DisplayName}")
             If Not String.IsNullOrEmpty(tag.MatchHint) Then
-                sb.Append($"（提示：{tag.MatchHint}）")
+                sb.Append($"。识别提示：{tag.MatchHint}")
             End If
             sb.AppendLine()
         Next
         sb.AppendLine()
 
-        ' 自动检测到的标题结构（来自DocumentAnalyzer）
+        ' ===== 6. 结构识别指南 =====
+        sb.AppendLine("【结构识别指南】")
+        sb.AppendLine("判断段落角色时，请综合考虑以下线索：")
+        sb.AppendLine("1. 文本内容：是否包含特定模式（发文字号、日期、编号等）")
+        sb.AppendLine("2. 段落位置：在文档开头、中间还是末尾")
+        sb.AppendLine("3. 上下文关系：与前后段落的关系（如标题后面通常跟正文）")
+        sb.AppendLine("4. 格式线索：字号偏大且加粗的短段落通常是标题")
+        sb.AppendLine("5. 不确定时使用最通用的body.normal标签")
+        sb.AppendLine()
+
+        ' ===== 公文特殊规则 =====
+        If Not String.IsNullOrEmpty(documentTypeContext) AndAlso
+           (documentTypeContext.Contains("公文") OrElse documentTypeContext.Contains("GB/T 9704")) Then
+            sb.AppendLine("【公文结构识别】")
+            sb.AppendLine("公文文档有固定的结构顺序，请按此顺序识别：")
+            sb.AppendLine("发文机关标志(header.org) → 发文字号(header.refno) → 签发人(header.signer)")
+            sb.AppendLine("→ 文件标题(title.main) → 主送机关(title.recipient) → 正文(body.normal)")
+            sb.AppendLine("→ 附件说明(body.attachment) → 发文机关署名(footer.signature)")
+            sb.AppendLine("→ 成文日期(footer.date) → 抄送机关(footer.cc)")
+            sb.AppendLine()
+            sb.AppendLine("注意：")
+            sb.AppendLine("- 公文标题层级使用title.1/title.2/title.3，不要使用heading.*")
+            sb.AppendLine("- 即使Word样式名为「标题1」，只要文本内容符合公文结构特征，必须使用公文专用标签")
+            sb.AppendLine("- 文末短段落（机构名、日期）应使用footer.signature/footer.date，不要标为body.normal")
+            sb.AppendLine()
+        End If
+
+        ' ===== 7. 标注示例（按文档类型） =====
+        sb.AppendLine("【标注示例】")
+        Dim examples As String = GetExamplesByDocumentType(documentTypeContext, mapping)
+        sb.Append(examples)
+        sb.AppendLine()
+
+        ' ===== 8. 严格要求 =====
+        sb.AppendLine("【严格要求】")
+        sb.AppendLine("1. 仅使用上述可用标签，禁止自创标签")
+        sb.AppendLine("2. 返回纯JSON数组，不要包含markdown代码块标记")
+        sb.AppendLine("3. 每个段落必须且只能有一个标签")
+        sb.AppendLine("4. 层级合理：title.1后可接title.2或body，不能直接跳到title.3")
+        sb.AppendLine()
+
+        ' ===== 9. 自动检测结果 =====
         If Not String.IsNullOrEmpty(detectedHeadings) Then
-            sb.AppendLine("【AI自动检测到的标题结构（仅供参考）】")
+            sb.AppendLine("【系统自动检测到的标题结构（仅供参考，你可以修正）】")
             sb.AppendLine(detectedHeadings)
             sb.AppendLine()
         End If
 
-        ' 严格要求
-        sb.AppendLine("【严格要求】")
-        sb.AppendLine("1. 仅使用上述标签，禁止自创标签")
-        sb.AppendLine("2. 不要输出任何格式参数（字体、字号、颜色、缩进等）")
-        sb.AppendLine("3. 返回纯JSON数组，不要包含markdown代码块标记")
-        sb.AppendLine("4. 格式: [{""paraIndex"":0, ""tag"":""title.1""}, ...]")
-        sb.AppendLine("5. 层级合理：title.1 后可接 title.2 或 body，不能直接接 title.3")
-        sb.AppendLine("6. 每个段落必须且只能有一个标签")
-        sb.AppendLine("7. paraIndex 使用上面给出的段落索引号（第一个数字）")
-        sb.AppendLine()
-
-        ' 文档段落（仅文本段落）
+        ' ===== 10. 文档段落（完整文本+上下文） =====
         sb.AppendLine("【文档段落】")
         Dim hasStyles = paragraphStyles IsNot Nothing AndAlso paragraphStyles.Count = paragraphs.Count
         Dim hasOrigIdx = originalParaIndices IsNot Nothing AndAlso originalParaIndices.Count = paragraphs.Count
@@ -122,13 +134,21 @@ Public Class SemanticPromptBuilder
             Dim text = paragraphs(i)
             If String.IsNullOrWhiteSpace(text) Then Continue For
 
-            ' 样式提示
+            ' 位置标签
+            Dim positionLabel = ""
+            If i = 0 Then
+                positionLabel = " [文档开头]"
+            ElseIf i >= paragraphs.Count - 3 Then
+                positionLabel = " [文档末尾]"
+            End If
+
+            ' 样式提示（简洁）
             Dim styleHint As String = ""
             If hasStyles AndAlso Not String.IsNullOrEmpty(paragraphStyles(i)) Then
                 styleHint = $" [样式:{paragraphStyles(i)}]"
             End If
 
-            ' 字号+加粗提示
+            ' 格式线索（简洁）
             Dim formatHint As String = ""
             If hasFontSizes Then
                 formatHint = $" {paragraphFontSizes(i):F0}pt"
@@ -140,11 +160,21 @@ Public Class SemanticPromptBuilder
                 formatHint = $" [格式:{formatHint.Trim()}]"
             End If
 
-            ' 截取段落前120字符
-            If text.Length > 120 Then text = text.Substring(0, 120) & "..."
+            ' 上下文：显示前一段落的最后20字
+            Dim contextBefore As String = ""
+            If i > 0 AndAlso Not String.IsNullOrWhiteSpace(paragraphs(i - 1)) Then
+                Dim prevText = paragraphs(i - 1).Trim()
+                If prevText.Length > 20 Then prevText = "..." & prevText.Substring(prevText.Length - 20)
+                contextBefore = $"  ↑上文: {prevText}" & vbCrLf
+            End If
 
-            sb.Append($"[{origIdx}]{styleHint}{formatHint} {text}")
-            sb.AppendLine()
+            ' 不截断段落文本，但超长段落只取前300字+后缀
+            If text.Length > 300 Then
+                text = text.Substring(0, 300) & $"...[全文{text.Length}字]"
+            End If
+
+            sb.Append(contextBefore)
+            sb.AppendLine($"[{origIdx}]{positionLabel}{styleHint}{formatHint} {text}")
         Next
 
         Return sb.ToString()
@@ -162,14 +192,19 @@ Public Class SemanticPromptBuilder
         If Not String.IsNullOrEmpty(documentTypeContext) AndAlso
            (documentTypeContext.Contains("公文") OrElse documentTypeContext.Contains("GB/T 9704")) Then
             sb.AppendLine("公文文档标注示例：")
-            sb.AppendLine("「XX局〔2024〕15号」 → header.refno（发文字号，居中，仿宋16pt）")
-            sb.AppendLine("「关于加强安全管理的通知」 → title.main（文件标题，居中，方正小标宋22pt加粗红色）")
-            sb.AppendLine("「各区县教育局」 → title.recipient（主送机关，顶格左对齐）")
-            sb.AppendLine("「一、总体要求」 → heading.1（一级标题，黑体16pt加粗）")
-            sb.AppendLine("「（一）基本原则」 → heading.2（二级标题，楷体16pt加粗）")
-            sb.AppendLine("「为进一步做好安全工作，根据...」 → body.normal（正文，仿宋16pt，两端对齐，首行缩进2字符）")
-            sb.AppendLine("「XX市教育局」 → footer.signature（发文机关署名，右对齐）")
-            sb.AppendLine("「2024年1月15日」 → footer.date（成文日期，右对齐）")
+            sb.AppendLine("「XX市人民政府文件」 → header.org（理由：位于文档开头，符合发文机关标志模式）")
+            sb.AppendLine("「×政发〔2024〕15号」 → header.refno（理由：包含发文字号格式〔〕X号）")
+            sb.AppendLine("「签发人：王××」 → header.signer（理由：包含签发人标识）")
+            sb.AppendLine("「关于加强安全生产工作的通知」 → title.main（理由：公文标题，关于…的…格式）")
+            sb.AppendLine("「各区县人民政府，市政府各部门：」 → title.recipient（理由：主送机关，以冒号结尾）")
+            sb.AppendLine("「一、总体要求」 → title.1（理由：一级编号标题）")
+            sb.AppendLine("「（一）基本原则」 → title.2（理由：二级编号标题）")
+            sb.AppendLine("「1. 加强组织领导」 → title.3（理由：三级编号标题）")
+            sb.AppendLine("「为进一步做好安全生产工作，根据...」 → body.normal（理由：正文段落）")
+            sb.AppendLine("「附件：1. 工作方案」 → body.attachment（理由：附件说明）")
+            sb.AppendLine("「XX市人民政府」 → footer.signature（理由：文末机构名称，落款）")
+            sb.AppendLine("「2024年1月15日」 → footer.date（理由：文末日期格式）")
+            sb.AppendLine("「抄送：市委各部门」 → footer.cc（理由：以""抄送""开头）")
             Return sb.ToString()
         End If
 
@@ -177,15 +212,15 @@ Public Class SemanticPromptBuilder
         If Not String.IsNullOrEmpty(documentTypeContext) AndAlso
            (documentTypeContext.Contains("学术") OrElse documentTypeContext.Contains("论文")) Then
             sb.AppendLine("学术论文文档标注示例：")
-            sb.AppendLine("「基于深度学习的图像识别技术研究」 → title.main（论文标题，黑体18pt加粗居中）")
-            sb.AppendLine("「摘要」 → title.abstract（摘要标题，黑体14pt加粗）")
-            sb.AppendLine("「本文提出了一种新的...」 → body.abstract（摘要正文，宋体12pt，首行缩进2字符）")
-            sb.AppendLine("「关键词」 → title.keywords（关键词标题，黑体14pt加粗）")
-            sb.AppendLine("「深度学习；图像识别；卷积神经网络」 → body.keywords（关键词，宋体12pt）")
-            sb.AppendLine("「第1章 引言」 → heading.1（一级标题，黑体14pt加粗）")
-            sb.AppendLine("「1.1 研究背景」 → heading.2（二级标题，黑体12pt加粗）")
-            sb.AppendLine("「近年来，随着人工智能技术的快速发展...」 → body.normal（正文，宋体12pt，两端对齐，首行缩进2字符）")
-            sb.AppendLine("「参考文献」 → title.references（参考文献标题，黑体14pt加粗）")
+            sb.AppendLine("「基于深度学习的图像识别技术研究」 → title.main（理由：论文标题）")
+            sb.AppendLine("「摘要」 → title.abstract（理由：摘要标题）")
+            sb.AppendLine("「本文提出了一种新的...」 → body.abstract（理由：摘要正文）")
+            sb.AppendLine("「关键词」 → title.keywords（理由：关键词标题）")
+            sb.AppendLine("「深度学习；图像识别」 → body.keywords（理由：关键词内容）")
+            sb.AppendLine("「第1章 引言」 → heading.1（理由：章节标题）")
+            sb.AppendLine("「1.1 研究背景」 → heading.2（理由：二级编号标题）")
+            sb.AppendLine("「近年来，随着人工智能技术...」 → body.normal（理由：正文段落）")
+            sb.AppendLine("「参考文献」 → title.references（理由：参考文献标题）")
             Return sb.ToString()
         End If
 
@@ -193,21 +228,20 @@ Public Class SemanticPromptBuilder
         If Not String.IsNullOrEmpty(documentTypeContext) AndAlso
            (documentTypeContext.Contains("商务") OrElse documentTypeContext.Contains("报告")) Then
             sb.AppendLine("商务报告文档标注示例：")
-            sb.AppendLine("「2024年度工作总结报告」 → title.main（报告标题，微软雅黑20pt加粗居中）")
-            sb.AppendLine("「一、年度业绩回顾」 → heading.1（一级标题，微软雅黑16pt加粗）")
-            sb.AppendLine("「（一）销售收入分析」 → heading.2（二级标题，微软雅黑14pt加粗）")
-            sb.AppendLine("「2024年公司实现销售收入同比增长15%...」 → body.normal（正文，微软雅黑11pt，两端对齐）")
-            sb.AppendLine("「综上所述，2024年公司取得了良好的业绩...」 → body.summary（摘要总结，微软雅黑11pt）")
+            sb.AppendLine("「2024年度工作总结报告」 → title.main（理由：报告标题）")
+            sb.AppendLine("「一、年度业绩回顾」 → heading.1（理由：一级标题）")
+            sb.AppendLine("「（一）销售收入分析」 → heading.2（理由：二级标题）")
+            sb.AppendLine("「2024年公司实现销售收入增长15%...」 → body.normal（理由：正文段落）")
+            sb.AppendLine("「综上所述...」 → body.summary（理由：总结段落）")
             Return sb.ToString()
         End If
 
         ' 通用文档示例（默认）
         sb.AppendLine("通用文档标注示例：")
-        sb.AppendLine("「第一章 总则」 → heading.1（一级标题）")
-        sb.AppendLine("「1.1 目的和依据」 → heading.2（二级标题）")
-        sb.AppendLine("「1.1.1 为规范...」 → heading.3（三级标题）")
-        sb.AppendLine("「本条例旨在...」 → body.normal（正文段落）")
-        sb.AppendLine("「第一条 为规范...」 → body.normal（条正文）")
+        sb.AppendLine("「第一章 总则」 → heading.1（理由：章节标题）")
+        sb.AppendLine("「1.1 目的和依据」 → heading.2（理由：二级编号标题）")
+        sb.AppendLine("「1.1.1 为规范...」 → heading.3（理由：三级编号标题）")
+        sb.AppendLine("「本条例旨在...」 → body.normal（理由：正文段落）")
 
         ' 如果mapping中有自定义标签，也展示一下
         If mapping IsNot Nothing AndAlso mapping.SemanticTags.Count > 0 Then
@@ -243,7 +277,7 @@ Public Class SemanticPromptBuilder
             sb.AppendLine($"- {errMsg}")
         Next
         sb.AppendLine()
-        sb.AppendLine("请重新输出正确的JSON数组。")
+        sb.AppendLine("请重新输出正确的JSON数组（包含paraIndex、tag、reason三个字段）。")
 
         Return sb.ToString()
     End Function

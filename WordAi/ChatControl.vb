@@ -539,25 +539,31 @@ Public Class ChatControl
             ' 存储段落类型
             plan.ParagraphTypes = paragraphTypes
 
-            ' 生成排版卡片 HTML
-            Dim html = agent.GenerateFormattingCardHtml(plan)
-            Dim responseUuid As String = Guid.NewGuid().ToString()
-
-            ' 创建 Chat 消息区并推送卡片
-            Dim jsCreate As String = $"createChatSection('AI排版助手', formatDateTime(new Date()), '{responseUuid}');"
-            Await ExecuteJavaScriptAsyncJS(jsCreate)
-
             ' 保存方案供后续应用
             _activeReformatPlan = plan
             SetReformatContext(allParagraphs.Cast(Of Object).ToList(), paragraphStyles, paragraphTypes, plan.SemanticMapping)
 
-            ' 推送卡片到前端
-            Dim jsonPayload As New JObject()
-            jsonPayload("uuid") = responseUuid
-            jsonPayload("html") = html
-            Await ExecuteJavaScriptAsyncJS($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
+            ' 如果检测到有效标准且有语义映射，直接进入AI语义标注管道
+            ' 这样用户不需要额外点击"应用"按钮，排版结果更直接
+            If plan.SemanticMapping IsNot Nothing AndAlso plan.SemanticMapping.SemanticTags.Count > 0 Then
+                Dim displayName = If(Not String.IsNullOrEmpty(plan.StandardName), plan.StandardName, "智能排版")
+                GlobalStatusStrip.ShowInfo($"检测到文档类型: {plan.DocumentTypeName}，正在使用「{displayName}」排版...")
+                Await StartSemanticReformatPipeline(plan.SemanticMapping, displayName)
+            Else
+                ' 没有匹配到标准时，显示预览卡片供用户选择
+                Dim html = agent.GenerateFormattingCardHtml(plan)
+                Dim responseUuid As String = Guid.NewGuid().ToString()
 
-            GlobalStatusStrip.ShowInfo($"分析完成，推荐标准: {plan.StandardName}")
+                Dim jsCreate As String = $"createChatSection('AI排版助手', formatDateTime(new Date()), '{responseUuid}');"
+                Await ExecuteJavaScriptAsyncJS(jsCreate)
+
+                Dim jsonPayload As New JObject()
+                jsonPayload("uuid") = responseUuid
+                jsonPayload("html") = html
+                Await ExecuteJavaScriptAsyncJS($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
+
+                GlobalStatusStrip.ShowInfo($"分析完成，推荐标准: {plan.StandardName}")
+            End If
         Catch ex As Exception
             Debug.WriteLine($"TriggerSmartReformat error: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"智能排版失败: {ex.Message}")
@@ -586,16 +592,24 @@ Public Class ChatControl
         Await ApplyReformatPlan()
     End Sub
 
-    ''' <summary>智能排版 v2：撤销排版（从快照恢复）</summary>
+    ''' <summary>智能排版 v2：撤销排版（使用Word内置UndoRecord）</summary>
     Protected Overrides Sub HandleUndoReformat(jsonDoc As JObject)
-        If _reformatSnapshot Is Nothing OrElse _reformatSnapshotParagraphs Is Nothing Then
-            GlobalStatusStrip.ShowWarning("没有可撤销的排版操作。")
-            Return
-        End If
-
         Dim wordApp = Globals.ThisAddIn.Application
         If wordApp Is Nothing Then
             GlobalStatusStrip.ShowWarning("无法获取Word应用对象。")
+            Return
+        End If
+
+        Dim doc = wordApp.ActiveDocument
+        If doc Is Nothing Then
+            GlobalStatusStrip.ShowWarning("没有活动文档。")
+            Return
+        End If
+
+        ' 防误撤销：检查Undo栈顶是否是"AI排版"
+        ' Word没有直接提供Undo栈名称的API，我们通过CanUndo检查
+        If Not doc.CanUndo Then
+            GlobalStatusStrip.ShowWarning("没有可撤销的操作。")
             Return
         End If
 
@@ -603,10 +617,13 @@ Public Class ChatControl
         Try
             wordApp.ScreenUpdating = False
             screenUpdated = True
-            Dim restoredCount = SemanticRenderingEngine.RestoreFormatSnapshot(
-                _reformatSnapshot, _reformatSnapshotParagraphs, _reformatSnapshotTypes)
-            GlobalStatusStrip.ShowInfo($"排版已撤销，恢复 {restoredCount} 个段落。")
-            Debug.WriteLine($"排版撤销完成: {restoredCount}/{_reformatSnapshot.ParagraphCount} 个段落已恢复")
+
+            ' 【方案】使用Word内置的Undo机制
+            ' StartCustomRecord("AI排版") 在排版时已经开启
+            ' 这里调用 Undo() 即可撤销整个排版操作
+            doc.Undo()
+            GlobalStatusStrip.ShowInfo("排版已撤销。")
+            Debug.WriteLine("使用Word内置Undo撤销排版成功")
         Catch ex As Exception
             Debug.WriteLine($"HandleUndoReformat 失败: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"撤销排版失败: {ex.Message}")
@@ -614,7 +631,7 @@ Public Class ChatControl
             If screenUpdated Then
                 Try : wordApp.ScreenUpdating = True : Catch : End Try
             End If
-            ' 无论成功失败都清除快照（避免残留状态）
+            ' 清理快照状态（避免残留）
             _reformatSnapshot = Nothing
             _reformatSnapshotParagraphs = Nothing
             _reformatSnapshotTypes = Nothing
@@ -1042,6 +1059,14 @@ Public Class ChatControl
             ' 存储当前选区范围，供替换操作限定范围使用
             _proofreadSelectionRange = selRange
 
+            ' 将选中文本传递到JS端，供校对模式下聊天时注入上下文
+            Dim selectedTextPreview = selRange.Text
+            If selectedTextPreview IsNot Nothing AndAlso selectedTextPreview.Length > 200 Then
+                selectedTextPreview = selectedTextPreview.Substring(0, 200) & "..."
+            End If
+            Dim escapedText = selectedTextPreview.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, " ").Replace(vbLf, " ").Replace("""", "\""")
+            Await ExecuteJavaScriptAsyncJS($"window.proofreadSelectedText = '{escapedText}';")
+
             ' 进入校对专注模式
             Dim proofreadMode = GetProofreadFocusMode()
             Await proofreadMode.EnterAsync()
@@ -1064,16 +1089,32 @@ Public Class ChatControl
 
     ''' <summary>
     ''' 处理校对结果（在校对完成后调用）
+    ''' 需要在UI线程执行以安全操作Word COM对象
     ''' </summary>
     Public Sub ProcessProofreadResult(aiResponse As String, paragraphs As List(Of String))
         Try
             Dim proofreadMode = GetProofreadFocusMode()
             If proofreadMode Is Nothing Then Return
 
-            ' 异步执行校对分析
-            Task.Run(Async Function()
-                         Await proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application)
-                     End Function)
+            ' 获取选区起始偏移量（用于精确定位波浪线）
+            Dim selStartOffset As Integer = 0
+            Try
+                Dim selRange = TryCast(_proofreadSelectionRange, Microsoft.Office.Interop.Word.Range)
+                If selRange IsNot Nothing Then
+                    selStartOffset = selRange.Start
+                End If
+            Catch
+                selStartOffset = 0
+            End Try
+
+            ' 在UI线程执行校对分析（避免COM跨线程异常）
+            If Me.InvokeRequired Then
+                Me.Invoke(Sub()
+                              proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset).Wait()
+                          End Sub)
+            Else
+                proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset).Wait()
+            End If
         Catch ex As Exception
             Debug.WriteLine($"ProcessProofreadResult 出错: {ex.Message}")
         End Try
@@ -1345,8 +1386,69 @@ Public Class ChatControl
 
     ''' <summary>
     ''' 使用意图识别结果发送聊天消息（重写基类方法）
+    ''' Word子类拦截校对/排版意图，路由到专业流程
     ''' </summary>
     Protected Overrides Sub SendChatMessageWithIntent(message As String, intent As IntentResult)
+        If intent IsNot Nothing AndAlso intent.Confidence > 0.4 Then
+            ' 拦截校对意图 → 路由到校对专注模式
+            If intent.OfficeIntent = OfficeIntentType.PROOFREAD Then
+                Debug.WriteLine("[Word] 检测到校对意图，路由到ExecuteProofreadAsync")
+                Task.Run(Async Function()
+                             Dim fallbackNeeded As Boolean = False
+                             Try
+                                 Await ExecuteProofreadAsync()
+                             Catch ex As Exception
+                                 Debug.WriteLine($"[Word] 校对路由失败: {ex.Message}")
+                                 fallbackNeeded = True
+                             End Try
+                             ' 降级到普通聊天（移出Catch块避免BC36943）
+                             If fallbackNeeded Then
+                                 Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
+                                 Await Send(message, optimizedPrompt, True, "")
+                             End If
+                         End Function)
+                Return
+            End If
+
+            ' 拦截排版意图 → 路由到智能排版流程
+            If intent.OfficeIntent = OfficeIntentType.FORMAT_STYLE OrElse
+               intent.OfficeIntent = OfficeIntentType.TEXT_FORMAT Then
+                Debug.WriteLine("[Word] 检测到排版意图，路由到TriggerSmartReformat")
+                Task.Run(Async Function()
+                             Dim fallbackNeeded As Boolean = False
+                             Try
+                                 ' 检查是否有选中内容
+                                 Dim wordApp = Globals.ThisAddIn.Application
+                                 Dim hasSelection As Boolean = False
+                                 Try
+                                     If wordApp?.Selection?.Range IsNot Nothing Then
+                                         hasSelection = Not String.IsNullOrWhiteSpace(wordApp.Selection.Range.Text)
+                                     End If
+                                 Catch
+                                 End Try
+
+                                 If hasSelection Then
+                                     Await TriggerSmartReformat()
+                                 Else
+                                     ' 没有选中内容，提示用户并走普通聊天
+                                     GlobalStatusStrip.ShowWarning("请先选中需要排版的文本内容")
+                                     fallbackNeeded = True
+                                 End If
+                             Catch ex As Exception
+                                 Debug.WriteLine($"[Word] 排版路由失败: {ex.Message}")
+                                 fallbackNeeded = True
+                             End Try
+                             ' 降级到普通聊天（移出Catch块避免BC36943）
+                             If fallbackNeeded Then
+                                 Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
+                                 Await Send(message, optimizedPrompt, True, "")
+                             End If
+                         End Function)
+                Return
+            End If
+        End If
+
+        ' 其他意图走默认流程
         If intent IsNot Nothing AndAlso intent.Confidence > 0.2 Then
             Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
             Debug.WriteLine($"Word使用意图优化提示词: {intent.IntentType}, 置信度: {intent.Confidence:F2}")
@@ -2354,9 +2456,8 @@ Public Class ChatControl
             ' 校验通过，重置重试计数器
             _reformatRetryCount = 0
 
-            ' 使用渲染引擎应用格式
+            ' 使用ReformatCoordinator执行"临时文档 → OpenXML排版 → 预览 → 合并"流程
             Dim wordApp = Globals.ThisAddIn.Application
-            Dim undoStarted As Boolean = False
             Dim renderResult As SemanticRenderingEngine.RenderResult = Nothing
 
             ' 在应用前捕获格式快照（独立于Word UndoRecord的撤销机制）
@@ -2370,29 +2471,39 @@ Public Class ChatControl
                 Debug.WriteLine($"捕获排版快照失败: {snapEx.Message}")
             End Try
 
-            ' 开始Undo快照（必须紧贴格式操作，跨async边界会失效）
-            Try
-                wordApp.UndoRecord.StartCustomRecord("AI排版")
-                undoStarted = True
-            Catch ex As Exception
-                Debug.WriteLine($"StartCustomRecord 失败: {ex.Message}")
-            End Try
+            ' 使用新的协调器：临时文档 → OpenXML执行 → 预览 → 合并回原文档
+            Dim coordinator As New ReformatCoordinator()
+            Dim reformatResult = Await coordinator.ExecuteReformatPipelineAsync(
+                wordApp.ActiveDocument,
+                ReformatOperationType.Semantic,
+                validation.ValidatedTags,
+                _reformatMapping,
+                _reformatMapping?.Name,
+                _reformatParagraphs,
+                _reformatTypes)
 
-            ' 用指令方式应用格式（每条指令自带Rollback，支持逐条撤销）
-            Try
-                renderResult = SemanticRenderingEngine.ApplySemanticFormattingViaInstructions(
-                    validation.ValidatedTags, _reformatMapping, _reformatParagraphs, _reformatTypes, wordApp)
-            Finally
-                ' 【关键】无论 ApplySemanticFormatting 是否抛出异常，都必须关闭UndoRecord
-                ' 否则Word撤销系统会锁死，后续所有Undo()调用都会失效
-                If undoStarted Then
-                    Try
-                        wordApp.UndoRecord.EndCustomRecord()
-                    Catch ex As Exception
-                        Debug.WriteLine($"EndCustomRecord 失败: {ex.Message}")
-                    End Try
+            If reformatResult.Success Then
+                ' 构建兼容的RenderResult用于前端展示
+                renderResult = New SemanticRenderingEngine.RenderResult() With {
+                    .AppliedCount = reformatResult.ModifiedCount,
+                    .SkippedCount = validation.ValidatedTags.Count - reformatResult.ModifiedCount
+                }
+                If reformatResult.GeneratedInstructions IsNot Nothing Then
+                    renderResult.GeneratedInstructions = reformatResult.GeneratedInstructions
                 End If
-            End Try
+            Else
+                ' 用户取消或失败
+                If String.IsNullOrEmpty(reformatResult.ErrorMessage) OrElse
+                   reformatResult.ErrorMessage.Contains("取消") Then
+                    GlobalStatusStrip.ShowInfo("排版已取消")
+                Else
+                    Await ShowReformatError($"排版失败: {reformatResult.ErrorMessage}")
+                End If
+                _reformatParagraphs = Nothing
+                _reformatStyles = Nothing
+                _reformatTypes = Nothing
+                Return
+            End If
 
             ' 推送排版结果到前端（含内置撤销按钮）
             If renderResult IsNot Nothing Then

@@ -62,10 +62,12 @@ Public Class TaggingValidator
         For Each item In tagsArray
             Dim paraIndex As Integer = -1
             Dim tagId As String = ""
+            Dim reason As String = ""
 
             Try
                 paraIndex = CInt(item("paraIndex"))
                 tagId = If(item("tag")?.ToString(), "")
+                reason = If(item("reason")?.ToString(), "")
             Catch
                 result.Errors.Add($"标注项格式错误: {item.ToString()}")
                 severeErrorCount += 1
@@ -113,7 +115,7 @@ Public Class TaggingValidator
                 End If
             End If
 
-            result.ValidatedTags.Add(New TaggedParagraph(paraIndex, tagId))
+            result.ValidatedTags.Add(New TaggedParagraph(paraIndex, tagId, reason))
         Next
 
         ' 严重错误超过20%则判定为校验失败

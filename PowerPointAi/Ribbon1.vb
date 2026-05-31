@@ -15,7 +15,8 @@ Public Class Ribbon1
     End Sub
 
     Protected Overrides Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
-        Globals.ThisAddIn.ShowChatTaskPane()
+        ' PowerPoint 暂未实现独立网页爬取面板，按钮已在 Designer 中隐藏。
+        MessageBox.Show("PowerPoint 暂未实现独立的网页爬取面板，请在 Word 中使用此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
     Protected Overrides Sub SpotlightButton_Click(sender As Object, e As RibbonControlEventArgs)
@@ -41,13 +42,7 @@ Public Class Ribbon1
         MessageBox.Show("批量数据生成功能仅适用于 Excel。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
-    Protected Overrides Sub MCPButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' 创建并显示MCP配置表单
-        Dim mcpConfigForm As New MCPConfigForm()
-        If mcpConfigForm.ShowDialog() = DialogResult.OK Then
-            ' 在需要时可以集成到ChatControl调用MCP服务
-        End If
-    End Sub
+    ' MCPButton_Click 已在 BaseOfficeRibbon 中提供共用实现，PowerPoint 不需要差异化逻辑，故不再重写。
 
     Protected Overrides Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
         MessageBox.Show("PowerPoint校对功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
@@ -159,25 +154,26 @@ Public Class Ribbon1
     End Sub
 
     ' AI续写功能 - PowerPoint实现
-    Protected Overrides Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
+    ' 修正：原 Task.Run(Async Function() ...) 把 WebView2 调用抛到线程池，违反 STA 约束；
+    ' 改为 Async Sub + 直接 Await，保证脚本执行回到 UI 线程同步上下文。
+    Protected Overrides Async Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
             ' 确保侧栏已打开
             Globals.ThisAddIn.ShowChatTaskPane()
 
             ' 获取ChatControl并触发续写（自动模式，显示对话框）
             Dim chatCtrl = ThisAddIn.chatControl
-            If chatCtrl IsNot Nothing Then
-                ' 稍等一下让WebView2加载完成，然后显示续写按钮并触发续写对话框
-                Task.Run(Async Function()
-                             Await Task.Delay(300)
-                             ' 先显示续写按钮
-                             Await chatCtrl.ExecuteJavaScriptAsyncJS("setContinuationButtonVisible(true);")
-                             ' 再触发续写对话框
-                             Await chatCtrl.ExecuteJavaScriptAsyncJS("triggerContinuation(true);")
-                         End Function)
-            Else
+            If chatCtrl Is Nothing Then
                 MessageBox.Show("请先打开AI助手面板", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
             End If
+
+            ' 稍等一下让WebView2加载完成，然后显示续写按钮并触发续写对话框
+            Await Task.Delay(300)
+            ' 先显示续写按钮
+            Await chatCtrl.ExecuteJavaScriptAsyncJS("setContinuationButtonVisible(true);")
+            ' 再触发续写对话框
+            Await chatCtrl.ExecuteJavaScriptAsyncJS("triggerContinuation(true);")
         Catch ex As Exception
             MessageBox.Show("触发AI续写时出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try

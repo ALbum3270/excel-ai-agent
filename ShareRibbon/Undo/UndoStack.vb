@@ -46,24 +46,15 @@ Public Class UndoStack
         _undoStack.Push(operation)
         _redoStack.Clear()
 
-        ' 限制栈大小
+        ' 限制栈大小（移除最旧的操作，即栈底元素）
         While _undoStack.Count > MaxSize
-            ' 移除最旧的操作
-            Dim tempStack As New Stack(Of UndoableOperation)()
-            Dim skipFirst = True
-            For Each op In _undoStack
-                If skipFirst Then
-                    skipFirst = False
-                    Continue For
-                End If
-                tempStack.Push(op)
-            Next
+            ' Stack的枚举顺序是LIFO（最新在前），需要转为列表后移除最旧（最后一个）
+            Dim items = _undoStack.ToList()
+            items.RemoveAt(items.Count - 1) ' 移除最旧（栈底）
             _undoStack.Clear()
-            ' 重新压入（顺序反转）
-            Dim reverseList As New List(Of UndoableOperation)(tempStack)
-            reverseList.Reverse()
-            For Each op In reverseList
-                _undoStack.Push(op)
+            ' 逆序压入以保持原始顺序
+            For idx = items.Count - 1 To 0 Step -1
+                _undoStack.Push(items(idx))
             Next
         End While
     End Sub

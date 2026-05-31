@@ -74,6 +74,8 @@ Partial Class Ribbon1
         Me.ProofreadButton.Visible = False
         Me.ReformatButton.Visible = False
         Me.ContinuationButton.Visible = False
+        ' Excel 暂未实现网页爬取面板，先隐藏（避免点击触发与功能不匹配的行为）
+        Me.WebCaptureButton.Visible = False
         Me.TranslateButton.Image = ShareRibbon.SharedResources.Translate
         Me.StudyButton.Image = ShareRibbon.SharedResources.Help
     End Sub

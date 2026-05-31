@@ -120,6 +120,12 @@
       <Private>False</Private>
       <EmbedInteropTypes>true</EmbedInteropTypes>
     </Reference>
+    <Reference Include="DocumentFormat.OpenXml, Version=3.1.0.0, Culture=neutral, PublicKeyToken=8fb06cb64d019a17, processorArchitecture=MSIL">
+      <HintPath>..\packages\DocumentFormat.OpenXml.3.1.0\lib\net46\DocumentFormat.OpenXml.dll</HintPath>
+    </Reference>
+    <Reference Include="DocumentFormat.OpenXml.Framework, Version=3.1.0.0, Culture=neutral, PublicKeyToken=8fb06cb64d019a17, processorArchitecture=MSIL">
+      <HintPath>..\packages\DocumentFormat.OpenXml.Framework.3.1.0\lib\net46\DocumentFormat.OpenXml.Framework.dll</HintPath>
+    </Reference>
     <Reference Include="SQLitePCLRaw.core, Version=2.1.11.2622, Culture=neutral, PublicKeyToken=1488e028ca7ab535, processorArchitecture=MSIL">
       <HintPath>..\packages\SQLitePCLRaw.core.2.1.11\lib\netstandard2.0\SQLitePCLRaw.core.dll</HintPath>
     </Reference>
@@ -249,9 +255,13 @@
     <Compile Include="Services\Reformat\FormatMirrorService.vb" />
     <Compile Include="Services\Reformat\SemanticPromptBuilder.vb" />
     <Compile Include="Services\Reformat\TaggingValidator.vb" />
+    <Compile Include="Services\Reformat\RefinementPromptBuilder.vb" />
     <Compile Include="Services\Reformat\StyleGuideConverter.vb" />
     <Compile Include="Services\Reformat\DocumentParserService.vb" />
     <Compile Include="Services\Reformat\FormatPreviewService.vb" />
+    <Compile Include="Services\Reformat\TempDocumentService.vb" />
+    <Compile Include="Services\Reformat\OpenXmlReformatEngine.vb" />
+    <Compile Include="Services\Reformat\ReformatCoordinator.vb" />
     <Compile Include="Config\ReformatTemplateEditorForm.vb">
       <SubType>Form</SubType>
     </Compile>

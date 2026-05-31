@@ -44,11 +44,13 @@ Public MustInherit Class BaseOfficeRibbon
 
     ' 关于我按钮点击事件 - 显示带git链接的对话框
     Private Sub AboutButton_Click_1(sender As Object, e As RibbonControlEventArgs) Handles AboutButton.Click
-        Dim aboutForm As New AboutForm()
-        aboutForm.ShowDialog()
+        Using aboutForm As New AboutForm()
+            aboutForm.ShowDialog()
+        End Using
     End Sub
 
     ' 清理缓存配置按钮点击事件
+    ' 使用递归删除子目录（包含 SQLite 数据库、日志、chat 历史等子目录），并对失败项做明细反馈
     Private Sub ClearCacheConfig_Click_1(sender As Object, e As RibbonControlEventArgs) Handles ClearCacheButton.Click
         ' 弹出确认框
         Dim result = MessageBox.Show("将彻底删除‘文档\" & ConfigSettings.OfficeAiAppDataFolder & "’目录下所有的配置，历史聊天记录信息，清理后不可恢复，您确定要清理吗？", "确认操作", MessageBoxButtons.OKCancel, MessageBoxIcon.Question)
@@ -57,33 +59,54 @@ Public MustInherit Class BaseOfficeRibbon
         End If
 
         Dim appDataPath As String = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) & "\" & ConfigSettings.OfficeAiAppDataFolder
-        If System.IO.Directory.Exists(appDataPath) Then
-            Try
-                Dim files As String() = System.IO.Directory.GetFiles(appDataPath)
-                For Each file In files
-                    System.IO.File.Delete(file)
-                Next
-                MsgBox("缓存配置已清理，请重启Office相关应用！")
-            Catch ex As Exception
-                MsgBox("清理缓存配置时出错：" & ex.Message, vbCritical)
-            End Try
-        Else
+        If Not System.IO.Directory.Exists(appDataPath) Then
             MsgBox("缓存目录不存在！")
+            Return
         End If
+
+        Dim failedItems As New List(Of String)()
+        Try
+            ' 1. 删除根目录下的文件
+            For Each filePath As String In System.IO.Directory.GetFiles(appDataPath)
+                Try
+                    System.IO.File.SetAttributes(filePath, IO.FileAttributes.Normal)
+                    System.IO.File.Delete(filePath)
+                Catch ex As Exception
+                    failedItems.Add(System.IO.Path.GetFileName(filePath) & " (" & ex.Message & ")")
+                End Try
+            Next
+            ' 2. 递归删除子目录（覆盖 SQLite/日志/chatHistory 等）
+            For Each dirPath As String In System.IO.Directory.GetDirectories(appDataPath)
+                Try
+                    System.IO.Directory.Delete(dirPath, recursive:=True)
+                Catch ex As Exception
+                    failedItems.Add(System.IO.Path.GetFileName(dirPath) & "\ (" & ex.Message & ")")
+                End Try
+            Next
+
+            If failedItems.Count = 0 Then
+                MsgBox("缓存配置已清理，请重启Office相关应用！")
+            Else
+                Dim msg As String = "缓存清理已完成，但以下项未能删除（可能被进程占用，建议关闭所有 Office 应用后重试）：" & Environment.NewLine & String.Join(Environment.NewLine, failedItems)
+                MsgBox(msg, vbExclamation)
+            End If
+        Catch ex As Exception
+            MsgBox("清理缓存配置时出错：" & ex.Message, vbCritical)
+        End Try
     End Sub
 
     ' 点击Ribbon区的配置API按钮后触发
     Private Sub ConfigApiButton_Click(sender As Object, e As RibbonControlEventArgs) Handles ConfigApiButton.Click
-        ' 创建并显示配置 API 的对话框
-        Dim configForm As New ConfigApiForm(GetApplication())
-        If configForm.ShowDialog() = DialogResult.OK Then
-        End If
+        ' 创建并显示配置 API 的对话框（Using 确保 Form 资源释放）
+        Using configForm As New ConfigApiForm(GetApplication())
+            configForm.ShowDialog()
+        End Using
     End Sub
     Private Sub PromptConfigButton_Click(sender As Object, e As RibbonControlEventArgs) Handles PromptConfigButton.Click
-        ' 创建并显示配置 API 的对话框
-        Dim configForm As New ConfigPromptForm(GetApplication())
-        If configForm.ShowDialog() = DialogResult.OK Then
-        End If
+        ' 创建并显示配置 API 的对话框（Using 确保 Form 资源释放）
+        Using configForm As New ConfigPromptForm(GetApplication())
+            configForm.ShowDialog()
+        End Using
     End Sub
 
     ' 教学文档按钮点击事件 - 根据应用类型跳转不同URL
@@ -137,8 +160,12 @@ Public MustInherit Class BaseOfficeRibbon
     ' 批量数据生成按钮点击事件
     Protected MustOverride Sub BatchDataGenButton_Click(sender As Object, e As RibbonControlEventArgs) Handles BatchDataGenButton.Click
 
-    ' MCP按钮点击事件
-    Protected MustOverride Sub MCPButton_Click(sender As Object, e As RibbonControlEventArgs) Handles MCPButton.Click
+    ' MCP按钮点击事件 - 三端共用同一对话框，提供基类默认实现，子类可按需重写
+    Protected Overridable Sub MCPButton_Click(sender As Object, e As RibbonControlEventArgs) Handles MCPButton.Click
+        Using mcpConfigForm As New MCPConfigForm()
+            mcpConfigForm.ShowDialog()
+        End Using
+    End Sub
 
     ' 一键翻译按钮点击事件（抽象方法，由子类实现）
     Protected MustOverride Sub TranslateButton_Click(sender As Object, e As RibbonControlEventArgs) Handles TranslateButton.Click

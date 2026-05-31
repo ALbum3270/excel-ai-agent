@@ -18,15 +18,17 @@ Public Class ProofreadPromptBuilder
     ''' </summary>
     Public Shared Function BuildFullDocumentPrompt(paragraphs As List(Of String)) As String
         Dim sb As New StringBuilder()
-        
-        sb.AppendLine("你是Word文档智能校对助手。请仔细检查以下文档内容，识别所有需要修正的问题。")
+
+        sb.AppendLine("你是专业的中文文档校对专家。请仔细检查以下文档，找出需要修正的问题。")
         sb.AppendLine()
+        sb.AppendLine("只输出JSON数组，不要输出任何其他内容（不要使用markdown代码块，不要输出解释说明）。")
+        sb.AppendLine()
+
         sb.AppendLine("【校对范围】")
         sb.AppendLine("1. 错别字和拼写错误")
         sb.AppendLine("2. 词语使用错误（包括但不限于）：")
-        sb.AppendLine("   - 的地得混用（的地得是最常见的词语错误）")
+        sb.AppendLine("   - 的/地/得混用（这是最常见的词语错误）")
         sb.AppendLine("   - 他/她/它在表示指代时的混用")
-        sb.AppendLine("   - 的在/得/地混用")
         sb.AppendLine("   - 其他常见用词错误")
         sb.AppendLine("3. 标点符号错误：")
         sb.AppendLine("   - 中英文标点混用（如中文句子里用了英文逗号）")
@@ -35,7 +37,13 @@ Public Class ProofreadPromptBuilder
         sb.AppendLine("4. 语法和语病问题")
         sb.AppendLine("5. 表达不通顺或容易引起歧义的地方")
         sb.AppendLine()
-        
+
+        sb.AppendLine("【最小修改原则】")
+        sb.AppendLine("- 只修改确实有问题的内容，不要为了优化表达而改动正确文本")
+        sb.AppendLine("- suggestion必须保持原文含义，只修正错误部分")
+        sb.AppendLine("- original必须精确匹配原文，包含标点和空格")
+        sb.AppendLine()
+
         sb.AppendLine("【文档内容】")
         For i = 0 To paragraphs.Count - 1
             Dim para = paragraphs(i)
@@ -44,59 +52,42 @@ Public Class ProofreadPromptBuilder
             End If
         Next
         sb.AppendLine()
-        
-        sb.AppendLine("【输出要求】")
-        sb.AppendLine("请以JSON格式返回校对结果，支持以下两种格式之一：")
-        sb.AppendLine()
-        sb.AppendLine("格式A：纯数组（推荐）")
+
+        sb.AppendLine("【输出格式】")
+        sb.AppendLine("请输出纯JSON数组（不要使用markdown代码块包裹）：")
         sb.AppendLine("[")
         sb.AppendLine("  {")
         sb.AppendLine("    ""paragraphIndex"": 0,")
-        sb.AppendLine("    ""original"": ""需要修正的原文片段（必须精确匹配）"",")
-        sb.AppendLine("    ""suggestion"": ""修正后的文本（只写修正内容，不要加说明）"",")
-        sb.AppendLine("    ""issueType"": ""WordUsageError"",")
+        sb.AppendLine("    ""original"": ""需要修正的原文片段"",")
+        sb.AppendLine("    ""suggestion"": ""修正后的文本"",")
+        sb.AppendLine("    ""issueType"": ""SpellingError"",")
         sb.AppendLine("    ""severity"": ""High"",")
         sb.AppendLine("    ""explanation"": ""简要说明修改原因""")
         sb.AppendLine("  }")
         sb.AppendLine("]")
         sb.AppendLine()
-        sb.AppendLine("格式B：对象包装（也可以）")
-        sb.AppendLine("{")
-        sb.AppendLine("  ""issues"": [")
-        sb.AppendLine("    {")
-        sb.AppendLine("      ""paragraphIndex"": 0,")
-        sb.AppendLine("      ""original"": ""需要修正的原文片段（必须精确匹配）"",")
-        sb.AppendLine("      ""suggestion"": ""修正后的文本（只写修正内容，不要加说明）"",")
-        sb.AppendLine("      ""issueType"": ""WordUsageError"",")
-        sb.AppendLine("      ""severity"": ""High"",")
-        sb.AppendLine("      ""explanation"": ""简要说明修改原因""")
-        sb.AppendLine("    }")
-        sb.AppendLine("  ],")
-        sb.AppendLine("  ""summary"": ""可选的摘要说明""")
-        sb.AppendLine("}")
+
+        sb.AppendLine("【issueType可选值（统一小驼峰格式）】")
+        sb.AppendLine("- SpellingError: 拼写错误")
+        sb.AppendLine("- WordUsageError: 用词错误")
+        sb.AppendLine("- PunctuationError: 标点错误")
+        sb.AppendLine("- GrammaticalError: 语法错误")
+        sb.AppendLine("- ExpressionError: 表达问题")
         sb.AppendLine()
-        
-        sb.AppendLine("【issueType可选值】")
-        sb.AppendLine("- spellingError: 拼写错误")
-        sb.AppendLine("- wordUsageError: 用词错误")
-        sb.AppendLine("- punctuationError: 标点错误")
-        sb.AppendLine("- grammaticalError: 语法错误")
-        sb.AppendLine("- expressionError: 表达问题")
-        sb.AppendLine()
-        
+
         sb.AppendLine("【severity可选值】")
         sb.AppendLine("- High: 必须修改（如错别字、严重语法错误）")
         sb.AppendLine("- Medium: 建议修改（如用词不当、轻微语病）")
         sb.AppendLine("- Low: 可选优化（如表达可以更精炼）")
         sb.AppendLine()
-        
+
         sb.AppendLine("【注意事项】")
         sb.AppendLine("1. original必须精确匹配文档原文，包括标点和空格")
         sb.AppendLine("2. 同一段落有多处问题时，需要返回多个条目")
         sb.AppendLine("3. 只返回需要修改的内容，没问题的段落不要包含在结果中")
         sb.AppendLine("4. 如果文档没有需要修改的内容，请返回空数组：[]")
-        sb.AppendLine("5. 请尽量全面地检查，不要遗漏明显的问题")
-        
+        sb.AppendLine("5. 不要遗漏明显的问题，但也不要过度修改")
+
         Return sb.ToString()
     End Function
 

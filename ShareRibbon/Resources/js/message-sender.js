@@ -100,6 +100,13 @@ function sendChatMessage() {
         messagePayloadValue.templateName = window.currentTemplateName || '';
     }
 
+    // 如果处于校对模式，注入校对上下文
+    if (window.proofreadModeActive) {
+        messagePayloadValue.responseMode = 'proofread';
+        messagePayloadValue.proofreadSelectedText = window.proofreadSelectedText || '';
+        messagePayloadValue.proofreadIssueCount = window.proofreadIssueCount || 0;
+    }
+
     sendMessageToServer({
         type: 'sendMessage',
         value: messagePayloadValue

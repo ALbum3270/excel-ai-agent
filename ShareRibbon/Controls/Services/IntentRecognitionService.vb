@@ -34,6 +34,7 @@ Public Enum OfficeIntentType
     IMAGE_INSERT        ' 图片插入
     TOC_GENERATION      ' 目录生成
     REVIEW_COMMENT      ' 审阅批注
+    PROOFREAD           ' 校对（语法、拼写、表达检查）
 
     ' === PowerPoint特有意图 ===
     SLIDE_CREATE        ' 创建幻灯片
@@ -237,6 +238,13 @@ Public Class IntentRecognitionService
         "比较文档", "合并文档"
     }
 
+    ' 校对关键词
+    Private Shared ReadOnly ProofreadKeywords As String() = {
+        "校对", "检查语法", "拼写检查", "语法错误", "拼写错误", "错别字",
+        "语病", "用词错误", "标点错误", "表达问题", "检查拼写", "语法检查",
+        "校验文本", "文字校对", "审校", "润色检查", "proofread"
+    }
+
 #End Region
 
 #Region "PowerPoint关键词映射"
@@ -364,6 +372,7 @@ Public Class IntentRecognitionService
         scores(OfficeIntentType.IMAGE_INSERT) = CalculateKeywordScore(lowerQuestion, ImageInsertKeywords)
         scores(OfficeIntentType.TOC_GENERATION) = CalculateKeywordScore(lowerQuestion, TocGenerationKeywords)
         scores(OfficeIntentType.REVIEW_COMMENT) = CalculateKeywordScore(lowerQuestion, ReviewCommentKeywords)
+        scores(OfficeIntentType.PROOFREAD) = CalculateKeywordScore(lowerQuestion, ProofreadKeywords)
 
         Dim maxScore As Double = 0
         Dim maxIntent = OfficeIntentType.GENERAL_QUERY
@@ -731,6 +740,7 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
 - IMAGE_INSERT: 图片插入和处理
 - TOC_GENERATION: 目录生成和更新
 - REVIEW_COMMENT: 审阅和批注
+- PROOFREAD: 校对（检查语法、拼写、用词、表达问题）
 - FORMAT_STYLE: 格式样式调整
 - GENERAL_QUERY: 一般问答（不需要操作Word）
 - UNCLEAR: 意图不明确，需要进一步询问
@@ -993,6 +1003,8 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
                 result.OfficeIntent = OfficeIntentType.TOC_GENERATION
             Case "REVIEW_COMMENT"
                 result.OfficeIntent = OfficeIntentType.REVIEW_COMMENT
+            Case "PROOFREAD"
+                result.OfficeIntent = OfficeIntentType.PROOFREAD
             Case Else
                 result.OfficeIntent = OfficeIntentType.GENERAL_QUERY
         End Select
