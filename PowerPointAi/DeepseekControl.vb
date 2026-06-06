@@ -27,23 +27,68 @@ Public Class DeepseekControl
     End Sub
 
     Protected Overrides Sub SendChatMessage(message As String)
-        Throw New NotImplementedException()
+        Debug.WriteLine("DeepseekControl SendChatMessage: " & message)
     End Sub
 
     Protected Overrides Sub GetSelectionContent(target As Object)
-        Throw New NotImplementedException()
+        ' Deepseek 网页控件不维护本地引用卡片；发送时由 AppendCurrentSelectedContent 读取当前选区。
     End Sub
 
     Protected Overrides Function GetCurrentWorkingDirectory() As String
-        Throw New NotImplementedException()
+        Try
+            If Globals.ThisAddIn.Application.ActivePresentation IsNot Nothing Then
+                Return Globals.ThisAddIn.Application.ActivePresentation.Path
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"获取 PowerPoint 工作目录失败: {ex.Message}")
+        End Try
+        Return System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
     End Function
 
     Protected Overrides Function AppendCurrentSelectedContent(message As String) As String
-        Throw New NotImplementedException()
+        Try
+            Dim selection = Globals.ThisAddIn.Application.ActiveWindow.Selection
+            If selection Is Nothing Then Return message
+
+            Dim sb As New System.Text.StringBuilder()
+            sb.AppendLine("--- 当前 PowerPoint 选区 ---")
+
+            Select Case selection.Type
+                Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionText
+                    sb.AppendLine(selection.TextRange.Text)
+                Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionShapes
+                    For i As Integer = 1 To selection.ShapeRange.Count
+                        Dim shp = selection.ShapeRange(i)
+                        If shp.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
+                           shp.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                            sb.AppendLine(shp.TextFrame.TextRange.Text)
+                        End If
+                    Next
+                Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionSlides
+                    For Each slide As Microsoft.Office.Interop.PowerPoint.Slide In selection.SlideRange
+                        sb.AppendLine($"幻灯片 {slide.SlideIndex}")
+                        For Each shp As Microsoft.Office.Interop.PowerPoint.Shape In slide.Shapes
+                            If shp.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
+                               shp.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                sb.AppendLine(shp.TextFrame.TextRange.Text)
+                            End If
+                        Next
+                    Next
+                Case Else
+                    Return message
+            End Select
+
+            Dim selectedText = sb.ToString().TrimEnd()
+            If String.IsNullOrWhiteSpace(selectedText) OrElse selectedText = "--- 当前 PowerPoint 选区 ---" Then Return message
+            Return message & vbCrLf & vbCrLf & selectedText
+        Catch ex As Exception
+            Debug.WriteLine($"附加 PowerPoint 选区失败: {ex.Message}")
+            Return message
+        End Try
     End Function
 
     Protected Overrides Function GetApplication() As ApplicationInfo
-        Throw New NotImplementedException()
+        Return New ApplicationInfo("PowerPoint", OfficeApplicationType.PowerPoint)
     End Function
 
     Protected Overrides Function GetVBProject() As VBProject

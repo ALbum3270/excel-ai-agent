@@ -69,7 +69,11 @@ Public MustInherit Class BaseDoubaoChat
                 ChatBrowser.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = True
                 ChatBrowser.CoreWebView2.Settings.IsWebMessageEnabled = True
                 ' 启用开发者工具以便调试可能的焦点问题
+#If DEBUG Then
                 ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = True
+#Else
+                ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = False
+#End If
 
                 ' 重要：在导航前注册所有事件处理器
                 AddHandler ChatBrowser.CoreWebView2.NavigationCompleted, AddressOf OnWebViewNavigationCompleted

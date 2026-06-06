@@ -2098,8 +2098,10 @@ function showReformatResult(result) {
  */
 function undoReformat() {
     try {
-        const payload = JSON.stringify({ type: 'undoReformat' });
-        if (window.chrome && window.chrome.webview) {
+        const payload = { type: 'undoReformat' };
+        if (window.officeAi && typeof window.officeAi.post === 'function') {
+            window.officeAi.post(payload);
+        } else if (window.chrome && window.chrome.webview) {
             window.chrome.webview.postMessage(payload);
         } else if (window.vsto) {
             window.vsto.postMessage(payload);

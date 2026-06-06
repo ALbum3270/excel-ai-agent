@@ -217,7 +217,8 @@ Public Class SmartProofreadFocusMode
         
         For i = 0 To paragraphs.Count - 1
             Dim para = paragraphs(i)
-            For Each issue In issues.Where(Function(it) it.ParagraphIndex = i)
+            Dim paragraphIndex = i
+            For Each issue In issues.Where(Function(it) it.ParagraphIndex = paragraphIndex)
                 Dim pos = para.IndexOf(issue.Original, StringComparison.Ordinal)
                 If pos >= 0 Then
                     issue.StartPosition = offset + pos

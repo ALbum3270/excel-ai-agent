@@ -97,7 +97,11 @@ Public Class WebViewService
             _chatBrowser.CoreWebView2.Settings.IsScriptEnabled = True
             _chatBrowser.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = True
             _chatBrowser.CoreWebView2.Settings.IsWebMessageEnabled = True
+#If DEBUG Then
             _chatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = True
+#Else
+            _chatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = False
+#End If
         End Sub
 
         ''' <summary>

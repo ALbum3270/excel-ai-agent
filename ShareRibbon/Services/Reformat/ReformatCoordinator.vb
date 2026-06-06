@@ -491,10 +491,20 @@ Public Class ReformatCoordinator
 
         Dim appliedCount As Integer = 0
 
+        Dim wordApp As Object = Nothing
+        Dim screenUpdatingChanged As Boolean = False
+        Dim undoRecordStarted As Boolean = False
+
         Try
-            Dim wordApp = sourceDoc.Application
+            wordApp = sourceDoc.Application
             wordApp.ScreenUpdating = False
-            wordApp.UndoRecord.StartCustomRecord("AI排版")
+            screenUpdatingChanged = True
+            Try
+                wordApp.UndoRecord.StartCustomRecord("AI排版")
+                undoRecordStarted = True
+            Catch ex As Exception
+                Debug.WriteLine($"[ReformatCoordinator] StartCustomRecord failed: {ex.Message}")
+            End Try
 
             ' 使用传入的段落列表（保证索引一致），否则回退到全文收集
             Dim wordParagraphs As List(Of Object) = sourceParagraphs
@@ -518,12 +528,24 @@ Public Class ReformatCoordinator
 
             appliedCount = result.AppliedCount
 
-            wordApp.UndoRecord.EndCustomRecord()
-            wordApp.ScreenUpdating = True
-
         Catch ex As Exception
             Debug.WriteLine($"[ReformatCoordinator] 合并到原文档失败: {ex}")
             Throw
+        Finally
+            If undoRecordStarted AndAlso wordApp IsNot Nothing Then
+                Try
+                    wordApp.UndoRecord.EndCustomRecord()
+                Catch ex As Exception
+                    Debug.WriteLine($"[ReformatCoordinator] EndCustomRecord failed: {ex.Message}")
+                End Try
+            End If
+
+            If screenUpdatingChanged AndAlso wordApp IsNot Nothing Then
+                Try
+                    wordApp.ScreenUpdating = True
+                Catch
+                End Try
+            End If
         End Try
 
         Return appliedCount

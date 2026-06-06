@@ -33,23 +33,72 @@ Public Class DeepseekControl
     End Sub
 
     Protected Overrides Sub SendChatMessage(message As String)
-        Throw New NotImplementedException()
+        Debug.WriteLine("DeepseekControl SendChatMessage: " & message)
     End Sub
 
     Protected Overrides Sub GetSelectionContent(target As Object)
-        Throw New NotImplementedException()
+        ' Deepseek 网页控件不维护本地引用卡片；发送时由 AppendCurrentSelectedContent 读取当前选区。
     End Sub
 
     Protected Overrides Function GetCurrentWorkingDirectory() As String
-        Throw New NotImplementedException()
+        Try
+            If Globals.ThisAddIn.Application.ActiveWorkbook IsNot Nothing Then
+                Return Globals.ThisAddIn.Application.ActiveWorkbook.Path
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"获取 Excel 工作目录失败: {ex.Message}")
+        End Try
+        Return System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
     End Function
 
     Protected Overrides Function AppendCurrentSelectedContent(message As String) As String
-        Throw New NotImplementedException()
+        Try
+            Dim selection = Globals.ThisAddIn.Application.Selection
+            If selection Is Nothing OrElse Not TypeOf selection Is Microsoft.Office.Interop.Excel.Range Then
+                Return message
+            End If
+
+            Dim range = DirectCast(selection, Microsoft.Office.Interop.Excel.Range)
+            Dim text As String = ConvertRangeToText(range)
+            If String.IsNullOrWhiteSpace(text) Then Return message
+
+            Return message & vbCrLf & vbCrLf &
+                   "--- 当前 Excel 选区 ---" & vbCrLf &
+                   $"工作表: {range.Worksheet.Name}" & vbCrLf &
+                   $"范围: {range.Address(False, False)}" & vbCrLf &
+                   text
+        Catch ex As Exception
+            Debug.WriteLine($"附加 Excel 选区失败: {ex.Message}")
+            Return message
+        End Try
     End Function
 
     Protected Overrides Function GetApplication() As ApplicationInfo
-        Throw New NotImplementedException()
+        Return New ApplicationInfo("Excel", OfficeApplicationType.Excel)
+    End Function
+
+    Private Function ConvertRangeToText(range As Microsoft.Office.Interop.Excel.Range) As String
+        Dim sb As New System.Text.StringBuilder()
+        Try
+            Dim rowCount As Integer = Math.Min(range.Rows.Count, 50)
+            Dim colCount As Integer = Math.Min(range.Columns.Count, 20)
+
+            For r As Integer = 1 To rowCount
+                Dim rowValues As New List(Of String)()
+                For c As Integer = 1 To colCount
+                    Dim value = range.Cells(r, c).Value
+                    rowValues.Add(If(value Is Nothing, "", value.ToString()))
+                Next
+                sb.AppendLine(String.Join(vbTab, rowValues))
+            Next
+
+            If range.Rows.Count > rowCount OrElse range.Columns.Count > colCount Then
+                sb.AppendLine($"[选区过大，仅包含前 {rowCount} 行、{colCount} 列]")
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"读取 Excel 选区失败: {ex.Message}")
+        End Try
+        Return sb.ToString().TrimEnd()
     End Function
 
     Protected Overrides Function GetVBProject() As VBProject

@@ -66,35 +66,15 @@ Public Class Ribbon1
         End Try
     End Sub
 
-    ' 智能排版 v2：分析文档 → 推荐标准 → 显示预览 → 用户确认后应用
-    ' 不再直接进入模板选择模式，而是触发一键速排流程
+    ' 排版入口：打开对话排版，不自动分析文档，不生成默认建议卡片
     Protected Overrides Async Sub ReformatButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
-            Dim wordApp = Globals.ThisAddIn.Application
-
-            ' 获取选中内容
-            Dim selText As String = String.Empty
-            Try
-                If wordApp?.Selection?.Range IsNot Nothing Then
-                    selText = wordApp.Selection.Range.Text
-                End If
-            Catch
-                selText = String.Empty
-            End Try
-
-            If String.IsNullOrWhiteSpace(selText) Then
-                ' 没有选中内容时，打开Chat并显示引导
-                Globals.ThisAddIn.ShowChatTaskPane()
-                Await Task.Delay(250)
-                Dim ctrl = ThisAddIn.chatControl
-                If ctrl IsNot Nothing Then
-                    Await ctrl.ExecuteJavaScriptAsyncJS("showQuickReformatGuide();")
-                End If
-                GlobalStatusStripAll.ShowWarning("请先选中需要排版的文本内容，或直接在Chat中输入排版指令。")
+            If Not HasUsableFormattingSelection() Then
+                ShareRibbon.GlobalStatusStripAll.ShowWarning("请先选中需要排版的文本内容。")
                 Return
             End If
 
-            ' 打开Chat面板并触发一键速排
+            ' 打开 Chat 面板并进入对话排版入口
             Globals.ThisAddIn.ShowChatTaskPane()
             Await Task.Delay(250)
 
@@ -104,13 +84,47 @@ Public Class Ribbon1
                 Return
             End If
 
-            ' 触发智能排版
-            Await chatCtrl.TriggerSmartReformat()
+            Await chatCtrl.OpenReformatPageAsync()
 
         Catch ex As Exception
-            MessageBox.Show("智能排版出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show("打开排版页面出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try
     End Sub
+
+    Private Function HasUsableFormattingSelection() As Boolean
+        Try
+            Dim wordApp = Globals.ThisAddIn.Application
+            If wordApp Is Nothing OrElse wordApp.Selection Is Nothing OrElse wordApp.Selection.Range Is Nothing Then
+                Return False
+            End If
+
+            If wordApp.Selection.Type = Microsoft.Office.Interop.Word.WdSelectionType.wdSelectionIP Then
+                Return False
+            End If
+
+            Dim selectedRange = wordApp.Selection.Range
+            Dim selectedText = If(selectedRange.Text, String.Empty)
+            Dim normalizedText = selectedText.
+                Replace(vbCr, String.Empty).
+                Replace(vbLf, String.Empty).
+                Replace(ChrW(7), String.Empty).
+                Trim()
+
+            If normalizedText.Length > 0 Then
+                Return True
+            End If
+
+            Try
+                If selectedRange.Tables IsNot Nothing AndAlso selectedRange.Tables.Count > 0 Then Return True
+                If selectedRange.InlineShapes IsNot Nothing AndAlso selectedRange.InlineShapes.Count > 0 Then Return True
+            Catch
+            End Try
+        Catch ex As Exception
+            Debug.WriteLine($"HasUsableFormattingSelection error: {ex.Message}")
+        End Try
+
+        Return False
+    End Function
 
     ' 一键翻译功能
     Protected Overrides Async Sub TranslateButton_Click(sender As Object, e As RibbonControlEventArgs)
@@ -228,7 +242,7 @@ Public Class Ribbon1
 
     ' 模板排版功能（高级/模板模式）- 使用JSON格式完整提取模板结构
     ' 注意：普通排版请使用上方的"排版"按钮（智能排版 v2），本按钮为高级模板模式
-    Protected Overrides Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
+    Protected Overrides Async Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
             ' 1. 打开文件对话框选择模板文件
             Using openDialog As New OpenFileDialog()
@@ -271,11 +285,9 @@ Public Class Ribbon1
                     Dim templateContent = templateJson.ToString(Newtonsoft.Json.Formatting.Indented)
 
                     ' 调用JS进入模板渲染模式
-                    Task.Run(Async Function()
-                                 Await Task.Delay(500) ' 等待WebView加载
-                                 Dim jsCall = $"enterTemplateMode(`{JsUtil.EscapeForJs(templateContent)}`, `{JsUtil.EscapeForJs(templateName)}`);"
-                                 Await chatCtrl.ExecuteJavaScriptAsyncJS(jsCall)
-                             End Function)
+                    Await Task.Delay(500) ' 等待WebView加载
+                    Dim jsCall = $"enterTemplateMode(`{JsUtil.EscapeForJs(templateContent)}`, `{JsUtil.EscapeForJs(templateName)}`);"
+                    Await chatCtrl.ExecuteJavaScriptAsyncJS(jsCall)
 
                     MessageBox.Show("已进入模板渲染模式！" & vbCrLf & vbCrLf &
                                     "模板结构已解析完成（包含段落、样式、字体、图片等信息）。" & vbCrLf &

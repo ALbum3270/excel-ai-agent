@@ -7,7 +7,7 @@ Public Class ResourceExtractor
     ''' <summary>
     ''' 资源版本号 — 更新此值可强制刷新所有前端资源文件
     ''' </summary>
-    Private Shared _resourceVersion As String = "2026.05.03.1"
+    Private Shared _resourceVersion As String = "2026.06.06.3"
 
     ''' <summary>
     ''' 获取最后一次错误信息
@@ -87,6 +87,7 @@ Public Class ResourceExtractor
 
             ' 自定义JS资源文件映射
             Dim jsResources As New Dictionary(Of String, String) From {
+                {"office_ai_bridge", "office-ai-bridge.js"},
                 {"utils", "utils.js"},
                 {"core", "core.js"},
                 {"markdown_renderer", "markdown-renderer.js"},

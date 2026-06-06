@@ -44,6 +44,18 @@ window.enterReformatTemplateMode = function() {
     if (templateMode) {
         templateMode.style.display = 'flex';
     }
+
+    // WebView2 页面会复用 DOM；进入排版页时先清掉可能残留的旧智能排版面板。
+    const wrapper = document.getElementById('template-cards-wrapper');
+    if (wrapper) {
+        wrapper.innerHTML = '<div class="template-empty-hint">正在加载排版模板...</div>';
+    }
+
+    const quickIndicator = document.getElementById('quick-reformat-indicator');
+    if (quickIndicator) quickIndicator.remove();
+    const quickGuide = document.getElementById('quick-reformat-guide');
+    if (quickGuide) quickGuide.remove();
+    document.body.classList.remove('smart-reformat-mode');
     
     // 重置状态
     isManageMode = false;
@@ -118,14 +130,6 @@ window.switchResourceTab = function(tabType) {
     currentResourceType = tabType;
     updateResourceTabUI();
 
-    // 智能排版Tab：直接渲染面板，无需请求数据
-    if (tabType === 'smart') {
-        closeTemplatePreview();
-        closeStyleGuidePreview();
-        renderResourceList();
-        return;
-    }
-
     // 按需请求数据：如果目标类型数据为空，向VB端请求
     if (tabType === 'styleguide' && currentStyleGuides.length === 0) {
         sendMessageToVB({ type: 'getStyleGuides' });
@@ -150,9 +154,6 @@ function updateResourceTabUI() {
     const titleEl = document.getElementById('resource-mode-title');
     if (titleEl) {
         switch(currentResourceType) {
-            case 'smart':
-                titleEl.textContent = '智能排版';
-                break;
             case 'template':
                 titleEl.textContent = '选择排版模板';
                 break;
@@ -168,7 +169,7 @@ function updateResourceTabUI() {
     const btnNewTemplate = document.getElementById('btn-new-template');
 
     if (btnNewTemplate) {
-        if (currentResourceType === 'styleguide' || currentResourceType === 'smart') {
+        if (currentResourceType === 'styleguide') {
             btnNewTemplate.style.display = 'none';
         } else {
             btnNewTemplate.style.display = 'inline-flex';
@@ -180,21 +181,15 @@ function updateResourceTabUI() {
     const btnImport = document.getElementById('btn-import-resource');
     const btnManage = document.getElementById('manage-templates-btn');
 
-    if (currentResourceType === 'smart') {
-        if (btnSave) btnSave.style.display = 'none';
-        if (btnImport) btnImport.style.display = 'none';
-        if (btnManage) btnManage.style.display = 'none';
+    if (btnSave) btnSave.style.display = '';
+    if (btnImport) btnImport.style.display = '';
+    if (btnManage) btnManage.style.display = '';
+    if (currentResourceType === 'styleguide') {
+        if (btnSave) btnSave.title = '保存左侧内容为排版规范';
+        if (btnImport) btnImport.title = '从文件导入排版规范';
     } else {
-        if (btnSave) btnSave.style.display = '';
-        if (btnImport) btnImport.style.display = '';
-        if (btnManage) btnManage.style.display = '';
-        if (currentResourceType === 'styleguide') {
-            if (btnSave) btnSave.title = '保存左侧内容为排版规范';
-            if (btnImport) btnImport.title = '从文件导入排版规范';
-        } else {
-            if (btnSave) btnSave.title = '保存左侧文档内容为排版模板';
-            if (btnImport) btnImport.title = '从文件导入排版模板';
-        }
+        if (btnSave) btnSave.title = '保存左侧文档内容为排版模板';
+        if (btnImport) btnImport.title = '从文件导入排版模板';
     }
 }
 
@@ -202,9 +197,7 @@ function updateResourceTabUI() {
  * 渲染资源列表（根据当前Tab类型）
  */
 function renderResourceList() {
-    if (currentResourceType === 'smart') {
-        renderSmartFormatPanel();
-    } else if (currentResourceType === 'template') {
+    if (currentResourceType === 'template') {
         renderTemplateCards(currentTemplates, currentCategory);
     } else if (currentResourceType === 'styleguide') {
         renderStyleGuideCards(currentStyleGuides);
@@ -1273,110 +1266,16 @@ window.refreshReformatTemplates = function() {
     
     };
 
-// ====== 智能排版Tab相关 ======
-
-/**
- * 渲染智能排版面板（替代模板列表）
- */
-function renderSmartFormatPanel() {
-    var wrapper = document.getElementById('template-cards-wrapper');
-    if (!wrapper) return;
-
-    wrapper.innerHTML =
-        '<div class="smart-format-panel">' +
-        '  <div class="smart-format-hero">' +
-        '    <button class="smart-format-quick-btn" onclick="triggerQuickReformat()">' +
-        '      <svg viewBox="0 0 24 24" width="48" height="48"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' +
-        '      <span>一键速排</span>' +
-        '      <small>AI自动分析文档类型并应用最佳格式</small>' +
-        '    </button>' +
-        '  </div>' +
-        '  <div class="smart-format-dialog">' +
-        '    <div class="smart-format-dialog-label">' +
-        '      <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>' +
-        '      对话式排版' +
-        '    </div>' +
-        '    <div class="smart-format-dialog-input-row">' +
-        '      <input type="text" class="smart-format-dialog-input" id="smart-format-dialog-input" placeholder="描述你想要的排版效果，如：按公文GB/T 9704标准排版..." />' +
-        '      <button class="smart-format-dialog-send" onclick="sendSmartFormatMessage()">发送</button>' +
-        '    </div>' +
-        '  </div>' +
-        '  <button class="smart-format-clone-btn" onclick="triggerFormatClone()">' +
-        '    <svg viewBox="0 0 24 24" width="36" height="36"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>' +
-        '    <span>格式克隆</span>' +
-        '    <small>选中参考文本，点击此处自动提取格式并应用</small>' +
-        '  </button>' +
-        '</div>';
-}
-
-/**
- * 触发一键速排 - 直接分析当前文档并应用智能排版
- */
-window.triggerQuickReformat = function() {
-    sendMessageToVB({ type: 'triggerQuickReformat' });
-};
-
-/**
- * 发送对话式排版消息
- */
-window.sendSmartFormatMessage = function() {
-    var input = document.getElementById('smart-format-dialog-input');
-    if (!input || !input.value.trim()) return;
-
-    sendMessageToVB({
-        type: 'smartFormatMessage',
-        message: input.value.trim()
-    });
-
-    input.value = '';
-};
-
-/**
- * 触发格式克隆 - 复制选中文本的格式
- */
-window.triggerFormatClone = function() {
-    sendMessageToVB({ type: 'triggerFormatClone' });
-};
-
-// ====== 智能排版Tab注入（初始化时执行） ======
-(function injectSmartFormatTab() {
-    // 确保DOM加载完成后再注入
-    function doInject() {
-        var tabContainer = document.querySelector('.resource-type-tabs');
-        if (!tabContainer) return;
-
-        // 避免重复注入
-        if (tabContainer.querySelector('[data-type="smart"]')) return;
-
-        var smartTab = document.createElement('button');
-        smartTab.className = 'resource-tab';
-        smartTab.dataset.type = 'smart';
-        smartTab.innerHTML =
-            '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' +
-            '智能排版';
-        smartTab.onclick = function() { switchResourceTab('smart'); };
-        tabContainer.insertBefore(smartTab, tabContainer.firstChild);
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', doInject);
-    } else {
-        doInject();
-    }
-})();
-
 /**
  * 发送消息到VB.NET后端
  * @param {Object} payload - 消息负载
  */
 function sendMessageToVB(payload) {
     try {
-        if (window.chrome && window.chrome.webview) {
-            window.chrome.webview.postMessage(payload);
-        } else if (window.vsto) {
-            window.vsto.postMessage(payload);
+        if (window.officeAi && typeof window.officeAi.post === 'function') {
+            window.officeAi.post(payload);
         } else {
-            console.warn('[ReformatTemplate] 无法发送消息，WebView不可用');
+            console.warn('[ReformatTemplate] no host bridge available');
         }
     } catch (e) {
         console.error('[ReformatTemplate] 发送消息失败:', e);

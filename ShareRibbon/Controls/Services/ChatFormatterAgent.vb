@@ -73,6 +73,31 @@ Public Class ChatFormatterAgent
         End Get
     End Property
 
+    Public Async Function RecognizeReformatIntentAsync(userMessage As String,
+                                                       paragraphs As List(Of String),
+                                                       Optional paragraphStyles As List(Of String) = Nothing,
+                                                       Optional paragraphFontSizes As List(Of Single) = Nothing,
+                                                       Optional paragraphIsBold As List(Of Boolean) = Nothing) As Task(Of ReformatIntentRecognitionResult)
+        Dim analysis As DocumentAnalysisResult = Nothing
+        Try
+            Dim analyzer As New DocumentAnalyzer()
+            If paragraphStyles IsNot Nothing AndAlso paragraphFontSizes IsNot Nothing AndAlso paragraphIsBold IsNot Nothing Then
+                analysis = analyzer.Analyze(paragraphs, paragraphStyles, paragraphFontSizes, paragraphIsBold)
+            Else
+                analysis = analyzer.Analyze(paragraphs)
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[ChatFormatterAgent] 文档上下文分析失败，使用空上下文识别意图: {ex.Message}")
+            analysis = New DocumentAnalysisResult()
+        End Try
+
+        Dim recognizer As New ReformatIntentRecognizer(
+            _textAnalyzer,
+            Function(message, context) _orchestrator.ParseUserIntent(message, context))
+
+        Return Await recognizer.RecognizeAsync(userMessage, analysis, paragraphs)
+    End Function
+
     ''' <summary>
     ''' 处理Chat中的排版消息。
     ''' 根据消息内容自动判断是"首次排版请求"还是"微调指令"。
@@ -372,6 +397,18 @@ Public Class ChatFormatterAgent
         Await _executeScript($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
     End Function
 
+    Private Shared Function ShouldShowDocumentType(plan As ReformatPreviewPlan) As Boolean
+        Return plan IsNot Nothing AndAlso
+               plan.DetectedType <> DocumentType.Unknown AndAlso
+               plan.TypeConfidence >= 0.35
+    End Function
+
+    Private Shared Function GetDocumentTypeLabel(plan As ReformatPreviewPlan) As String
+        If plan Is Nothing Then Return ""
+        If Not String.IsNullOrWhiteSpace(plan.DocumentTypeName) Then Return plan.DocumentTypeName
+        Return plan.DetectedType.ToString()
+    End Function
+
     ''' <summary>
     ''' 生成AI分析结果卡片HTML（Phase 2新增：先分析后确认）
     ''' </summary>
@@ -386,8 +423,8 @@ Public Class ChatFormatterAgent
         sb.AppendLine("  <div class=""formatting-card-body"">")
 
         ' 文档类型与标准
-        If plan.DetectedType <> DocumentType.Unknown Then
-            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{plan.DocumentTypeName}</strong> (置信度{Math.Round(plan.TypeConfidence * 100)}%)</div>")
+        If ShouldShowDocumentType(plan) Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{GetDocumentTypeLabel(plan)}</strong> (置信度{Math.Round(plan.TypeConfidence * 100)}%)</div>")
         End If
         If Not String.IsNullOrEmpty(plan.StandardName) Then
             sb.AppendLine($"    <div class=""formatting-info-row"">排版标准: <strong>{plan.StandardName}</strong></div>")
@@ -447,8 +484,8 @@ Public Class ChatFormatterAgent
         sb.AppendLine("    <div class=""formatting-info-row formatting-info-warning"">AI分析器未启用，将使用基于规则的分析，精度有限。建议配置AI模型以获得更精准的排版效果。</div>")
 
         ' 文档类型与标准
-        If plan.DetectedType <> DocumentType.Unknown Then
-            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{plan.DocumentTypeName}</strong></div>")
+        If ShouldShowDocumentType(plan) Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{GetDocumentTypeLabel(plan)}</strong></div>")
         End If
         If Not String.IsNullOrEmpty(plan.StandardName) Then
             sb.AppendLine($"    <div class=""formatting-info-row"">排版标准: <strong>{plan.StandardName}</strong></div>")
@@ -513,8 +550,8 @@ Public Class ChatFormatterAgent
         sb.AppendLine("  <div class=""formatting-card-body"">")
 
         ' 文档类型与标准
-        If plan.DetectedType <> DocumentType.Unknown Then
-            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{plan.DocumentTypeName}</strong> (置信度{Math.Round(plan.TypeConfidence * 100)}%)</div>")
+        If ShouldShowDocumentType(plan) Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{GetDocumentTypeLabel(plan)}</strong> (置信度{Math.Round(plan.TypeConfidence * 100)}%)</div>")
         End If
         If Not String.IsNullOrEmpty(plan.StandardName) Then
             sb.AppendLine($"    <div class=""formatting-info-row"">推荐标准: <strong>{plan.StandardName}</strong></div>")

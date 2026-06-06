@@ -29,6 +29,18 @@ Public MustInherit Class BaseChatControl
     Private _historyService As HistoryService = Nothing
     Private _mcpService As McpService = Nothing
     Private _selfCheckLoopController As SelfCheckLoopController = Nothing
+    Private _conversationRuntime As IConversationRuntime = Nothing
+
+    Protected ReadOnly Property ConversationRuntime As IConversationRuntime
+        Get
+            If _conversationRuntime Is Nothing Then
+                _conversationRuntime = New DefaultConversationRuntime(
+                    New DefaultContextComposer(),
+                    New McpToolBroker())
+            End If
+            Return _conversationRuntime
+        End Get
+    End Property
 
     ' 延迟初始化的排版服务
     Private _reformatService As ReformatService = Nothing
@@ -41,7 +53,8 @@ Public MustInherit Class BaseChatControl
                     Sub(a) If InvokeRequired Then Me.Invoke(a) Else a(),
                     AddressOf ShowTemplateEditorPane,
                     AddressOf GetStylePreviewCallback,
-                    AddressOf HandleUploadDocxTemplateFromPath)
+                    AddressOf HandleUploadDocxTemplateFromPath,
+                    Function(mode, prompt) SendAndGetResponseAsync(prompt, "", New List(Of HistoryMessage)()))
             End If
             Return _reformatService
         End Get
@@ -284,7 +297,11 @@ Public MustInherit Class BaseChatControl
                 ChatBrowser.CoreWebView2.Settings.IsScriptEnabled = True
                 ChatBrowser.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = True
                 ChatBrowser.CoreWebView2.Settings.IsWebMessageEnabled = True
+#If DEBUG Then
                 ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = True
+#Else
+                ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = False
+#End If
 
                 ' 设置虚拟主机映射
                 Try
@@ -2807,161 +2824,41 @@ Public MustInherit Class BaseChatControl
 
 
     Private Function CreateRequestBody(uuid As String, question As String, systemPrompt As String, addHistory As Boolean, Optional ByRef ragCountOut As Integer = 0) As String
-        Dim result As String = question
+        Dim context As New ChatRequestContext With {
+            .RequestUuid = uuid,
+            .Question = question,
+            .SystemPrompt = systemPrompt,
+            .AddHistory = addHistory,
+            .ModelName = ConfigSettings.ModelName,
+            .Stream = True,
+            .AppInfo = GetApplication(),
+            .HistoryMessages = systemHistoryMessageData,
+            .SelectionPendingMap = _selectionPendingMap,
+            .UseContextBuilder = MemoryConfig.UseContextBuilder,
+            .EnableMemory = MemoryConfig.EnableUserProfile OrElse MemoryConfig.RagTopN > 0
+        }
 
-        ' 构建 messages 数组
-        Dim messagesArray As JArray = Nothing
-        Dim usedContextBuilder As Boolean = False
+        Dim buildResult = ConversationRuntime.BuildRequest(context)
+        ragCountOut = buildResult.RagCount
 
-        ' 尝试使用 ContextBuilder 分层组装（Memory + Skills）
-        If addHistory AndAlso MemoryConfig.UseContextBuilder Then
-            Try
-                Dim appInfo = GetApplication()
-                Dim appType = If(appInfo IsNot Nothing, appInfo.Type.ToString(), "Excel")
-                Dim scenario = appType.ToLowerInvariant()
-                Dim sessionMsgs As New List(Of HistoryMessage)()
-                For Each m In systemHistoryMessageData
-                    If m.role <> "system" AndAlso Not String.IsNullOrEmpty(m.content) Then
-                        sessionMsgs.Add(m)
-                    End If
-                Next
-                Dim vars As New Dictionary(Of String, String)()
-                If _selectionPendingMap.ContainsKey(uuid) Then
-                    Dim sel = _selectionPendingMap(uuid)
-                    If sel IsNot Nothing AndAlso Not String.IsNullOrEmpty(sel.SelectedText) Then
-                        vars("选中内容") = sel.SelectedText
-                    End If
-                End If
-                Dim enableMem = MemoryConfig.EnableUserProfile OrElse MemoryConfig.RagTopN > 0
+        If addHistory Then
+            Dim existingSystem = systemHistoryMessageData.FirstOrDefault(Function(m) m.role = "system")
+            If existingSystem IsNot Nothing Then systemHistoryMessageData.Remove(existingSystem)
 
-                Debug.WriteLine($"[CreateRequestBody] 尝试使用 ContextBuilder，UseContextBuilder={MemoryConfig.UseContextBuilder}, enableMem={enableMem}")
-                Debug.WriteLine($"[CreateRequestBody] 当前会话消息数: {sessionMsgs.Count}")
-
-                Dim built = ChatContextBuilder.BuildMessages(scenario, appType, result, sessionMsgs, result, systemPrompt, vars, enableMem, ragCountOut)
-                messagesArray = New JArray()
-                For Each msg In built
-                    Dim msgObj = New JObject()
-                    msgObj("role") = msg.role
-                    msgObj("content") = If(msg.content, String.Empty)
-                    messagesArray.Add(msgObj)
-                Next
-                usedContextBuilder = True
-
-                Debug.WriteLine($"[CreateRequestBody] ContextBuilder 构建成功，消息数: {messagesArray.Count}")
-
-                ' 更新本地 systemHistoryMessageData 与持久化
-                Dim existingSystem = systemHistoryMessageData.FirstOrDefault(Function(m) m.role = "system")
-                If existingSystem IsNot Nothing Then systemHistoryMessageData.Remove(existingSystem)
-                systemHistoryMessageData.Insert(0, New HistoryMessage With {.role = "system", .content = systemPrompt})
-                systemHistoryMessageData.Add(New HistoryMessage With {.role = "user", .content = result})
-                ManageHistoryMessageSize()
-                _chatStateService.AddMessage("user", result)
-            Catch ex As Exception
-                Debug.WriteLine("ContextBuilder 降级: " & ex.Message)
-                Debug.WriteLine("ContextBuilder 降级堆栈: " & ex.StackTrace)
-                usedContextBuilder = False
-            End Try
-        Else
-            Debug.WriteLine($"[CreateRequestBody] 不使用 ContextBuilder，addHistory={addHistory}, UseContextBuilder={MemoryConfig.UseContextBuilder}")
+            systemHistoryMessageData.Insert(0, New HistoryMessage With {
+                .role = "system",
+                .content = systemPrompt
+            })
+            systemHistoryMessageData.Add(New HistoryMessage With {
+                .role = "user",
+                .content = question
+            })
+            ManageHistoryMessageSize()
+            _chatStateService.AddMessage("user", question)
         End If
 
-        If Not usedContextBuilder Then
-            messagesArray = New JArray()
-            Dim systemMessage = New HistoryMessage() With {.role = "system", .content = systemPrompt}
-            Dim q = New HistoryMessage() With {.role = "user", .content = result}
-
-            If addHistory Then
-                Dim existingSystem = systemHistoryMessageData.FirstOrDefault(Function(m) m.role = "system")
-                If existingSystem IsNot Nothing Then systemHistoryMessageData.Remove(existingSystem)
-                systemHistoryMessageData.Insert(0, systemMessage)
-                systemHistoryMessageData.Add(q)
-                ManageHistoryMessageSize()
-                _chatStateService.AddMessage("user", result)
-
-                For Each message In systemHistoryMessageData
-                    Dim msgObj = New JObject()
-                    msgObj("role") = message.role
-                    msgObj("content") = If(message.content, String.Empty)
-                    messagesArray.Add(msgObj)
-                Next
-            Else
-                messagesArray.Add(New JObject() From {{"role", "system"}, {"content", If(systemPrompt, "")}})
-                messagesArray.Add(New JObject() From {{"role", "user"}, {"content", result}})
-            End If
-        End If
-
-
-
-        ' 添加MCP工具信息（如果有）
-        Dim toolsArray As JArray = Nothing
-        Dim chatSettings As New ChatSettings(GetApplication())
-
-        ' 如果有启用的MCP连接
-        If chatSettings.EnabledMcpList IsNot Nothing AndAlso chatSettings.EnabledMcpList.Count > 0 Then
-            toolsArray = New JArray()
-
-            ' 加载所有MCP连接
-            Dim connections = MCPConnectionManager.LoadConnections()
-
-            ' 找到启用的连接
-            For Each mcpName In chatSettings.EnabledMcpList
-                ' 使用IsActive替代Enabled
-                Dim connection = connections.FirstOrDefault(Function(c) c.Name = mcpName AndAlso c.IsActive)
-                If connection IsNot Nothing Then
-                    ' 从连接配置中获取已保存的工具列表
-                    If connection.Tools IsNot Nothing AndAlso connection.Tools.Count > 0 Then
-                        ' 将所有工具添加到工具数组
-                        For Each toolObj In connection.Tools
-                            toolsArray.Add(toolObj)
-                        Next
-                        Debug.WriteLine($"从连接 '{connection.Name}' 加载了 {connection.Tools.Count} 个工具")
-                    Else
-                        ' 如果连接中没有保存工具信息，则使用通用的mcp_call工具
-                        Dim toolObj = New JObject()
-                        toolObj("type") = "function"
-                        toolObj("function") = New JObject()
-                        toolObj("function")("name") = "mcp_call"
-                        toolObj("function")("description") = $"Call MCP tool through {connection.Name} connection"
-
-                        ' 添加参数架构
-                        toolObj("function")("parameters") = New JObject()
-                        toolObj("function")("parameters")("type") = "object"
-                        toolObj("function")("parameters")("properties") = New JObject()
-
-                        ' 工具名称参数
-                        toolObj("function")("parameters")("properties")("tool_name") = New JObject()
-                        toolObj("function")("parameters")("properties")("tool_name")("type") = "string"
-                        toolObj("function")("parameters")("properties")("tool_name")("description") = "The name of the MCP tool to call"
-
-                        ' 工具参数
-                        toolObj("function")("parameters")("properties")("arguments") = New JObject()
-                        toolObj("function")("parameters")("properties")("arguments")("type") = "object"
-                        toolObj("function")("parameters")("properties")("arguments")("description") = "The arguments to pass to the MCP tool"
-
-                        ' 添加必需参数
-                        toolObj("function")("parameters")("required") = New JArray({"tool_name", "arguments"})
-
-                        ' 添加到工具数组
-                        toolsArray.Add(toolObj)
-                        Debug.WriteLine($"连接 '{connection.Name}' 没有保存工具信息，使用通用mcp_call工具")
-                    End If
-                End If
-            Next
-        End If
-
-        ' 构建 JSON 请求体（使用 JObject 确保正确序列化）
-        Dim requestObj = New JObject()
-        requestObj("model") = ConfigSettings.ModelName
-        requestObj("messages") = messagesArray
-        requestObj("stream") = True
-
-        ' 如果有工具，添加到请求中
-        If toolsArray IsNot Nothing AndAlso toolsArray.Count > 0 Then
-            requestObj("tools") = toolsArray
-        End If
-
-        Return requestObj.ToString(Newtonsoft.Json.Formatting.None)
-
+        Debug.WriteLine($"[CreateRequestBody] Runtime build complete, UsedContextBuilder={buildResult.UsedContextBuilder}, RagCount={ragCountOut}")
+        Return buildResult.RequestBody
     End Function
 
 
@@ -3026,7 +2923,16 @@ Public MustInherit Class BaseChatControl
     ' 执行js脚本的异步方法
     Public Async Function ExecuteJavaScriptAsyncJS(js As String) As Task
         If ChatBrowser.InvokeRequired Then
-            ChatBrowser.Invoke(Sub() ChatBrowser.ExecuteScriptAsync(js))
+            Dim tcs As New TaskCompletionSource(Of Boolean)()
+            ChatBrowser.BeginInvoke(New Action(Async Sub()
+                                                   Try
+                                                       Await ChatBrowser.ExecuteScriptAsync(js)
+                                                       tcs.TrySetResult(True)
+                                                   Catch ex As Exception
+                                                       tcs.TrySetException(ex)
+                                                   End Try
+                                               End Sub))
+            Await tcs.Task
         Else
             Await ChatBrowser.ExecuteScriptAsync(js)
         End If
@@ -3478,6 +3384,7 @@ Public MustInherit Class BaseChatControl
     Protected Overridable Sub HandlePreviewReformatCompare(jsonDoc As JObject)
         Debug.WriteLine("HandlePreviewReformatCompare not overridden in derived class")
     End Sub
+
 
     ''' <summary>
     ''' 校对专注模式消息处理（由派生类覆写实现具体逻辑）

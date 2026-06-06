@@ -248,6 +248,7 @@ Public Class SmartFormattingOrchestrator
 
     Private ReadOnly _analyzer As DocumentAnalyzer
     Private ReadOnly _knowledgeEngine As FormattingKnowledgeEngine
+    Private ReadOnly _standardRegistry As FormattingStandardRegistry
     Private ReadOnly _refinementContext As RefinementContext
 
     ' ---- 标准名称关键词映射（用于 ParseUserIntent） ----
@@ -277,13 +278,15 @@ Public Class SmartFormattingOrchestrator
     Public Sub New()
         _analyzer = New DocumentAnalyzer()
         _knowledgeEngine = New FormattingKnowledgeEngine()
+        _standardRegistry = New FormattingStandardRegistry(_knowledgeEngine)
         _refinementContext = New RefinementContext()
     End Sub
 
     ''' <summary>注入自定义分析器和知识引擎</summary>
     Public Sub New(docAnalyzer As DocumentAnalyzer, knowledgeEngine As FormattingKnowledgeEngine)
         _analyzer = docAnalyzer
-        _knowledgeEngine = knowledgeEngine
+        _knowledgeEngine = If(knowledgeEngine, New FormattingKnowledgeEngine())
+        _standardRegistry = New FormattingStandardRegistry(_knowledgeEngine)
         _refinementContext = New RefinementContext()
     End Sub
 
@@ -305,7 +308,7 @@ Public Class SmartFormattingOrchestrator
         Dim analysis = _analyzer.Analyze(paragraphTexts)
 
         ' 2. 获取匹配标准
-        Dim standard = _knowledgeEngine.GetStandardForDocumentType(analysis.DocumentType)
+        Dim standard = _standardRegistry.SelectBest(Nothing, analysis)
 
         If standard Is Nothing Then
             Return New ReformatPreviewPlan With {
@@ -342,7 +345,7 @@ Public Class SmartFormattingOrchestrator
         ' 使用增强版分析器
         Dim analysis = _analyzer.Analyze(paragraphTexts, paragraphStyles, paragraphFontSizes, paragraphIsBold)
 
-        Dim standard = _knowledgeEngine.GetStandardForDocumentType(analysis.DocumentType)
+        Dim standard = _standardRegistry.SelectBest(Nothing, analysis)
 
         If standard Is Nothing Then
             Return New ReformatPreviewPlan With {
@@ -718,7 +721,9 @@ Public Class SmartFormattingOrchestrator
                 ' 指定标准排版：用用户指定的标准（如"按公文排版"→GB/T 9704-2012）
                 Dim standard As FormattingStandard = Nothing
                 If Not String.IsNullOrEmpty(intent.TargetStandardName) Then
-                    standard = _knowledgeEngine.GetStandardByName(intent.TargetStandardName)
+                    standard = _standardRegistry.FindStandardByName(intent.TargetStandardName)
+                ElseIf intent.TargetDocumentType <> DocumentType.Unknown Then
+                    standard = _standardRegistry.GetStandardForDocumentType(intent.TargetDocumentType)
                 End If
 
                 If standard IsNot Nothing Then
@@ -762,11 +767,15 @@ Public Class SmartFormattingOrchestrator
                                              wordParagraphs As List(Of Object),
                                              paragraphStyles As List(Of String),
                                              paragraphFontSizes As List(Of Single),
-                                             paragraphIsBold As List(Of Boolean)) As Task(Of ReformatPreviewPlan)
+                                             paragraphIsBold As List(Of Boolean),
+                                             Optional recognizedIntent As FormatIntent = Nothing) As Task(Of ReformatPreviewPlan)
 
         ' 解析用户意图
         Dim analysis = If(_refinementContext.CurrentAnalysis, New DocumentAnalysisResult())
-        Dim intent = ParseUserIntent(userMessage, analysis)
+        Dim intent As FormatIntent = recognizedIntent
+        If intent Is Nothing Then
+            intent = ParseUserIntent(userMessage, analysis)
+        End If
 
         Dim plan As ReformatPreviewPlan
 
@@ -780,7 +789,9 @@ Public Class SmartFormattingOrchestrator
             Case IntentType.StandardFormat
                 Dim standard As FormattingStandard = Nothing
                 If Not String.IsNullOrEmpty(intent.TargetStandardName) Then
-                    standard = _knowledgeEngine.GetStandardByName(intent.TargetStandardName)
+                    standard = _standardRegistry.FindStandardByName(intent.TargetStandardName)
+                ElseIf intent.TargetDocumentType <> DocumentType.Unknown Then
+                    standard = _standardRegistry.GetStandardForDocumentType(intent.TargetDocumentType)
                 End If
                 If standard IsNot Nothing Then
                     Dim docAnalysis = _analyzer.Analyze(paragraphs, paragraphStyles, paragraphFontSizes, paragraphIsBold)

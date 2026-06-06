@@ -62,7 +62,7 @@ OfficeAgent/Release
 /Release/
 
 # 不提交 docs 目录（设计文档除外）
-docs/
+docs/*
 !docs/design/
 !docs/design/**
 

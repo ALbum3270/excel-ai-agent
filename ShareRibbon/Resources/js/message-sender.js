@@ -6,16 +6,17 @@
 // Send message payload to server (VB backend)
 function sendMessageToServer(messagePayload) {
     console.log('[DEBUG sendMessageToServer] type=' + messagePayload.type, JSON.stringify(messagePayload).substring(0, 200));
+    if (window.officeAi && typeof window.officeAi.post === 'function') {
+        if (window.officeAi.post(messagePayload)) {
+            return;
+        }
+    }
+
     if (window.chrome && window.chrome.webview) {
-        console.log('[DEBUG sendMessageToServer] using chrome.webview.postMessage');
         window.chrome.webview.postMessage(messagePayload);
     } else if (window.vsto) {
         if (typeof window.vsto.sendMessage === 'function') {
-            if (messagePayload.type === 'sendMessage' && typeof messagePayload.value === 'object') {
-                window.vsto.sendMessage(JSON.stringify(messagePayload.value));
-            } else {
-                window.vsto.sendMessage(messagePayload);
-            }
+            window.vsto.sendMessage(JSON.stringify(messagePayload));
         } else if (typeof window.vsto.postMessage === 'function') {
             window.vsto.postMessage(messagePayload);
         }

@@ -535,12 +535,15 @@ window.startRefinement = function() {
  */
 function sendReformatAction(actionType, params) {
     var payload = Object.assign({ type: actionType }, params || {});
-    if (window.chrome && window.chrome.webview) {
+    if (window.officeAi && typeof window.officeAi.post === 'function') {
+        window.officeAi.post(payload);
+        return;
+    } else if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage(payload);
     } else if (window.vsto && typeof window.vsto.postMessage === 'function') {
         window.vsto.postMessage(payload);
     } else {
-        console.error('[ReformatChat] 无法发送消息，WebView不可用');
+        console.error('[ReformatChat] no host bridge available');
     }
 }
 
@@ -655,7 +658,6 @@ window.dismissQuickReformatIndicator = function() {
 window.enterSmartReformatMode = function() {
     document.body.classList.add('smart-reformat-mode');
     showQuickReformatIndicator();
-    sendReformatAction('enterSmartReformat');
 };
 
 /**
@@ -663,7 +665,6 @@ window.enterSmartReformatMode = function() {
  */
 window.exitSmartReformatMode = function() {
     document.body.classList.remove('smart-reformat-mode');
-    sendReformatAction('exitSmartReformat');
 };
 
 /**

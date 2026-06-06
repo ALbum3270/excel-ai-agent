@@ -16,9 +16,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标段落选择器</summary>
-        Public Property Target As ParagraphTarget
+        Public Shadows Property Target As ParagraphTarget
         ''' <summary>样式参数</summary>
-        Public Property Params As ParagraphStyleParams
+        Public Shadows Property Params As ParagraphStyleParams
 
         Public Sub New()
             MyBase.New("setParagraphStyle")
@@ -32,9 +32,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标文本选择器</summary>
-        Public Property Target As TextTarget
+        Public Shadows Property Target As TextTarget
         ''' <summary>样式参数</summary>
-        Public Property Params As CharacterStyleParams
+        Public Shadows Property Params As CharacterStyleParams
 
         Public Sub New()
             MyBase.New("setCharacterFormat")
@@ -48,9 +48,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标位置</summary>
-        Public Property Target As PositionTarget
+        Public Shadows Property Target As PositionTarget
         ''' <summary>表格参数</summary>
-        Public Property Params As TableParams
+        Public Shadows Property Params As TableParams
 
         Public Sub New()
             MyBase.New("insertTable")
@@ -64,9 +64,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标表格选择器</summary>
-        Public Property Target As TableTarget
+        Public Shadows Property Target As TableTarget
         ''' <summary>格式化参数</summary>
-        Public Property Params As TableFormatParams
+        Public Shadows Property Params As TableFormatParams
 
         Public Sub New()
             MyBase.New("formatTable")
@@ -80,7 +80,7 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>页面设置参数</summary>
-        Public Property Params As PageSetupParams
+        Public Shadows Property Params As PageSetupParams
 
         Public Sub New()
             MyBase.New("setPageSetup")
@@ -94,9 +94,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标位置</summary>
-        Public Property Target As PositionTarget
+        Public Shadows Property Target As PositionTarget
         ''' <summary>分隔符参数</summary>
-        Public Property Params As BreakParams
+        Public Shadows Property Params As BreakParams
 
         Public Sub New()
             MyBase.New("insertBreak")
@@ -110,9 +110,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标段落选择器</summary>
-        Public Property Target As ParagraphTarget
+        Public Shadows Property Target As ParagraphTarget
         ''' <summary>列表格式参数</summary>
-        Public Property Params As ListFormatParams
+        Public Shadows Property Params As ListFormatParams
 
         Public Sub New()
             MyBase.New("applyListFormat")
@@ -126,9 +126,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标区域</summary>
-        Public Property Target As SectionTarget
+        Public Shadows Property Target As SectionTarget
         ''' <summary>分栏参数</summary>
-        Public Property Params As ColumnFormatParams
+        Public Shadows Property Params As ColumnFormatParams
 
         Public Sub New()
             MyBase.New("setColumnFormat")
@@ -142,7 +142,7 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标类型</summary>
-        Public Property Params As HeaderFooterParams
+        Public Shadows Property Params As HeaderFooterParams
 
         Public Sub New()
             MyBase.New("insertHeaderFooter")
@@ -156,9 +156,9 @@ Public Class ReformatInstructionSet
         Inherits DslInstruction
 
         ''' <summary>目标位置</summary>
-        Public Property Target As PositionTarget
+        Public Shadows Property Target As PositionTarget
         ''' <summary>目录参数</summary>
-        Public Property Params As TocParams
+        Public Shadows Property Params As TocParams
 
         Public Sub New()
             MyBase.New("generateToc")
