@@ -59,11 +59,14 @@ Public Class OpenXmlWordTranslator
             Try
                 processedTables.Add(tbl.Range.Start)
             Catch
+            Finally
+                ComObjectHelper.ReleaseComObject(tbl)
             End Try
         Next
 
         Dim paraIndex As Integer = 1
         For Each para As Word.Paragraph In document.Paragraphs
+            Dim tableRef As Word.Table = Nothing
             Try
                 ' 如果指定了选择范围，检查段落是否在范围内
                 If selRange IsNot Nothing Then
@@ -76,7 +79,6 @@ Public Class OpenXmlWordTranslator
                 End If
 
                 Dim isInTable As Boolean = False
-                Dim tableRef As Word.Table = Nothing
 
                 Try
                     isInTable = CBool(para.Range.Information(Word.WdInformation.wdWithInTable))
@@ -93,14 +95,18 @@ Public Class OpenXmlWordTranslator
                         Dim colCount = tableRef.Columns.Count
                         For rowIdx = 1 To rowCount
                             For colIdx = 1 To colCount
+                                Dim cell As Word.Cell = Nothing
+                                Dim cellRange As Word.Range = Nothing
+                                Dim cellPara As Word.Paragraph = Nothing
                                 Try
-                                    Dim cell = tableRef.Cell(rowIdx, colIdx)
-                                    Dim cellText = cell.Range.Text
+                                    cell = tableRef.Cell(rowIdx, colIdx)
+                                    cellRange = cell.Range
+                                    Dim cellText = cellRange.Text
                                     If cellText IsNot Nothing Then
                                         cellText = cellText.TrimEnd(ChrW(7), ChrW(13), ChrW(10))
                                     End If
 
-                                    Dim cellPara = cell.Range.Paragraphs(1)
+                                    cellPara = cellRange.Paragraphs(1)
 
                                     blocks.Add(New TranslationBlock With {
                                         .BlockIndex = index,
@@ -114,6 +120,10 @@ Public Class OpenXmlWordTranslator
                                     index += 1
                                 Catch cellEx As Exception
                                     Debug.WriteLine($"Scan cell ({rowIdx},{colIdx}) error: {cellEx.Message}")
+                                Finally
+                                    ComObjectHelper.ReleaseComObject(cellPara)
+                                    ComObjectHelper.ReleaseComObject(cellRange)
+                                    ComObjectHelper.ReleaseComObject(cell)
                                 End Try
                             Next
                         Next
@@ -143,6 +153,9 @@ Public Class OpenXmlWordTranslator
                 End If
             Catch paraEx As Exception
                 Debug.WriteLine($"Scan paragraph {paraIndex} error: {paraEx.Message}")
+            Finally
+                ComObjectHelper.ReleaseComObject(tableRef)
+                ComObjectHelper.ReleaseComObject(para)
             End Try
 
             paraIndex += 1

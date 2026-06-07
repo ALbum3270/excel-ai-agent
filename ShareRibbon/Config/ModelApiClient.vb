@@ -27,25 +27,28 @@ Public Class ModelApiClient
 
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(30)
-                client.DefaultRequestHeaders.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
+            Dim client = HttpClientPool.GetClient(modelsUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Get, modelsUrl)
+                request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
 
                 ' 某些服务商需要特殊的请求头
                 If apiUrl.Contains("anthropic.com") Then
-                    client.DefaultRequestHeaders.Add("x-api-key", apiKey)
-                    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01")
-                    client.DefaultRequestHeaders.Authorization = Nothing
+                    request.Headers.Add("x-api-key", apiKey)
+                    request.Headers.Add("anthropic-version", "2023-06-01")
+                    request.Headers.Authorization = Nothing
                 End If
 
-                Dim response = Await client.GetAsync(modelsUrl)
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
 
                 If response.IsSuccessStatusCode Then
                     Dim jsonContent = Await response.Content.ReadAsStringAsync()
                     Return ParseModelsResponse(jsonContent, apiUrl)
                 Else
                     Debug.WriteLine($"获取模型列表失败: {response.StatusCode}")
-                End If
+                    End If
+                    End Using
+                End Using
             End Using
         Catch ex As Exception
             Debug.WriteLine($"获取模型列表异常: {ex.Message}")

@@ -216,6 +216,11 @@ function editCode(button) {
 
 // Process stream complete - handle UI updates after message completion
 function processStreamComplete(uuid, totalTokens) {
+    if (window.officeAiActiveResponseUuid === uuid) {
+        window.officeAiActiveResponseUuid = null;
+        window.officeAiActiveRequestUuid = null;
+    }
+
     // Add token display
     const footerDiv = document.getElementById('footer-' + uuid);
     if (footerDiv) {

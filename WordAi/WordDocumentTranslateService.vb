@@ -506,19 +506,49 @@ Public Class WordDocumentTranslateService
             ' 有对象：收集所有对象在文档中的绝对位置
             Dim objRanges As New List(Of Tuple(Of Integer, Integer))()
             Try
-                For Each shape As InlineShape In range.InlineShapes
-                    If shape.Range.Start >= rangeStart AndAlso shape.Range.End <= rangeEnd Then
-                        objRanges.Add(Tuple.Create(shape.Range.Start, shape.Range.End))
-                    End If
-                Next
+                Dim inlineShapes As InlineShapes = Nothing
+                Try
+                    inlineShapes = range.InlineShapes
+                    For i = 1 To inlineShapes.Count
+                        Dim shape As InlineShape = Nothing
+                        Dim shapeRange As Range = Nothing
+                        Try
+                            shape = inlineShapes(i)
+                            shapeRange = shape.Range
+                            If shapeRange.Start >= rangeStart AndAlso shapeRange.End <= rangeEnd Then
+                                objRanges.Add(Tuple.Create(shapeRange.Start, shapeRange.End))
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(shapeRange)
+                            ComObjectHelper.ReleaseComObject(shape)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(inlineShapes)
+                End Try
             Catch
             End Try
             Try
-                For Each omath As OMath In range.OMaths
-                    If omath.Range.Start >= rangeStart AndAlso omath.Range.End <= rangeEnd Then
-                        objRanges.Add(Tuple.Create(omath.Range.Start, omath.Range.End))
-                    End If
-                Next
+                Dim omaths As OMaths = Nothing
+                Try
+                    omaths = range.OMaths
+                    For i = 1 To omaths.Count
+                        Dim omath As OMath = Nothing
+                        Dim omathRange As Range = Nothing
+                        Try
+                            omath = omaths(i)
+                            omathRange = omath.Range
+                            If omathRange.Start >= rangeStart AndAlso omathRange.End <= rangeEnd Then
+                                objRanges.Add(Tuple.Create(omathRange.Start, omathRange.End))
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(omathRange)
+                            ComObjectHelper.ReleaseComObject(omath)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(omaths)
+                End Try
             Catch
             End Try
 
@@ -649,19 +679,49 @@ Public Class WordDocumentTranslateService
             ' 有对象：收集对象位置
             Dim objRanges As New List(Of Tuple(Of Integer, Integer))()
             Try
-                For Each shape As InlineShape In cellRange.InlineShapes
-                    If shape.Range.Start >= rangeStart AndAlso shape.Range.End <= rangeEnd Then
-                        objRanges.Add(Tuple.Create(shape.Range.Start, shape.Range.End))
-                    End If
-                Next
+                Dim inlineShapes As InlineShapes = Nothing
+                Try
+                    inlineShapes = cellRange.InlineShapes
+                    For i = 1 To inlineShapes.Count
+                        Dim shape As InlineShape = Nothing
+                        Dim shapeRange As Range = Nothing
+                        Try
+                            shape = inlineShapes(i)
+                            shapeRange = shape.Range
+                            If shapeRange.Start >= rangeStart AndAlso shapeRange.End <= rangeEnd Then
+                                objRanges.Add(Tuple.Create(shapeRange.Start, shapeRange.End))
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(shapeRange)
+                            ComObjectHelper.ReleaseComObject(shape)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(inlineShapes)
+                End Try
             Catch
             End Try
             Try
-                For Each omath As OMath In cellRange.OMaths
-                    If omath.Range.Start >= rangeStart AndAlso omath.Range.End <= rangeEnd Then
-                        objRanges.Add(Tuple.Create(omath.Range.Start, omath.Range.End))
-                    End If
-                Next
+                Dim omaths As OMaths = Nothing
+                Try
+                    omaths = cellRange.OMaths
+                    For i = 1 To omaths.Count
+                        Dim omath As OMath = Nothing
+                        Dim omathRange As Range = Nothing
+                        Try
+                            omath = omaths(i)
+                            omathRange = omath.Range
+                            If omathRange.Start >= rangeStart AndAlso omathRange.End <= rangeEnd Then
+                                objRanges.Add(Tuple.Create(omathRange.Start, omathRange.End))
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(omathRange)
+                            ComObjectHelper.ReleaseComObject(omath)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(omaths)
+                End Try
             Catch
             End Try
 
@@ -759,25 +819,70 @@ Public Class WordDocumentTranslateService
 
                 ' 添加InlineShapes（图片等）
                 Try
-                    For Each shape As InlineShape In range.InlineShapes
-                        objectPositions.Add(shape.Range.Start - range.Start)
-                    Next
+                    Dim inlineShapes As InlineShapes = Nothing
+                    Try
+                        inlineShapes = range.InlineShapes
+                        For i = 1 To inlineShapes.Count
+                            Dim shape As InlineShape = Nothing
+                            Dim shapeRange As Range = Nothing
+                            Try
+                                shape = inlineShapes(i)
+                                shapeRange = shape.Range
+                                objectPositions.Add(shapeRange.Start - range.Start)
+                            Finally
+                                ComObjectHelper.ReleaseComObject(shapeRange)
+                                ComObjectHelper.ReleaseComObject(shape)
+                            End Try
+                        Next
+                    Finally
+                        ComObjectHelper.ReleaseComObject(inlineShapes)
+                    End Try
                 Catch
                 End Try
 
                 ' 添加Tables（表格）
                 Try
-                    For Each table As Table In range.Tables
-                        objectPositions.Add(table.Range.Start - range.Start)
-                    Next
+                    Dim tables As Tables = Nothing
+                    Try
+                        tables = range.Tables
+                        For i = 1 To tables.Count
+                            Dim table As Table = Nothing
+                            Dim tableRange As Range = Nothing
+                            Try
+                                table = tables(i)
+                                tableRange = table.Range
+                                objectPositions.Add(tableRange.Start - range.Start)
+                            Finally
+                                ComObjectHelper.ReleaseComObject(tableRange)
+                                ComObjectHelper.ReleaseComObject(table)
+                            End Try
+                        Next
+                    Finally
+                        ComObjectHelper.ReleaseComObject(tables)
+                    End Try
                 Catch
                 End Try
 
                 ' 添加OMaths（公式）
                 Try
-                    For Each omath As OMath In range.OMaths
-                        objectPositions.Add(omath.Range.Start - range.Start)
-                    Next
+                    Dim omaths As OMaths = Nothing
+                    Try
+                        omaths = range.OMaths
+                        For i = 1 To omaths.Count
+                            Dim omath As OMath = Nothing
+                            Dim omathRange As Range = Nothing
+                            Try
+                                omath = omaths(i)
+                                omathRange = omath.Range
+                                objectPositions.Add(omathRange.Start - range.Start)
+                            Finally
+                                ComObjectHelper.ReleaseComObject(omathRange)
+                                ComObjectHelper.ReleaseComObject(omath)
+                            End Try
+                        Next
+                    Finally
+                        ComObjectHelper.ReleaseComObject(omaths)
+                    End Try
                 Catch
                 End Try
 
@@ -801,31 +906,76 @@ Public Class WordDocumentTranslateService
 
                     ' 检查InlineShapes
                     Try
-                        For Each shape As InlineShape In range.InlineShapes
-                            If shape.Range.End > lastObjEnd Then
-                                lastObjEnd = shape.Range.End
-                            End If
-                        Next
+                        Dim inlineShapes As InlineShapes = Nothing
+                        Try
+                            inlineShapes = range.InlineShapes
+                            For i = 1 To inlineShapes.Count
+                                Dim shape As InlineShape = Nothing
+                                Dim shapeRange As Range = Nothing
+                                Try
+                                    shape = inlineShapes(i)
+                                    shapeRange = shape.Range
+                                    If shapeRange.End > lastObjEnd Then
+                                        lastObjEnd = shapeRange.End
+                                    End If
+                                Finally
+                                    ComObjectHelper.ReleaseComObject(shapeRange)
+                                    ComObjectHelper.ReleaseComObject(shape)
+                                End Try
+                            Next
+                        Finally
+                            ComObjectHelper.ReleaseComObject(inlineShapes)
+                        End Try
                     Catch
                     End Try
 
                     ' 检查Tables
                     Try
-                        For Each table As Table In range.Tables
-                            If table.Range.End > lastObjEnd Then
-                                lastObjEnd = table.Range.End
-                            End If
-                        Next
+                        Dim tables As Tables = Nothing
+                        Try
+                            tables = range.Tables
+                            For i = 1 To tables.Count
+                                Dim table As Table = Nothing
+                                Dim tableRange As Range = Nothing
+                                Try
+                                    table = tables(i)
+                                    tableRange = table.Range
+                                    If tableRange.End > lastObjEnd Then
+                                        lastObjEnd = tableRange.End
+                                    End If
+                                Finally
+                                    ComObjectHelper.ReleaseComObject(tableRange)
+                                    ComObjectHelper.ReleaseComObject(table)
+                                End Try
+                            Next
+                        Finally
+                            ComObjectHelper.ReleaseComObject(tables)
+                        End Try
                     Catch
                     End Try
 
                     ' 检查OMaths
                     Try
-                        For Each omath As OMath In range.OMaths
-                            If omath.Range.End > lastObjEnd Then
-                                lastObjEnd = omath.Range.End
-                            End If
-                        Next
+                        Dim omaths As OMaths = Nothing
+                        Try
+                            omaths = range.OMaths
+                            For i = 1 To omaths.Count
+                                Dim omath As OMath = Nothing
+                                Dim omathRange As Range = Nothing
+                                Try
+                                    omath = omaths(i)
+                                    omathRange = omath.Range
+                                    If omathRange.End > lastObjEnd Then
+                                        lastObjEnd = omathRange.End
+                                    End If
+                                Finally
+                                    ComObjectHelper.ReleaseComObject(omathRange)
+                                    ComObjectHelper.ReleaseComObject(omath)
+                                End Try
+                            Next
+                        Finally
+                            ComObjectHelper.ReleaseComObject(omaths)
+                        End Try
                     Catch
                     End Try
 

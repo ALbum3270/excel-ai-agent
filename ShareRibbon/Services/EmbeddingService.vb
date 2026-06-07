@@ -130,10 +130,9 @@ Public Class EmbeddingService
             ' 根据 API 提供商选择合适的 Embedding 模型
             Dim modelToUse = GetConfiguredEmbeddingModelName()
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(30)
+            Dim client = HttpClientPool.GetClient(embeddingUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, embeddingUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, embeddingUrl)
                 request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
 
                 ' 构建请求体
@@ -147,7 +146,8 @@ Public Class EmbeddingService
                 Debug.WriteLine($"[EmbeddingService] 使用模型: {modelToUse}")
                 Debug.WriteLine($"[EmbeddingService] 输入文本长度: {text.Length}")
 
-                Using response As HttpResponseMessage = Await client.SendAsync(request)
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30))
+                    Using response As HttpResponseMessage = Await client.SendAsync(request, timeoutCts.Token)
                     If Not response.IsSuccessStatusCode Then
                         Dim errorContent = Await response.Content.ReadAsStringAsync()
                         Debug.WriteLine($"[EmbeddingService] API 请求失败: {response.StatusCode} - {errorContent}")
@@ -175,6 +175,7 @@ Public Class EmbeddingService
 
                     Debug.WriteLine($"[EmbeddingService] 无法解析 API 响应")
                     Return Nothing
+                    End Using
                 End Using
             End Using
         Catch ex As Exception

@@ -73,8 +73,8 @@ Public MustInherit Class BaseDataCapturePane
             End If
 
             ' 创建 WebView2 环境
-            Dim env = Await CoreWebView2Environment.CreateAsync(
-            Nothing, userDataFolder, New CoreWebView2EnvironmentOptions())
+            Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(
+            userDataFolder, New CoreWebView2EnvironmentOptions())
 
             ' 初始化 WebView2
             Await ChatBrowser.EnsureCoreWebView2Async(env)

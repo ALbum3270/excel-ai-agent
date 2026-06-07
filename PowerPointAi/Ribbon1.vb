@@ -265,11 +265,12 @@ Public Class Ribbon1
 
             ' 遍历幻灯片中的形状
             For Each shape As Microsoft.Office.Interop.PowerPoint.Shape In slide.Shapes
-                Dim elemObj As New JObject()
-                elemObj("index") = elementIndex
+                Try
+                    Dim elemObj As New JObject()
+                    elemObj("index") = elementIndex
 
-                ' 判断形状类型
-                If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                    ' 判断形状类型
+                    If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
                     ' 文本框/占位符
                     Dim text = shape.TextFrame.TextRange.Text.Trim()
                     elemObj("type") = "textbox"
@@ -278,8 +279,9 @@ Public Class Ribbon1
 
                     ' 提取文本格式
                     Dim formatting As New JObject()
+                    Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
                     Try
-                        Dim textRange = shape.TextFrame.TextRange
+                        textRange = shape.TextFrame.TextRange
                         formatting("fontName") = If(textRange.Font.Name, "")
                         formatting("fontSize") = If(textRange.Font.Size > 0, CDec(textRange.Font.Size), 18)
                         formatting("bold") = (textRange.Font.Bold = Microsoft.Office.Core.MsoTriState.msoTrue)
@@ -298,6 +300,8 @@ Public Class Ribbon1
                         formatting("alignment") = GetPPTAlignmentString(textRange.ParagraphFormat.Alignment)
                     Catch ex As Exception
                         Debug.WriteLine($"提取PPT文本格式时出错: {ex.Message}")
+                    Finally
+                        ComObjectHelper.ReleaseComObject(textRange)
                     End Try
                     elemObj("formatting") = formatting
 
@@ -357,12 +361,16 @@ Public Class Ribbon1
                     elemObj("height") = Math.Round(CDec(shape.Height), 1)
                 End If
 
-                elements.Add(elemObj)
-                elementIndex += 1
+                    elements.Add(elemObj)
+                    elementIndex += 1
+                Finally
+                    ComObjectHelper.ReleaseComObject(shape)
+                End Try
             Next
 
             slideObj("elements") = elements
             slides.Add(slideObj)
+            ComObjectHelper.ReleaseComObject(slide)
         Next
 
         result("slides") = slides

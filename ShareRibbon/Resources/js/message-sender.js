@@ -190,8 +190,16 @@ function sendChatMessage() {
 
 // Stop button click handler
 function stopButton() {
+    let requestUuid = window.officeAiActiveRequestUuid || null;
+    if (!requestUuid) {
+        const activeChats = document.querySelectorAll('#chat-container .chat-container[data-request-id]');
+        const latest = activeChats.length > 0 ? activeChats[activeChats.length - 1] : null;
+        requestUuid = latest && latest.dataset ? latest.dataset.requestId : null;
+    }
+
     sendMessageToServer({
-        type: 'stopMessage'
+        type: 'stopMessage',
+        requestUuid: requestUuid || ''
     });
     // 隐藏等待动画
     if (typeof hideLoadingIndicator === 'function') {

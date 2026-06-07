@@ -304,6 +304,7 @@
     <Compile Include="Agent\ToolRegistry.vb" />
     <Compile Include="Agent\PromptManager.vb" />
     <Compile Include="Config\WebView2Loader.vb" />
+    <Compile Include="Config\WebView2EnvironmentCache.vb" />
     <Compile Include="Config\SqliteAssemblyResolver.vb" />
     <Compile Include="Config\PhaseStartupManager.vb" />
     <Compile Include="Config\SqliteNativeLoader.vb" />
@@ -355,12 +356,14 @@
     </Compile>
     <Compile Include="Mcp\MCPConnectionConfig.vb" />
     <Compile Include="Mcp\MCPEntities.vb" />
+    <Compile Include="Mcp\McpConnectionPool.vb" />
     <Compile Include="Mcp\MCPPresetForm.vb">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Mcp\StdioConfigForm.vb">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Mcp\PooledMcpConnection.vb" />
     <Compile Include="Mcp\StreamJsonRpcMCPClient.vb" />
     <Compile Include="My Project\AssemblyInfo.vb" />
     <Compile Include="My Project\Application.Designer.vb">
@@ -426,6 +429,8 @@
     <Compile Include="Services\SkillsService.vb" />
     <Compile Include="Services\Ui\UiDispatcher.vb" />
     <Compile Include="Services\UnifiedMemoryService.vb" />
+    <Compile Include="Utils\ComObjectHelper.vb" />
+    <Compile Include="Utils\HttpClientPool.vb" />
     <Compile Include="Services\Proofread\ProofreadModels.vb" />
     <Compile Include="Services\Proofread\ProofreadPromptBuilder.vb" />
     <Compile Include="Services\Proofread\ProofreadJsonParser.vb" />

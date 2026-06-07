@@ -46,7 +46,7 @@ Protected Overloads Async Function InitializeWebView2() As Task
             options.AdditionalBrowserArguments = "--no-sandbox"
 
 ' 创建WebView2环境，使用固定目录保持会话
-            Dim env = Await CoreWebView2Environment.CreateAsync(Nothing, userDataFolder, options)
+            Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(userDataFolder, options)
 
             ' 初始化WebView2
             Await ChatBrowser.EnsureCoreWebView2Async(env)

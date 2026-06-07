@@ -336,13 +336,17 @@ Public Class ExcelDocumentTranslateService
     ''' </summary>
     Private Async Function SendHttpRequestAsync(apiUrl As String, apiKey As String, requestBody As String) As Task(Of String)
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
-        Using client As New HttpClient()
-            client.Timeout = TimeSpan.FromSeconds(120)
-            client.DefaultRequestHeaders.Add("Authorization", "Bearer " & apiKey)
-            Dim content As New StringContent(requestBody, Encoding.UTF8, "application/json")
-            Dim response = Await client.PostAsync(apiUrl, content)
-            response.EnsureSuccessStatusCode()
-            Return Await response.Content.ReadAsStringAsync()
+        Dim client = HttpClientPool.GetClient(apiUrl)
+        Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
+            request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
+
+            Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(120))
+                Using response = Await client.SendAsync(request, timeoutCts.Token)
+                    response.EnsureSuccessStatusCode()
+                    Return Await response.Content.ReadAsStringAsync()
+                End Using
+            End Using
         End Using
     End Function
 
