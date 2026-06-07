@@ -75,8 +75,7 @@ Public Class Ribbon1
             End If
 
             ' 打开 Chat 面板并进入对话排版入口
-            Globals.ThisAddIn.ShowChatTaskPane()
-            Await Task.Delay(250)
+            Await Globals.ThisAddIn.ShowChatTaskPaneAsync()
 
             Dim chatCtrl = ThisAddIn.chatControl
             If chatCtrl Is Nothing Then

@@ -638,16 +638,17 @@ Public Class ChatControl
             wordApp.ScreenUpdating = False
             screenUpdated = True
 
-            If doc.CanUndo Then
-                Try
-                    wordApp.Undo()
-                    undoSucceeded = True
+            Try
+                undoSucceeded = doc.Undo(1)
+                If undoSucceeded Then
                     GlobalStatusStrip.ShowInfo("排版已撤销。")
-                    Debug.WriteLine("使用Word Application.Undo撤销排版成功")
-                Catch undoEx As Exception
-                    Debug.WriteLine($"Word Application.Undo 失败，将尝试快照恢复: {undoEx.Message}")
-                End Try
-            End If
+                    Debug.WriteLine("使用Word Document.Undo撤销排版成功")
+                Else
+                    Debug.WriteLine("Word Document.Undo 返回False，将尝试快照恢复")
+                End If
+            Catch undoEx As Exception
+                Debug.WriteLine($"Word Document.Undo 失败，将尝试快照恢复: {undoEx.Message}")
+            End Try
 
             If Not undoSucceeded AndAlso _reformatSnapshot IsNot Nothing AndAlso _reformatSnapshotParagraphs IsNot Nothing Then
                 Dim restoredCount = SemanticRenderingEngine.RestoreFormatSnapshot(

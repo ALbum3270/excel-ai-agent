@@ -30,6 +30,7 @@ Public MustInherit Class BaseChatControl
     Private _mcpService As McpService = Nothing
     Private _selfCheckLoopController As SelfCheckLoopController = Nothing
     Private _conversationRuntime As IConversationRuntime = Nothing
+    Private ReadOnly _webViewInitSemaphore As New SemaphoreSlim(1, 1)
 
     Protected ReadOnly Property ConversationRuntime As IConversationRuntime
         Get
@@ -261,7 +262,26 @@ Public MustInherit Class BaseChatControl
     Protected _revisionsMap As New Dictionary(Of String, JArray)()
 
     Protected Async Function InitializeWebView2() As Task
+        If ChatBrowser.InvokeRequired Then
+            Dim tcs As New TaskCompletionSource(Of Boolean)()
+            ChatBrowser.BeginInvoke(New Action(Async Sub()
+                                                   Try
+                                                       Await InitializeWebView2()
+                                                       tcs.TrySetResult(True)
+                                                   Catch ex As Exception
+                                                       tcs.TrySetException(ex)
+                                                   End Try
+                                               End Sub))
+            Await tcs.Task
+            Return
+        End If
+
+        Await _webViewInitSemaphore.WaitAsync()
         Try
+            If ChatBrowser.CoreWebView2 IsNot Nothing Then
+                Return
+            End If
+
             Dim userDataFolder As String = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyAppWebView2Cache")
             If Not Directory.Exists(userDataFolder) Then
                 Directory.CreateDirectory(userDataFolder)
@@ -341,6 +361,8 @@ Public MustInherit Class BaseChatControl
         Catch ex As Exception
             Dim errorMessage As String = $"初始化失败: {ex.Message}{Environment.NewLine}类型: {ex.GetType().Name}{Environment.NewLine}堆栈:{ex.StackTrace}"
             MessageBox.Show(errorMessage, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Finally
+            _webViewInitSemaphore.Release()
         End Try
     End Function
     
@@ -2134,6 +2156,7 @@ Public MustInherit Class BaseChatControl
             requestObj("model") = ConfigSettings.ModelName
             requestObj("messages") = messagesArray
             requestObj("stream") = False
+            ReasoningRequestHelper.ApplyReasoningOptions(requestObj, ConfigSettings.ReasoningMode, ConfigSettings.ModelName, ConfigSettings.platform, ConfigSettings.ApiUrl)
 
             Dim requestBody = requestObj.ToString(Newtonsoft.Json.Formatting.None)
             Dim apiUrl = ConfigSettings.ApiUrl
@@ -2830,6 +2853,9 @@ Public MustInherit Class BaseChatControl
             .SystemPrompt = systemPrompt,
             .AddHistory = addHistory,
             .ModelName = ConfigSettings.ModelName,
+            .Platform = ConfigSettings.platform,
+            .ApiUrl = ConfigSettings.ApiUrl,
+            .ReasoningMode = ConfigSettings.ReasoningMode,
             .Stream = True,
             .AppInfo = GetApplication(),
             .HistoryMessages = systemHistoryMessageData,
@@ -2922,10 +2948,15 @@ Public MustInherit Class BaseChatControl
 
     ' 执行js脚本的异步方法
     Public Async Function ExecuteJavaScriptAsyncJS(js As String) As Task
+        Await InitializeWebView2()
+
         If ChatBrowser.InvokeRequired Then
             Dim tcs As New TaskCompletionSource(Of Boolean)()
             ChatBrowser.BeginInvoke(New Action(Async Sub()
                                                    Try
+                                                       If ChatBrowser.CoreWebView2 Is Nothing Then
+                                                           Throw New InvalidOperationException("WebView2 尚未初始化，无法执行脚本。")
+                                                       End If
                                                        Await ChatBrowser.ExecuteScriptAsync(js)
                                                        tcs.TrySetResult(True)
                                                    Catch ex As Exception
@@ -2934,6 +2965,9 @@ Public MustInherit Class BaseChatControl
                                                End Sub))
             Await tcs.Task
         Else
+            If ChatBrowser.CoreWebView2 Is Nothing Then
+                Throw New InvalidOperationException("WebView2 尚未初始化，无法执行脚本。")
+            End If
             Await ChatBrowser.ExecuteScriptAsync(js)
         End If
     End Function
@@ -3022,20 +3056,30 @@ Public MustInherit Class BaseChatControl
     ' 加载本地HTML文件
     Public Async Function LoadLocalHtmlFile() As Task
         Try
+            Await InitializeWebView2()
+
             ' 检查HTML文件是否存在
             Dim htmlFilePath As String = ChatHtmlFilePath
             If File.Exists(htmlFilePath) Then
 
-                Await Task.Run(Sub()
-                                   Dim htmlContent As String = File.ReadAllText(htmlFilePath, System.Text.Encoding.UTF8)
-                                   htmlContent = htmlContent.TrimStart("""").TrimEnd("""")
-                                   ' 直接导航到本地HTML文件
-                                   If ChatBrowser.InvokeRequired Then
-                                       ChatBrowser.Invoke(Sub() ChatBrowser.CoreWebView2.NavigateToString(htmlContent))
-                                   Else
-                                       ChatBrowser.CoreWebView2.NavigateToString(htmlContent)
-                                   End If
-                               End Sub)
+                Dim htmlContent As String = File.ReadAllText(htmlFilePath, System.Text.Encoding.UTF8)
+                htmlContent = htmlContent.TrimStart("""").TrimEnd("""")
+                ' 直接导航到本地HTML文件
+                If ChatBrowser.InvokeRequired Then
+                    ChatBrowser.Invoke(Sub()
+                                           If ChatBrowser.CoreWebView2 Is Nothing Then
+                                               Debug.WriteLine("LoadLocalHtmlFile skipped: CoreWebView2 is not initialized.")
+                                               Return
+                                           End If
+                                           ChatBrowser.CoreWebView2.NavigateToString(htmlContent)
+                                       End Sub)
+                Else
+                    If ChatBrowser.CoreWebView2 Is Nothing Then
+                        Debug.WriteLine("LoadLocalHtmlFile skipped: CoreWebView2 is not initialized.")
+                        Return
+                    End If
+                    ChatBrowser.CoreWebView2.NavigateToString(htmlContent)
+                End If
 
             End If
         Catch ex As Exception
@@ -3275,26 +3319,18 @@ Public MustInherit Class BaseChatControl
 
             Select Case appName
                 Case "Word"
-                    ' Word: 支持 UndoRecord，优先使用 Application.Undo() 更可靠
+                    ' Word: 支持 UndoRecord，撤销入口在 Document.Undo
                     Try
-                        ' Application.Undo() 能正确撤销通过 UndoRecord 创建的自定义撤销记录
-                        officeApp.Undo()
+                        officeApp.ActiveDocument.Undo(1)
                         GlobalStatusStrip.ShowInfo("已撤销排版操作")
                     Catch ex As Exception
-                        Debug.WriteLine($"Word Application.Undo 失败，尝试 Document.Undo: {ex.Message}")
+                        Debug.WriteLine($"Word Document.Undo 失败，尝试 CommandBars Undo: {ex.Message}")
                         Try
-                            officeApp.ActiveDocument.Undo()
+                            officeApp.CommandBars.ExecuteMso("Undo")
                             GlobalStatusStrip.ShowInfo("已撤销排版操作")
                         Catch ex2 As Exception
-                            Debug.WriteLine($"Word Document.Undo 也失败: {ex2.Message}")
-                            ' 终极备选：通过 CommandBars 触发标准撤销
-                            Try
-                                officeApp.CommandBars.ExecuteMso("Undo")
-                                GlobalStatusStrip.ShowInfo("已撤销排版操作")
-                            Catch ex3 As Exception
-                                Debug.WriteLine($"Word CommandBars 撤销也失败: {ex3.Message}")
-                                GlobalStatusStrip.ShowWarning("撤销排版失败，请手动按 Ctrl+Z")
-                            End Try
+                            Debug.WriteLine($"Word CommandBars 撤销也失败: {ex2.Message}")
+                            GlobalStatusStrip.ShowWarning("撤销排版失败，请手动按 Ctrl+Z")
                         End Try
                     End Try
 

@@ -214,17 +214,10 @@ Public Class PostFlushValidator
             result = result.Substring(realStart)
         End If
 
-        ' 处理结束位置：找到匹配的结束括号
-        If result.StartsWith("{") Then
-            Dim lastBrace = result.LastIndexOf("}"c)
-            If lastBrace >= 0 Then
-                result = result.Substring(0, lastBrace + 1)
-            End If
-        ElseIf result.StartsWith("[") Then
-            Dim lastBracket = result.LastIndexOf("]"c)
-            If lastBracket >= 0 Then
-                result = result.Substring(0, lastBracket + 1)
-            End If
+        ' 处理结束位置：提取第一个完整JSON根对象/数组，忽略后续逗号或说明文字
+        Dim jsonEnd = FindFirstCompleteJsonEnd(result)
+        If jsonEnd >= 0 Then
+            result = result.Substring(0, jsonEnd + 1)
         End If
 
         ' 移除末尾多余的逗号（常见问题）
@@ -232,6 +225,49 @@ Public Class PostFlushValidator
         result = System.Text.RegularExpressions.Regex.Replace(result, ",\s*([\}\]])", "$1")
 
         Return result
+    End Function
+
+    Private Function FindFirstCompleteJsonEnd(content As String) As Integer
+        If String.IsNullOrEmpty(content) Then Return -1
+        If Not content.StartsWith("{") AndAlso Not content.StartsWith("[") Then Return -1
+
+        Dim curlyDepth As Integer = 0
+        Dim squareDepth As Integer = 0
+        Dim inString As Boolean = False
+        Dim escaped As Boolean = False
+
+        For i = 0 To content.Length - 1
+            Dim ch = content(i)
+
+            If inString Then
+                If escaped Then
+                    escaped = False
+                ElseIf ch = "\"c Then
+                    escaped = True
+                ElseIf ch = """"c Then
+                    inString = False
+                End If
+                Continue For
+            End If
+
+            If ch = """"c Then
+                inString = True
+            ElseIf ch = "{"c Then
+                curlyDepth += 1
+            ElseIf ch = "}"c Then
+                curlyDepth -= 1
+            ElseIf ch = "["c Then
+                squareDepth += 1
+            ElseIf ch = "]"c Then
+                squareDepth -= 1
+            End If
+
+            If i > 0 AndAlso curlyDepth = 0 AndAlso squareDepth = 0 Then
+                Return i
+            End If
+        Next
+
+        Return -1
     End Function
 
     ''' <summary>

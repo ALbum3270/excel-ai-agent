@@ -83,29 +83,27 @@ Public Module FormattingStandardData
         tags.Add(titleRecipient)
 
         ' 6. 一级标题（黑体）
-        Dim heading1 As New SemanticTag("heading.1", "一级标题", "", 2, "公文一级标题，如""一、""""二、""等")
-        heading1.Font = New FontConfig("黑体", "", 16, True)
-        heading1.Paragraph = New ParagraphConfig("left")
-        heading1.Paragraph.SpaceBefore = 0.5
-        heading1.Paragraph.SpaceAfter = 0.5
-        tags.Add(heading1)
+        Dim title1 As New SemanticTag("title.1", "一级标题", "title", 2, "公文正文一级标题，如""一、""""二、""等")
+        title1.Font = New FontConfig("黑体", "", 16, False)
+        title1.Paragraph = New ParagraphConfig("left", 0, 1.75)
+        tags.Add(title1)
 
         ' 7. 二级标题（楷体）
-        Dim heading2 As New SemanticTag("heading.2", "二级标题", "", 2, "公文二级标题，如""(一)""""(二)""等")
-        heading2.Font = New FontConfig("楷体_GB2312", "", 16, True)
-        heading2.Paragraph = New ParagraphConfig("left")
-        tags.Add(heading2)
+        Dim title2 As New SemanticTag("title.2", "二级标题", "title", 2, "公文正文二级标题，如""（一）""""（二）""等")
+        title2.Font = New FontConfig("楷体_GB2312", "", 16, False)
+        title2.Paragraph = New ParagraphConfig("left", 0, 1.75)
+        tags.Add(title2)
 
         ' 8. 三级标题（仿宋加粗）
-        Dim heading3 As New SemanticTag("heading.3", "三级标题", "", 2, "公文三级标题编号格式")
-        heading3.Font = New FontConfig("仿宋_GB2312", "", 16, True)
-        heading3.Paragraph = New ParagraphConfig("left")
-        tags.Add(heading3)
+        Dim title3 As New SemanticTag("title.3", "三级标题", "title", 2, "公文正文三级标题，如""1.""""2.""等")
+        title3.Font = New FontConfig("仿宋_GB2312", "", 16, True)
+        title3.Paragraph = New ParagraphConfig("left", 0, 1.75)
+        tags.Add(title3)
 
         ' 9. 正文
         Dim bodyNormal As New SemanticTag("body.normal", "正文", "body", 2, "公文正文段落，每面22行每行28字")
         bodyNormal.Font = New FontConfig("仿宋_GB2312", "", 16)
-        bodyNormal.Paragraph = New ParagraphConfig("justify", 2, 1.875)
+        bodyNormal.Paragraph = New ParagraphConfig("justify", 2, 1.75)
         tags.Add(bodyNormal)
 
         ' 10. 附件说明
@@ -127,9 +125,27 @@ Public Module FormattingStandardData
         footerDate.Paragraph = New ParagraphConfig("right")
         tags.Add(footerDate)
 
-        ' 13. 页码
+        ' 13. 签发人
+        Dim headerSigner As New SemanticTag("header.signer", "签发人", "header", 2, "上行文签发人信息，如""签发人：×××""")
+        headerSigner.Font = New FontConfig("仿宋_GB2312", "", 16)
+        headerSigner.Paragraph = New ParagraphConfig("right")
+        tags.Add(headerSigner)
+
+        ' 14. 附注
+        Dim footerNote As New SemanticTag("footer.note", "附注", "footer", 2, "公文附注，如联系人、联系电话等，居左空二字加圆括号")
+        footerNote.Font = New FontConfig("仿宋_GB2312", "", 16)
+        footerNote.Paragraph = New ParagraphConfig("left", 2, 1.75)
+        tags.Add(footerNote)
+
+        ' 15. 抄送机关
+        Dim footerCc As New SemanticTag("footer.cc", "抄送机关", "footer", 2, "版记中的抄送信息，以""抄送：""开头")
+        footerCc.Font = New FontConfig("仿宋_GB2312", "", 16)
+        footerCc.Paragraph = New ParagraphConfig("left", 0, 1.0)
+        tags.Add(footerCc)
+
+        ' 16. 页码
         Dim footerPage As New SemanticTag("footer.page", "页码", "footer", 2, "公文页码，4号半角宋体")
-        footerPage.Font = New FontConfig("宋体", "", 10)
+        footerPage.Font = New FontConfig("宋体", "", 14)
         footerPage.Paragraph = New ParagraphConfig("center")
         tags.Add(footerPage)
 

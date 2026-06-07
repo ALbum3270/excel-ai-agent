@@ -243,6 +243,12 @@ Public Class TaggingValidator
 
     ''' <summary>查找最接近的可用标签</summary>
     Private Shared Function FindClosestTag(tagId As String, availableTags As List(Of String)) As String
+        If Not String.IsNullOrEmpty(tagId) AndAlso tagId.StartsWith("heading.", StringComparison.OrdinalIgnoreCase) Then
+            Dim level = tagId.Substring("heading.".Length)
+            Dim officialTitleTag = "title." & level
+            If availableTags.Contains(officialTitleTag) Then Return officialTitleTag
+        End If
+
         ' 同父级下的第一个标签
         Dim parentId = SemanticTagRegistry.GetParentTag(tagId)
         If Not String.IsNullOrEmpty(parentId) Then

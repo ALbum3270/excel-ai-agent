@@ -196,6 +196,10 @@ Public Class ThisAddIn
     Dim loadDataCaptureHtml As Boolean = True
 
     Public Async Sub ShowChatTaskPane()
+        Await ShowChatTaskPaneAsync()
+    End Sub
+
+    Public Async Function ShowChatTaskPaneAsync() As Task
         EnsureCoreServicesLoaded()
         CreateChatTaskPane()
         If chatTaskPane Is Nothing Then Return
@@ -204,7 +208,7 @@ Public Class ThisAddIn
             loadChatHtml = False
             Await chatControl.LoadLocalHtmlFile()
         End If
-    End Sub
+    End Function
 
     Public Sub ShowDataCaptureTaskPane()
         EnsureDataCapturePaneCreated()

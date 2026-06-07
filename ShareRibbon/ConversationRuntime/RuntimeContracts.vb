@@ -57,6 +57,9 @@ Public Class ChatRequestContext
     Public Property SystemPrompt As String
     Public Property AddHistory As Boolean
     Public Property ModelName As String
+    Public Property Platform As String
+    Public Property ApiUrl As String
+    Public Property ReasoningMode As String
     Public Property Stream As Boolean = True
     Public Property AppInfo As ApplicationInfo
     Public Property HistoryMessages As List(Of HistoryMessage)

@@ -1271,11 +1271,24 @@ Public Class ReformatService
                 parts.Add($"首行缩进{tag.Paragraph.FirstLineIndent}字符")
             End If
             If tag.Paragraph.LineSpacing > 0 AndAlso Math.Abs(tag.Paragraph.LineSpacing - 1.5) > 0.01 Then
-                parts.Add($"行距{tag.Paragraph.LineSpacing}")
+                If IsOfficialDocumentLineSpacing(tag) Then
+                    parts.Add("固定值约28磅")
+                Else
+                    parts.Add($"行距{tag.Paragraph.LineSpacing}")
+                End If
             End If
         End If
 
         Return String.Join(", ", parts)
+    End Function
+
+    Private Shared Function IsOfficialDocumentLineSpacing(tag As SemanticTag) As Boolean
+        If tag Is Nothing OrElse tag.Font Is Nothing OrElse tag.Paragraph Is Nothing Then Return False
+        If Math.Abs(tag.Font.FontSize - 16) > 0.01 Then Return False
+        If Math.Abs(tag.Paragraph.LineSpacing - 1.75) > 0.01 Then Return False
+        Return String.Equals(tag.Font.FontNameCN, "仿宋_GB2312", StringComparison.OrdinalIgnoreCase) OrElse
+               String.Equals(tag.Font.FontNameCN, "黑体", StringComparison.OrdinalIgnoreCase) OrElse
+               String.Equals(tag.Font.FontNameCN, "楷体_GB2312", StringComparison.OrdinalIgnoreCase)
     End Function
 
 #End Region

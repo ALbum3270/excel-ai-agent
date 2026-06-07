@@ -4,6 +4,7 @@ Imports System.Net.Http
 Imports System.Text
 Imports System.Windows.Forms
 Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq
 
 Public Class LLMUtil
 
@@ -31,12 +32,16 @@ Public Class LLMUtil
 
     ' 创建请求体
     Public Shared Function CreateRequestBody(question As String) As String
-        Dim result As String = question.Replace("\", "\\").Replace("""", "\""").
-                                  Replace(vbCr, "\r").Replace(vbLf, "\n").
-                                  Replace(vbTab, "\t").Replace(vbBack, "\b").
-                                  Replace(Chr(12), "\f")
-        ' 使用从 ConfigSettings 中获取的模型名称
-        Return "{""model"": """ & ConfigSettings.ModelName & """, ""messages"": [{""role"": ""user"", ""content"": """ & result & """}]}"
+        Dim requestObj As New JObject()
+        requestObj("model") = ConfigSettings.ModelName
+        requestObj("messages") = New JArray() From {
+            New JObject() From {
+                {"role", "user"},
+                {"content", If(question, String.Empty)}
+            }
+        }
+        ReasoningRequestHelper.ApplyReasoningOptions(requestObj, ConfigSettings.ReasoningMode, ConfigSettings.ModelName, ConfigSettings.platform, ConfigSettings.ApiUrl)
+        Return requestObj.ToString(Formatting.None)
     End Function
 
 

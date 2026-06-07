@@ -351,10 +351,31 @@ Public Class MemoryRepository
         OfficeAiDatabase.EnsureInitialized()
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
-            Using cmd As New SQLiteCommand("SELECT content FROM user_profile ORDER BY id DESC LIMIT 1", conn)
-                Dim obj = cmd.ExecuteScalar()
-                Return If(obj Is Nothing OrElse obj Is DBNull.Value, "", obj.ToString())
+            If TableHasColumn(conn, "user_profile", "content") Then
+                Using cmd As New SQLiteCommand("SELECT content FROM user_profile ORDER BY id DESC LIMIT 1", conn)
+                    Dim obj = cmd.ExecuteScalar()
+                    Return If(obj Is Nothing OrElse obj Is DBNull.Value, "", obj.ToString())
+                End Using
+            End If
+
+            Dim lines As New List(Of String)()
+            Using cmd As New SQLiteCommand("SELECT key, value, category FROM user_profile ORDER BY last_updated DESC, id DESC LIMIT 20", conn)
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        Dim key = If(rdr.IsDBNull(0), "", rdr.GetString(0))
+                        Dim value = If(rdr.IsDBNull(1), "", rdr.GetString(1))
+                        Dim category = If(rdr.IsDBNull(2), "", rdr.GetString(2))
+                        If Not String.IsNullOrWhiteSpace(value) Then
+                            If String.Equals(key, "legacy_data", StringComparison.OrdinalIgnoreCase) Then
+                                lines.Add(value)
+                            Else
+                                lines.Add($"{If(String.IsNullOrWhiteSpace(category), "profile", category)}.{key}: {value}")
+                            End If
+                        End If
+                    End While
+                End Using
             End Using
+            Return String.Join(vbCrLf, lines)
         End Using
     End Function
 
@@ -365,6 +386,16 @@ Public Class MemoryRepository
         OfficeAiDatabase.EnsureInitialized()
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
+            If Not TableHasColumn(conn, "user_profile", "content") Then
+                Using cmd As New SQLiteCommand(
+                    "INSERT INTO user_profile (key, value, category, confidence) VALUES ('legacy_data', @c, 'summary', 0.8) " &
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, category = excluded.category, confidence = excluded.confidence, last_updated = datetime('now','localtime'), observation_count = observation_count + 1", conn)
+                    cmd.Parameters.AddWithValue("@c", If(content, ""))
+                    cmd.ExecuteNonQuery()
+                End Using
+                Return
+            End If
+
             ' 若存在则更新，否则插入
             Using check As New SQLiteCommand("SELECT COUNT(*) FROM user_profile", conn)
                 Dim cnt = Convert.ToInt32(check.ExecuteScalar())
@@ -382,6 +413,19 @@ Public Class MemoryRepository
             End Using
         End Using
     End Sub
+
+    Private Shared Function TableHasColumn(conn As SQLiteConnection, tableName As String, columnName As String) As Boolean
+        Using cmd As New SQLiteCommand($"PRAGMA table_info({tableName})", conn)
+            Using rdr = cmd.ExecuteReader()
+                While rdr.Read()
+                    If String.Equals(rdr("name").ToString(), columnName, StringComparison.OrdinalIgnoreCase) Then
+                        Return True
+                    End If
+                End While
+            End Using
+        End Using
+        Return False
+    End Function
 
     ''' <summary>
     ''' 获取近期会话摘要
