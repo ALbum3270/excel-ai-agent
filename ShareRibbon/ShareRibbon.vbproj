@@ -216,6 +216,7 @@
     <Compile Include="Config\ConfigManager.vb" />
     <Compile Include="Config\MemoryConfig.vb" />
     <Compile Include="Storage\OfficeAiDatabase.vb" />
+    <Compile Include="Storage\AgentMemoryRepository.vb" />
     <Compile Include="Storage\MemoryRepository.vb" />
     <Compile Include="Storage\ConversationRepository.vb" />
     <Compile Include="Storage\PromptTemplateRepository.vb" />
@@ -387,6 +388,7 @@
     <Compile Include="Controls\Models\SelectionInfo.vb" />
     <Compile Include="Controls\Models\HistoryMessage.vb" />
     <Compile Include="Controls\Services\WebViewService.vb" />
+    <Compile Include="Controls\Services\WebViewBridge.vb" />
     <Compile Include="Controls\Services\MessageService.vb" />
     <Compile Include="Controls\Services\HttpStreamService.vb" />
     <Compile Include="Controls\Services\CodeExecutionService.vb" />
@@ -396,9 +398,13 @@
     <Compile Include="Controls\Services\UtilsService.vb" />
     <Compile Include="Controls\Services\AutocompleteService.vb" />
     <Compile Include="Controls\Services\ChatFormatterAgent.vb" />
+    <Compile Include="Controls\Services\ChatSystemPromptResolver.vb" />
+    <Compile Include="Controls\Services\ChatSendValidator.vb" />
+    <Compile Include="Controls\Services\MemoryTurnRecorder.vb" />
     <Compile Include="Controls\Services\ReformatService.vb" />
     <Compile Include="Controls\Services\HistoryService.vb" />
     <Compile Include="Controls\Services\HistorySessionService.vb" />
+    <Compile Include="Controls\Services\ChatCommandRouter.vb" />
     <Compile Include="Controls\Services\AgentKernelService.vb" />
     <Compile Include="Controls\Services\ContextRelevanceService.vb" />
     <Compile Include="Controls\Services\MemoryService.vb" />
@@ -408,10 +414,17 @@
     <Compile Include="Controls\Services\ExcelContextService.vb" />
     <Compile Include="Controls\Services\ExecutionPlanRenderer.vb" />
     <Compile Include="Controls\Models\ExecutionStep.vb" />
+    <Compile Include="Services\Ai\AiGateway.vb" />
     <Compile Include="Services\EmbeddingService.vb" />
+    <Compile Include="Services\Memory\AgentMemoryPipelineService.vb" />
+    <Compile Include="Services\Memory\LlmMemoryExtractor.vb" />
+    <Compile Include="Services\Memory\MemoryContracts.vb" />
+    <Compile Include="Services\Memory\RuleBasedMemoryExtractor.vb" />
+    <Compile Include="Services\Memory\SkillsIndexService.vb" />
     <Compile Include="Services\SkillScriptExecutor.vb" />
     <Compile Include="Services\SkillsDirectoryService.vb" />
     <Compile Include="Services\SkillsService.vb" />
+    <Compile Include="Services\Ui\UiDispatcher.vb" />
     <Compile Include="Services\UnifiedMemoryService.vb" />
     <Compile Include="Services\Proofread\ProofreadModels.vb" />
     <Compile Include="Services\Proofread\ProofreadPromptBuilder.vb" />
@@ -578,6 +591,12 @@
     <None Include="Resources\promptconfig.png" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Storage\OfficeAiDbSchema.current.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Storage\Migrations\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <!-- 复制 e_sqlite3.dll 到输出目录 (System.Data.SQLite 2.0 需要) -->
   <Target Name="CopySqliteNativeDll" AfterTargets="Build">

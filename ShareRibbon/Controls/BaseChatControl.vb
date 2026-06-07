@@ -8,7 +8,6 @@ Imports System.Net.Http
 Imports System.Net.Http.Headers
 Imports System.Text
 Imports System.Text.JSON
-Imports System.Text.RegularExpressions
 Imports System.Threading
 Imports System.Threading.Tasks
 Imports System.Web
@@ -31,6 +30,57 @@ Public MustInherit Class BaseChatControl
     Private _selfCheckLoopController As SelfCheckLoopController = Nothing
     Private _conversationRuntime As IConversationRuntime = Nothing
     Private ReadOnly _webViewInitSemaphore As New SemaphoreSlim(1, 1)
+    Private _commandRouter As ChatCommandRouter = Nothing
+    Private _webViewBridge As WebViewBridge = Nothing
+    Private _systemPromptResolver As ChatSystemPromptResolver = Nothing
+    Private _sendValidator As ChatSendValidator = Nothing
+    Private _memoryTurnRecorder As MemoryTurnRecorder = Nothing
+
+    Private ReadOnly Property CommandRouter As ChatCommandRouter
+        Get
+            If _commandRouter Is Nothing Then
+                _commandRouter = New ChatCommandRouter(Sub(messageType) Debug.WriteLine($"未知消息类型: {messageType}"))
+                RegisterWebViewCommandHandlers(_commandRouter)
+            End If
+            Return _commandRouter
+        End Get
+    End Property
+
+    Private ReadOnly Property WebViewBridge As WebViewBridge
+        Get
+            If _webViewBridge Is Nothing Then
+                _webViewBridge = New WebViewBridge(ChatBrowser, AddressOf InitializeWebView2)
+            End If
+            Return _webViewBridge
+        End Get
+    End Property
+
+    Private ReadOnly Property SystemPromptResolver As ChatSystemPromptResolver
+        Get
+            If _systemPromptResolver Is Nothing Then
+                _systemPromptResolver = New ChatSystemPromptResolver()
+            End If
+            Return _systemPromptResolver
+        End Get
+    End Property
+
+    Private ReadOnly Property SendValidator As ChatSendValidator
+        Get
+            If _sendValidator Is Nothing Then
+                _sendValidator = New ChatSendValidator()
+            End If
+            Return _sendValidator
+        End Get
+    End Property
+
+    Private ReadOnly Property MemoryTurnRecorder As MemoryTurnRecorder
+        Get
+            If _memoryTurnRecorder Is Nothing Then
+                _memoryTurnRecorder = New MemoryTurnRecorder()
+            End If
+            Return _memoryTurnRecorder
+        End Get
+    End Property
 
     Protected ReadOnly Property ConversationRuntime As IConversationRuntime
         Get
@@ -51,7 +101,7 @@ Public MustInherit Class BaseChatControl
                 _reformatService = New ReformatService(
                     AddressOf ExecuteJavaScriptAsyncJS,
                     AddressOf EscapeJavaScriptString,
-                    Sub(a) If InvokeRequired Then Me.Invoke(a) Else a(),
+                    AddressOf RunUiAction,
                     AddressOf ShowTemplateEditorPane,
                     AddressOf GetStylePreviewCallback,
                     AddressOf HandleUploadDocxTemplateFromPath,
@@ -123,7 +173,7 @@ Public MustInherit Class BaseChatControl
                     AddressOf ExecuteJavaScriptAsyncJS,
                     _chatStateService,
                     AddressOf GetOfficeAppType,
-                    Sub(a) If InvokeRequired Then Me.Invoke(a) Else a())
+                    AddressOf RunUiAction)
             End If
             Return _historySessionService
         End Get
@@ -261,18 +311,25 @@ Public MustInherit Class BaseChatControl
 
     Protected _revisionsMap As New Dictionary(Of String, JArray)()
 
+    Private Async Sub RunUiAction(action As Action)
+        Try
+            Await UiDispatcher.InvokeAsync(Me, action)
+        Catch ex As Exception
+            Debug.WriteLine($"[BaseChatControl] UI action dispatch failed: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub RunUiActionSync(action As Action)
+        If action Is Nothing Then Return
+        UiDispatcher.InvokeAsync(Me, action).GetAwaiter().GetResult()
+    End Sub
+
     Protected Async Function InitializeWebView2() As Task
         If ChatBrowser.InvokeRequired Then
-            Dim tcs As New TaskCompletionSource(Of Boolean)()
-            ChatBrowser.BeginInvoke(New Action(Async Sub()
-                                                   Try
-                                                       Await InitializeWebView2()
-                                                       tcs.TrySetResult(True)
-                                                   Catch ex As Exception
-                                                       tcs.TrySetException(ex)
-                                                   End Try
-                                               End Sub))
-            Await tcs.Task
+            Await UiDispatcher.InvokeAsync(ChatBrowser,
+                Async Function()
+                    Await InitializeWebView2()
+                End Function)
             Return
         End If
 
@@ -505,14 +562,15 @@ Public MustInherit Class BaseChatControl
                 ' Async Sub中Await后VSTO同步上下文可能丢失，
                 ' 统一通过Invoke确保CoreWebView2访问在UI线程
                 Await Task.Delay(100)
-                ChatBrowser.Invoke(Sub()
-                                       InitializeSettings()
-                                       InitializeMcpSettings()
+                Await UiDispatcher.InvokeAsync(ChatBrowser,
+                    Sub()
+                        InitializeSettings()
+                        InitializeMcpSettings()
 
-                                       If ChatBrowser IsNot Nothing AndAlso ChatBrowser.CoreWebView2 IsNot Nothing Then
-                                           RemoveHandler ChatBrowser.CoreWebView2.NavigationCompleted, AddressOf OnWebViewNavigationCompleted
-                                       End If
-                                   End Sub)
+                        If ChatBrowser IsNot Nothing AndAlso ChatBrowser.CoreWebView2 IsNot Nothing Then
+                            RemoveHandler ChatBrowser.CoreWebView2.NavigationCompleted, AddressOf OnWebViewNavigationCompleted
+                        End If
+                    End Sub)
             Catch ex As Exception
                 Debug.WriteLine($"导航完成事件处理中出错: {ex.Message}")
                 Debug.WriteLine(ex.StackTrace)
@@ -585,203 +643,99 @@ Public MustInherit Class BaseChatControl
         End Try
     End Sub
 
+    Private Sub RegisterWebViewCommandHandlers(router As ChatCommandRouter)
+        router.Register("checkedChange", Sub(jsonDoc) HandleCheckedChange(jsonDoc))
+        router.Register("sendMessage", Sub(jsonDoc) HandleSendMessage(jsonDoc))
+        router.Register("stopMessage", Sub(jsonDoc) stopReaderStream = True)
+        router.Register("executeCode", Sub(jsonDoc) HandleExecuteCode(jsonDoc))
+        router.Register("saveSettings", Sub(jsonDoc) HandleSaveSettings(jsonDoc))
+        router.Register("getHistoryFiles", Sub(jsonDoc) HandleGetHistoryFiles())
+        router.Register("openHistoryFile", Sub(jsonDoc) HandleOpenHistoryFile(jsonDoc))
+        router.Register("getSessionList", Sub(jsonDoc) HandleGetSessionList())
+        router.Register("loadSession", Sub(jsonDoc) HandleLoadSession(jsonDoc))
+        router.Register("newSession", Sub(jsonDoc) HandleNewSession())
+        router.Register("getPromptTemplates", Sub(jsonDoc) HandleGetPromptTemplates(jsonDoc))
+        router.Register("savePromptTemplate", Sub(jsonDoc) HandleSavePromptTemplate(jsonDoc))
+        router.Register("deletePromptTemplate", Sub(jsonDoc) HandleDeletePromptTemplate(jsonDoc))
+        router.Register("getAtomicMemories", Sub(jsonDoc) HandleGetAtomicMemories(jsonDoc))
+        router.Register("deleteAtomicMemory", Sub(jsonDoc) HandleDeleteAtomicMemory(jsonDoc))
+        router.Register("getUserProfile", Sub(jsonDoc) HandleGetUserProfile())
+        router.Register("saveUserProfile", Sub(jsonDoc) HandleSaveUserProfile(jsonDoc))
+        router.Register("importSkillsFromFolder", Sub(jsonDoc) HandleImportSkillsFromFolder(jsonDoc))
+        router.Register("getMcpConnections", Sub(jsonDoc) HandleGetMcpConnections())
+        router.Register("saveMcpSettings", Sub(jsonDoc) HandleSaveMcpSettings(jsonDoc))
+        router.Register("clearContext", Sub(jsonDoc) ClearChatContext())
+        router.Register("acceptAnswer", Sub(jsonDoc) HandleAcceptAnswer(jsonDoc))
+        router.Register("rejectAnswer", Sub(jsonDoc) HandleRejectAnswer(jsonDoc))
+        router.Register("applyRevisionAll", Sub(jsonDoc) HandleApplyRevisionAll(jsonDoc))
+        router.Register("applyRevisionSegment", Sub(jsonDoc) HandleApplyRevisionSegment(jsonDoc))
+        router.Register("applyDocumentPlanItem", Sub(jsonDoc) HandleApplyDocumentPlanItem(jsonDoc))
+        router.Register("rejectShowComparison", Sub(jsonDoc) Debug.WriteLine("rejectShowComparison ignored"))
+        router.Register("retryReformat", Sub(jsonDoc) HandleRetryReformat(jsonDoc))
+        router.Register("applyRevisionAccept", Sub(jsonDoc) HandleApplyRevisionAccept(jsonDoc))
+        router.Register("applyRevisionReject", Sub(jsonDoc) HandleApplyRevisionReject(jsonDoc))
+        router.Register("triggerContinuation", Sub(jsonDoc) HandleTriggerContinuation(jsonDoc))
+        router.Register("applyContinuation", Sub(jsonDoc) HandleApplyContinuation(jsonDoc))
+        router.Register("refineContinuation", Sub(jsonDoc) HandleRefineContinuation(jsonDoc))
+        router.Register("applyTemplateContent", Sub(jsonDoc) HandleApplyTemplateContent(jsonDoc))
+        router.Register("refineTemplateContent", Sub(jsonDoc) HandleRefineTemplateContent(jsonDoc))
+        router.Register("requestCompletion", Sub(jsonDoc) HandleRequestCompletion(jsonDoc))
+        router.Register("acceptCompletion", Sub(jsonDoc) HandleAcceptCompletion(jsonDoc))
+        router.Register("confirmIntent", Sub(jsonDoc) HandleConfirmIntent(jsonDoc))
+        router.Register("cancelIntent", Sub(jsonDoc) HandleCancelIntent())
+        router.Register("startAgent", Sub(jsonDoc) HandleStartAgent(jsonDoc))
+        router.Register("startAgentExecution", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
+        router.Register("abortAgent", Sub(jsonDoc) HandleAbortAgent())
+        router.Register("refineAgentPlan", Sub(jsonDoc) HandleRefineAgentPlan(jsonDoc))
+        router.Register("startLoop", Sub(jsonDoc) HandleLegacyStartLoop(jsonDoc))
+        router.Register("continueLoop", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
+        router.Register("replanLoop", Sub(jsonDoc) HandleAgentRefinePlan(jsonDoc))
+        router.Register("cancelLoop", Sub(jsonDoc) HandleAbortAgent())
+        router.Register("agent:approvePlan", Sub(jsonDoc) HandleAgentApprovePlan(jsonDoc))
+        router.Register("agent:rejectPlan", Sub(jsonDoc) HandleAgentRejectPlan(jsonDoc))
+        router.Register("agent:approveStep", Sub(jsonDoc) HandleAgentApproveStep(jsonDoc))
+        router.Register("agent:refinePlan", Sub(jsonDoc) HandleAgentRefinePlan(jsonDoc))
+        router.Register("openFileDialog", Sub(jsonDoc) HandleOpenFileDialog())
+        router.Register("openApiConfigForm", Sub(jsonDoc) HandleOpenApiConfigForm())
+        router.Register("getCurrentAppInfo", Sub(jsonDoc) HandleGetCurrentAppInfo())
+        router.Register("getCurrentModel", Sub(jsonDoc) HandleGetCurrentModel())
+        router.Register("getReformatTemplates", Sub(jsonDoc) HandleGetReformatTemplates())
+        router.Register("useReformatTemplate", Sub(jsonDoc) HandleUseReformatTemplate(jsonDoc))
+        router.Register("previewTemplateInWord", Sub(jsonDoc) HandlePreviewTemplateInWord(jsonDoc))
+        router.Register("saveCurrentDocumentAsTemplate", Sub(jsonDoc) HandleSaveCurrentDocumentAsTemplate())
+        router.Register("importTemplate", Sub(jsonDoc) HandleImportTemplate())
+        router.Register("exportTemplate", Sub(jsonDoc) HandleExportTemplate(jsonDoc))
+        router.Register("duplicateTemplate", Sub(jsonDoc) HandleDuplicateTemplate(jsonDoc))
+        router.Register("deleteTemplate", Sub(jsonDoc) HandleDeleteTemplate(jsonDoc))
+        router.Register("openTemplateEditor", Sub(jsonDoc) HandleOpenTemplateEditor(jsonDoc))
+        router.Register("getStyleGuides", Sub(jsonDoc) HandleGetStyleGuides())
+        router.Register("useStyleGuide", Sub(jsonDoc) HandleUseStyleGuide(jsonDoc))
+        router.Register("uploadStyleGuideDocument", Sub(jsonDoc) HandleUploadStyleGuideDocument())
+        router.Register("deleteStyleGuide", Sub(jsonDoc) HandleDeleteStyleGuide(jsonDoc))
+        router.Register("updateStyleGuide", Sub(jsonDoc) HandleUpdateStyleGuide(jsonDoc))
+        router.Register("duplicateStyleGuide", Sub(jsonDoc) HandleDuplicateStyleGuide(jsonDoc))
+        router.Register("exportStyleGuide", Sub(jsonDoc) HandleExportStyleGuide(jsonDoc))
+        router.Register("uploadTemplateDocumentForAiAnalysis", Sub(jsonDoc) HandleUploadTemplateDocumentForAiAnalysis())
+        router.Register("uploadDocxTemplate", Sub(jsonDoc) HandleUploadDocxTemplate())
+        router.Register("deleteDocxMapping", Sub(jsonDoc) HandleDeleteDocxMapping(jsonDoc))
+        router.Register("startAiTemplateChat", Sub(jsonDoc) HandleStartAiTemplateChat(jsonDoc))
+        router.Register("saveAiTemplate", Sub(jsonDoc) HandleSaveAiTemplate(jsonDoc))
+        router.Register("previewAiTemplate", Sub(jsonDoc) HandlePreviewAiTemplate(jsonDoc))
+        router.Register("applySmartReformat", Sub(jsonDoc) HandleApplySmartReformat(jsonDoc))
+        router.Register("undoReformat", Sub(jsonDoc) HandleUndoReformat(jsonDoc))
+        router.Register("refineSmartReformat", Sub(jsonDoc) HandleRefineSmartReformat(jsonDoc))
+        router.Register("switchReformatTemplate", Sub(jsonDoc) HandleSwitchReformatTemplate(jsonDoc))
+        router.Register("previewReformatCompare", Sub(jsonDoc) HandlePreviewReformatCompare(jsonDoc))
+        router.Register("proofread", Sub(jsonDoc) HandleProofreadFocusMode(jsonDoc))
+    End Sub
+
     Protected Sub WebView2_WebMessageReceived(sender As Object, e As CoreWebView2WebMessageReceivedEventArgs)
         Try
             Dim rawJson As String = e.WebMessageAsJson
             Dim jsonDoc As JObject = JObject.Parse(rawJson)
-            Dim messageType As String = jsonDoc("type").ToString()
+            CommandRouter.Dispatch(jsonDoc)
+            Return
 
-            Select Case messageType
-                Case "checkedChange"
-                    HandleCheckedChange(jsonDoc)
-                Case "sendMessage"
-                    HandleSendMessage(jsonDoc)
-                Case "stopMessage"
-                    stopReaderStream = True
-                Case "executeCode"
-                    HandleExecuteCode(jsonDoc)
-                Case "saveSettings"
-                    HandleSaveSettings(jsonDoc)
-                Case "getHistoryFiles"
-                    HandleGetHistoryFiles()
-                Case "openHistoryFile"
-                    HandleOpenHistoryFile(jsonDoc)
-                Case "getSessionList"
-                    HandleGetSessionList()
-                Case "loadSession"
-                    HandleLoadSession(jsonDoc)
-                Case "newSession"
-                    HandleNewSession()
-                Case "getPromptTemplates"
-                    HandleGetPromptTemplates(jsonDoc)
-                Case "savePromptTemplate"
-                    HandleSavePromptTemplate(jsonDoc)
-                Case "deletePromptTemplate"
-                    HandleDeletePromptTemplate(jsonDoc)
-                Case "getAtomicMemories"
-                    HandleGetAtomicMemories(jsonDoc)
-                Case "deleteAtomicMemory"
-                    HandleDeleteAtomicMemory(jsonDoc)
-                Case "getUserProfile"
-                    HandleGetUserProfile()
-                Case "saveUserProfile"
-                    HandleSaveUserProfile(jsonDoc)
-                Case "importSkillsFromFolder"
-                    HandleImportSkillsFromFolder(jsonDoc)
-                Case "getMcpConnections"
-                    HandleGetMcpConnections()
-                Case "saveMcpSettings"
-                    HandleSaveMcpSettings(jsonDoc)
-                Case "clearContext"
-                    ClearChatContext()
-                Case "acceptAnswer"
-                    HandleAcceptAnswer(jsonDoc)
-                Case "rejectAnswer"
-                    HandleRejectAnswer(jsonDoc)
-                Case "applyRevisionAll"
-                    HandleApplyRevisionAll(jsonDoc)
-                Case "applyRevisionSegment"
-                    HandleApplyRevisionSegment(jsonDoc)
-                Case "applyDocumentPlanItem"
-                    HandleApplyDocumentPlanItem(jsonDoc)
-                Case "rejectShowComparison"
-                    ' 排版答案内容格式有误，重试
-                Case "retryReformat"
-                    ' JSON解析失败，重试排版请求
-                    HandleRetryReformat(jsonDoc)
-
-                Case "applyRevisionAccept" ' 前端请求接受单个 Revision
-                    HandleApplyRevisionAccept(jsonDoc)
-                Case "applyRevisionReject" ' 前端请求拒绝单个 Revision
-                    HandleApplyRevisionReject(jsonDoc)
-
-                ' 续写功能消息处理
-                Case "triggerContinuation"
-                    HandleTriggerContinuation(jsonDoc)
-                Case "applyContinuation"
-                    HandleApplyContinuation(jsonDoc)
-                Case "refineContinuation"
-                    HandleRefineContinuation(jsonDoc)
-
-                ' 模板渲染功能消息处理
-                Case "applyTemplateContent"
-                    HandleApplyTemplateContent(jsonDoc)
-                Case "refineTemplateContent"
-                    HandleRefineTemplateContent(jsonDoc)
-
-                ' 自动补全功能消息处理
-                Case "requestCompletion"
-                    HandleRequestCompletion(jsonDoc)
-                Case "acceptCompletion"
-                    HandleAcceptCompletion(jsonDoc)
-
-                ' 意图预览功能消息处理
-                Case "confirmIntent"
-                    HandleConfirmIntent(jsonDoc)
-                Case "cancelIntent"
-                    HandleCancelIntent()
-
-                ' Ralph Agent 智能助手消息处理
-                Case "startAgent"
-                    HandleStartAgent(jsonDoc)
-                Case "startAgentExecution"
-                    HandleStartAgentExecution(jsonDoc)
-                Case "abortAgent"
-                    HandleAbortAgent()
-                Case "refineAgentPlan"
-                    HandleRefineAgentPlan(jsonDoc)
-
-                ' 统一 AgentKernel 消息处理（新架构）
-                Case "agent:approvePlan"
-                    HandleAgentApprovePlan(jsonDoc)
-                Case "agent:rejectPlan"
-                    HandleAgentRejectPlan(jsonDoc)
-                Case "agent:approveStep"
-                    HandleAgentApproveStep(jsonDoc)
-                Case "agent:refinePlan"
-                    HandleAgentRefinePlan(jsonDoc)
-
-                ' 文件选择对话框
-                Case "openFileDialog"
-                    HandleOpenFileDialog()
-
-                ' 模型配置相关
-                Case "openApiConfigForm"
-                    HandleOpenApiConfigForm()
-                Case "getCurrentModel"
-                    HandleGetCurrentModel()
-
-                ' 排版模板功能消息处理
-                Case "getReformatTemplates"
-                    HandleGetReformatTemplates()
-                Case "useReformatTemplate"
-                    HandleUseReformatTemplate(jsonDoc)
-                Case "previewTemplateInWord"
-                    HandlePreviewTemplateInWord(jsonDoc)
-                Case "saveCurrentDocumentAsTemplate"
-                    HandleSaveCurrentDocumentAsTemplate()
-                Case "importTemplate"
-                    HandleImportTemplate()
-                Case "exportTemplate"
-                    HandleExportTemplate(jsonDoc)
-                Case "duplicateTemplate"
-                    HandleDuplicateTemplate(jsonDoc)
-                Case "deleteTemplate"
-                    HandleDeleteTemplate(jsonDoc)
-                Case "openTemplateEditor"
-                    HandleOpenTemplateEditor(jsonDoc)
-
-                ' 排版规范功能消息处理
-                Case "getStyleGuides"
-                    HandleGetStyleGuides()
-                Case "useStyleGuide"
-                    HandleUseStyleGuide(jsonDoc)
-                Case "uploadStyleGuideDocument"
-                    HandleUploadStyleGuideDocument()
-                Case "deleteStyleGuide"
-                    HandleDeleteStyleGuide(jsonDoc)
-                Case "updateStyleGuide"
-                    HandleUpdateStyleGuide(jsonDoc)
-                Case "duplicateStyleGuide"
-                    HandleDuplicateStyleGuide(jsonDoc)
-                Case "exportStyleGuide"
-                    HandleExportStyleGuide(jsonDoc)
-                Case "uploadTemplateDocumentForAiAnalysis"
-                    HandleUploadTemplateDocumentForAiAnalysis()
-
-                ' 语义排版功能消息处理
-                Case "uploadDocxTemplate"
-                    HandleUploadDocxTemplate()
-                Case "deleteDocxMapping"
-                    HandleDeleteDocxMapping(jsonDoc)
-
-                ' AI模板编辑器功能消息处理（Plan A: 在普通聊天中创建模板）
-                Case "startAiTemplateChat"
-                    HandleStartAiTemplateChat(jsonDoc)
-                Case "saveAiTemplate"
-                    HandleSaveAiTemplate(jsonDoc)
-                Case "previewAiTemplate"
-                    HandlePreviewAiTemplate(jsonDoc)
-
-                ' 智能排版 v2 消息处理
-                Case "applySmartReformat"
-                    HandleApplySmartReformat(jsonDoc)
-                Case "undoReformat"
-                    HandleUndoReformat(jsonDoc)
-                Case "refineSmartReformat"
-                    HandleRefineSmartReformat(jsonDoc)
-                Case "switchReformatTemplate"
-                    HandleSwitchReformatTemplate(jsonDoc)
-                Case "previewReformatCompare"
-                    HandlePreviewReformatCompare(jsonDoc)
-
-                ' 校对专注模式消息处理
-                Case "proofread"
-                    HandleProofreadFocusMode(jsonDoc)
-
-                Case Else
-                    Debug.WriteLine($"未知消息类型: {messageType}")
-            End Select
         Catch ex As Exception
             Debug.WriteLine($"[DEBUG WebMessageReceived] StackTrace: {ex.StackTrace}")
         End Try
@@ -1331,7 +1285,7 @@ Public MustInherit Class BaseChatControl
 
                          ' 获取当前工作目录（需要在主线程调用）
                          Dim currentWorkingDir As String = ""
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        currentWorkingDir = GetCurrentWorkingDirectory()
                                    End Sub)
 
@@ -1340,7 +1294,7 @@ Public MustInherit Class BaseChatControl
                                  processedFiles += 1
 
                                  ' 更新进度
-                                 Me.Invoke(Sub()
+                                 RunUiActionSync(Sub()
                                                GlobalStatusStrip.ShowInfo($"正在解析文件 ({processedFiles}/{totalFiles}): {Path.GetFileName(filePath)}")
                                                ExecuteJavaScriptAsyncJS($"updateFileParsingProgress({processedFiles}, {totalFiles}, '{EscapeJavaScriptString(Path.GetFileName(filePath))}')")
                                            End Sub)
@@ -1369,15 +1323,15 @@ Public MustInherit Class BaseChatControl
                                      Select Case fileExtension
                                          Case ".xlsx", ".xls", ".xlsm", ".xlsb"
                                              ' Excel文件解析需要在主线程
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".docx", ".doc", ".wps"
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".pptx", ".ppt"
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".csv", ".txt"
@@ -1416,7 +1370,7 @@ Public MustInherit Class BaseChatControl
                          MemoryService.SaveFileContentToMemory(originalQuestion, fileContentBuilder.ToString(), sessionIdForMemory, appTypeForMemory)
 
                          ' 文件解析完成，在主线程继续处理消息
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        GlobalStatusStrip.ShowInfo($"文件解析完成，共解析 {parsedFiles.Count} 个文件")
                                        ExecuteJavaScriptAsyncJS("showFileParsingProgress(false)")
 
@@ -1426,7 +1380,7 @@ Public MustInherit Class BaseChatControl
 
                      Catch ex As Exception
                          Debug.WriteLine($"HandleSendMessageWithFilesAsync 出错: {ex.Message}")
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        GlobalStatusStrip.ShowWarning($"文件解析失败: {ex.Message}")
                                        ExecuteJavaScriptAsyncJS("showFileParsingProgress(false)")
                                        ' 重置发送按钮状态
@@ -1794,6 +1748,23 @@ Public MustInherit Class BaseChatControl
     ''' <summary>
     ''' 异步解析文件并启动Agent（参考HandleSendMessageWithFilesAsync）
     ''' </summary>
+    Private Sub HandleLegacyStartLoop(jsonDoc As JObject)
+        Try
+            Dim goal = jsonDoc("goal")?.ToString()
+            If String.IsNullOrWhiteSpace(goal) Then
+                goal = jsonDoc("request")?.ToString()
+            End If
+
+            Dim agentRequest As New JObject()
+            agentRequest("type") = "startAgent"
+            agentRequest("request") = goal
+            HandleStartAgent(agentRequest)
+        Catch ex As Exception
+            Debug.WriteLine($"HandleLegacyStartLoop failed: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"启动Loop失败: {ex.Message}")
+        End Try
+    End Sub
+
     Private Sub HandleStartAgentWithFilesAsync(question As String, originalQuestion As String,
                                               filePaths As List(Of String),
                                               selectedContents As List(Of SendMessageReferenceContentItem))
@@ -1811,7 +1782,7 @@ Public MustInherit Class BaseChatControl
 
                          ' 获取当前工作目录（需要在主线程调用）
                          Dim currentWorkingDir As String = ""
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        currentWorkingDir = GetCurrentWorkingDirectory()
                                    End Sub)
 
@@ -1820,7 +1791,7 @@ Public MustInherit Class BaseChatControl
                                  processedFiles += 1
 
                                  ' 更新进度
-                                 Me.Invoke(Sub()
+                                 RunUiActionSync(Sub()
                                                GlobalStatusStrip.ShowInfo($"正在解析文件 ({processedFiles}/{totalFiles}): {Path.GetFileName(filePath)}")
                                                ExecuteJavaScriptAsyncJS($"updateFileParsingProgress({processedFiles}, {totalFiles}, '{EscapeJavaScriptString(Path.GetFileName(filePath))}')")
                                            End Sub)
@@ -1849,15 +1820,15 @@ Public MustInherit Class BaseChatControl
                                      Select Case fileExtension
                                          Case ".xlsx", ".xls", ".xlsm", ".xlsb"
                                              ' Excel文件解析需要在主线程
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".docx", ".doc", ".wps"
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".pptx", ".ppt"
-                                             Me.Invoke(Sub()
+                                             RunUiActionSync(Sub()
                                                            fileContentResult = ParseFile(fullFilePath)
                                                        End Sub)
                                          Case ".csv", ".txt"
@@ -1894,7 +1865,7 @@ Public MustInherit Class BaseChatControl
                          Dim sessionIdForMemory = If(_chatStateService?.CurrentSessionId, Guid.NewGuid().ToString())
                          MemoryService.SaveFileContentToMemory(originalQuestion, fileContentBuilder.ToString(), sessionIdForMemory, appTypeForMemory)
 
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        GlobalStatusStrip.ShowInfo($"文件解析完成，共解析 {processedFiles} 个文件")
                                        ExecuteJavaScriptAsyncJS("showFileParsingProgress(false)")
 
@@ -1904,7 +1875,7 @@ Public MustInherit Class BaseChatControl
 
                      Catch ex As Exception
                          Debug.WriteLine($"HandleStartAgentWithFilesAsync 出错: {ex.Message}")
-                         Me.Invoke(Sub()
+                         RunUiActionSync(Sub()
                                        GlobalStatusStrip.ShowWarning($"文件解析失败: {ex.Message}")
                                        ExecuteJavaScriptAsyncJS("showFileParsingProgress(false)")
                                    End Sub)
@@ -2220,7 +2191,7 @@ Public MustInherit Class BaseChatControl
         Try
             ' 需要在UI线程上执行
             If Me.InvokeRequired Then
-                Me.Invoke(Sub() HandleOpenFileDialog())
+                RunUiActionSync(Sub() HandleOpenFileDialog())
                 Return
             End If
 
@@ -2261,7 +2232,7 @@ Public MustInherit Class BaseChatControl
         Try
             ' 需要在UI线程上执行
             If Me.InvokeRequired Then
-                Me.Invoke(Sub() HandleOpenApiConfigForm())
+                RunUiActionSync(Sub() HandleOpenApiConfigForm())
                 Return
             End If
 
@@ -2290,6 +2261,14 @@ Public MustInherit Class BaseChatControl
     ''' <summary>
     ''' 更新前端的模型显示
     ''' </summary>
+    Protected Sub HandleGetCurrentAppInfo()
+        Try
+            ExecuteJavaScriptAsyncJS($"window.currentOfficeAppName = '{EscapeJavaScriptString(GetOfficeApplicationName())}';")
+        Catch ex As Exception
+            Debug.WriteLine($"HandleGetCurrentAppInfo failed: {ex.Message}")
+        End Try
+    End Sub
+
     Protected Sub UpdateModelDisplayInUI()
         Try
             Dim platform = ConfigSettings.platform
@@ -2568,7 +2547,7 @@ Public MustInherit Class BaseChatControl
     Protected Overridable Sub HandlePreviewAiTemplate(jsonDoc As JObject)
         Try
             If Me.InvokeRequired Then
-                Me.Invoke(Sub() HandlePreviewAiTemplate(jsonDoc))
+                RunUiActionSync(Sub() HandlePreviewAiTemplate(jsonDoc))
                 Return
             End If
 
@@ -2711,24 +2690,26 @@ Public MustInherit Class BaseChatControl
     ' 存储调用Send时的请求参数（requestUuid/responseUuid -> JObject）
     Protected _savedRequestParams As New Dictionary(Of String, JObject)()
 
+    Private Function GetSendValidationWarning(failure As ChatSendValidationFailure) As String
+        Select Case failure
+            Case ChatSendValidationFailure.MissingApiKey
+                Return "请先配置大模型ApiKey！"
+            Case ChatSendValidationFailure.MissingApiUrl
+                Return "请先配置大模型Api！"
+            Case ChatSendValidationFailure.MissingQuestion
+                Return "请输入问题！"
+            Case Else
+                Return "请求参数不完整"
+        End Select
+    End Function
+
     Public Async Function Send(question As String, systemPrompt As String, addHistory As Boolean, responseMode As String, Optional intentDescription As String = Nothing, Optional responseUuid As String = Nothing) As Task
         Dim apiUrl As String = ConfigSettings.ApiUrl
         Dim apiKey As String = ConfigSettings.ApiKey
 
-        If String.IsNullOrWhiteSpace(apiKey) Then
-            GlobalStatusStrip.ShowWarning("请先配置大模型ApiKey！")
-            ExecuteJavaScriptAsyncJS($"changeSendButton()")
-            Return
-        End If
-
-        If String.IsNullOrWhiteSpace(apiUrl) Then
-            GlobalStatusStrip.ShowWarning("请先配置大模型Api！")
-            ExecuteJavaScriptAsyncJS($"changeSendButton()")
-            Return
-        End If
-
-        If String.IsNullOrWhiteSpace(question) Then
-            GlobalStatusStrip.ShowWarning("请输入问题！")
+        Dim validation = SendValidator.Validate(apiUrl, apiKey, question)
+        If Not validation.IsValid Then
+            GlobalStatusStrip.ShowWarning(GetSendValidationWarning(validation.Failure))
             ExecuteJavaScriptAsyncJS($"changeSendButton()")
             Return
         End If
@@ -2766,26 +2747,7 @@ Public MustInherit Class BaseChatControl
         End Try
 
         Try
-            If String.IsNullOrWhiteSpace(systemPrompt) Then
-                ' 使用PromptManager生成组合后的提示词
-                Dim appInfo = GetApplication()
-                Dim appType = If(appInfo IsNot Nothing, appInfo.Type.ToString(), "Excel")
-
-                Dim context As New PromptContext With {
-                    .ApplicationType = appType,
-                    .IntentResult = CurrentIntentResult,
-                    .FunctionMode = responseMode
-                }
-
-                systemPrompt = PromptManager.Instance.GetCombinedPrompt(context)
-
-                ' 如果PromptManager返回空（没有配置），使用基础提示词
-                If String.IsNullOrWhiteSpace(systemPrompt) Then
-                    systemPrompt = If(Not String.IsNullOrWhiteSpace(ConfigSettings.propmtContent),
-                                      ConfigSettings.propmtContent,
-                                      "你是一个 Office AI 助手，请根据用户需求提供简洁、准确的回答。")
-                End If
-            End If
+            systemPrompt = SystemPromptResolver.ResolveSystemPrompt(systemPrompt, GetApplication(), CurrentIntentResult, responseMode)
 
             ' ragCount 由 CreateRequestBody 通过 ByRef 返回，无需再次查询记忆
             Dim ragCount As Integer = 0
@@ -2809,6 +2771,7 @@ Public MustInherit Class BaseChatControl
                                                      ManageHistoryMessageSize()
                                                      _chatStateService.AddMessage("assistant", answer.content)
                                                      MemoryService.SaveConversationTurnAsync(oq, answer.content, _chatStateService.CurrentSessionId, GetOfficeAppType())
+                                                     MemoryTurnRecorder.RecordConversationTurn(oq, answer.content, _chatStateService.CurrentSessionId, responseMode, ah, GetOfficeAppType())
                                                      If systemHistoryMessageData.Count = 3 Then
                                                          Dim sid = _chatStateService.CurrentSessionId
                                                          Dim title = If(oq?.Length > 80, oq.Substring(0, 80) & "...", If(oq, ""))
@@ -2948,100 +2911,16 @@ Public MustInherit Class BaseChatControl
 
     ' 执行js脚本的异步方法
     Public Async Function ExecuteJavaScriptAsyncJS(js As String) As Task
-        Await InitializeWebView2()
-
-        If ChatBrowser.InvokeRequired Then
-            Dim tcs As New TaskCompletionSource(Of Boolean)()
-            ChatBrowser.BeginInvoke(New Action(Async Sub()
-                                                   Try
-                                                       If ChatBrowser.CoreWebView2 Is Nothing Then
-                                                           Throw New InvalidOperationException("WebView2 尚未初始化，无法执行脚本。")
-                                                       End If
-                                                       Await ChatBrowser.ExecuteScriptAsync(js)
-                                                       tcs.TrySetResult(True)
-                                                   Catch ex As Exception
-                                                       tcs.TrySetException(ex)
-                                                   End Try
-                                               End Sub))
-            Await tcs.Task
-        Else
-            If ChatBrowser.CoreWebView2 Is Nothing Then
-                Throw New InvalidOperationException("WebView2 尚未初始化，无法执行脚本。")
-            End If
-            Await ChatBrowser.ExecuteScriptAsync(js)
-        End If
+        Await WebViewBridge.ExecuteScriptAsync(js)
     End Function
 
-    ' 执行JS脚本并确保等待完成（解决跨线程调用时的时序问题）
     Private Async Function ExecuteJavaScriptAndWaitAsync(js As String) As Task
-        Try
-            If ChatBrowser.InvokeRequired Then
-                ' 使用 TaskCompletionSource 确保等待完成
-                Dim tcs As New TaskCompletionSource(Of Boolean)()
-                ChatBrowser.Invoke(Sub()
-                                       Try
-                                           ChatBrowser.ExecuteScriptAsync(js).ContinueWith(Sub(t)
-                                                                                               If t.IsFaulted Then
-                                                                                                   tcs.SetException(t.Exception)
-                                                                                               Else
-                                                                                                   tcs.SetResult(True)
-                                                                                               End If
-                                                                                           End Sub)
-                                       Catch ex As Exception
-                                           tcs.SetException(ex)
-                                       End Try
-                                   End Sub)
-                Await tcs.Task
-            Else
-                Await ChatBrowser.ExecuteScriptAsync(js)
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"[ExecuteJavaScriptAndWaitAsync] 执行JS出错: {ex.Message}")
-        End Try
+        Await WebViewBridge.ExecuteScriptAndWaitAsync(js)
     End Function
 
-    ' 等待前端 rendererMap 创建完成
     Private Async Function WaitForRendererMapAsync(uuid As String) As Task
-        Dim maxRetries As Integer = 10
-        Dim delayMs As Integer = 50
-
-        For i As Integer = 0 To maxRetries - 1
-            Try
-                Dim checkJs As String = $"(window.rendererMap && window.rendererMap['{uuid}']) ? 'true' : 'false'"
-                Dim result As String = Nothing
-
-                If ChatBrowser.InvokeRequired Then
-                    Dim tcs As New TaskCompletionSource(Of String)()
-                    ChatBrowser.Invoke(Sub()
-                                           ChatBrowser.ExecuteScriptAsync(checkJs).ContinueWith(Sub(t)
-                                                                                                    If t.IsFaulted Then
-                                                                                                        tcs.SetResult("false")
-                                                                                                    Else
-                                                                                                        tcs.SetResult(t.Result)
-                                                                                                    End If
-                                                                                                End Sub)
-                                       End Sub)
-                    result = Await tcs.Task
-                Else
-                    result = Await ChatBrowser.ExecuteScriptAsync(checkJs)
-                End If
-
-                ' 结果可能包含引号，清理后判断
-                result = result?.Trim(""""c)
-                If result = "true" Then
-                    Debug.WriteLine($"[WaitForRendererMapAsync] rendererMap[{uuid}] 已就绪，重试次数={i}")
-                    Return
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"[WaitForRendererMapAsync] 检查时出错: {ex.Message}")
-            End Try
-
-            Await Task.Delay(delayMs)
-        Next
-
-        Debug.WriteLine($"[WaitForRendererMapAsync] 警告：等待超时，rendererMap[{uuid}] 可能未创建")
+        Await WebViewBridge.WaitForRendererMapAsync(uuid)
     End Function
-
     Private Function EscapeJavaScriptString(input As String) As String
         Return UtilsService.EscapeJavaScriptString(input)
     End Function
@@ -3055,36 +2934,7 @@ Public MustInherit Class BaseChatControl
 
     ' 加载本地HTML文件
     Public Async Function LoadLocalHtmlFile() As Task
-        Try
-            Await InitializeWebView2()
-
-            ' 检查HTML文件是否存在
-            Dim htmlFilePath As String = ChatHtmlFilePath
-            If File.Exists(htmlFilePath) Then
-
-                Dim htmlContent As String = File.ReadAllText(htmlFilePath, System.Text.Encoding.UTF8)
-                htmlContent = htmlContent.TrimStart("""").TrimEnd("""")
-                ' 直接导航到本地HTML文件
-                If ChatBrowser.InvokeRequired Then
-                    ChatBrowser.Invoke(Sub()
-                                           If ChatBrowser.CoreWebView2 Is Nothing Then
-                                               Debug.WriteLine("LoadLocalHtmlFile skipped: CoreWebView2 is not initialized.")
-                                               Return
-                                           End If
-                                           ChatBrowser.CoreWebView2.NavigateToString(htmlContent)
-                                       End Sub)
-                Else
-                    If ChatBrowser.CoreWebView2 Is Nothing Then
-                        Debug.WriteLine("LoadLocalHtmlFile skipped: CoreWebView2 is not initialized.")
-                        Return
-                    End If
-                    ChatBrowser.CoreWebView2.NavigateToString(htmlContent)
-                End If
-
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"加载本地HTML文件时出错：{ex.Message}")
-        End Try
+        Await WebViewBridge.LoadHtmlFileAsync(ChatHtmlFilePath)
     End Function
 
     Public Async Function SaveFullWebPageAsync() As Task
@@ -3116,55 +2966,8 @@ Public MustInherit Class BaseChatControl
     End Function
 
     Private Async Function GetFullHtmlContentAsync() As Task(Of String)
-        Dim tcs As New TaskCompletionSource(Of String)()
-
-        ' 强制切换到 WebView2 的 UI 线程操作
-        ChatBrowser.BeginInvoke(Async Sub()
-                                    Try
-                                        Await EnsureWebView2InitializedAsync()
-
-                                        Dim js As String = "
-                (function(){
-                    const serializer = new XMLSerializer();
-                    return serializer.serializeToString(document.documentElement);
-                })();"
-
-                                        Dim rawResult As String = Await ChatBrowser.CoreWebView2.ExecuteScriptAsync(js)
-                                        Dim decodedHtml As String = UtilsService.UnescapeHtmlContent(rawResult)
-                                        decodedHtml = decodedHtml.TrimStart("""").TrimEnd("""")
-
-                                        ' 2. 使用正则表达式移除底部输入栏
-                                        Dim bottomBarPattern As String = "<div[^>]*id=[""']chat-bottom-bar[""'][^>]*>.*?</div>\s*</div>\s*</div>"
-                                        decodedHtml = Regex.Replace(decodedHtml, bottomBarPattern, "", RegexOptions.Singleline)
-
-                                        ' 移除 <script> 标签及其内容
-                                        Dim scriptPattern As String = "<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>"
-                                        decodedHtml = Regex.Replace(decodedHtml, scriptPattern, String.Empty, RegexOptions.IgnoreCase)
-
-                                        ' 内联本地 CSS 资源（用于离线查看）
-                                        decodedHtml = UtilsService.InlineCssResources(decodedHtml)
-
-
-                                        ' 重新注入必要的JavaScript代码
-                                        Dim essentialScript As String = UtilsService.GetEssentialJavaScript()
-
-                                        ' 在 </body> 标签前插入必要的脚本
-                                        If decodedHtml.Contains("</body>") Then
-                                            decodedHtml = decodedHtml.Replace("</body>", essentialScript & Environment.NewLine & "</body>")
-                                        Else
-                                            ' 如果没有 </body> 标签，在末尾添加
-                                            decodedHtml &= essentialScript
-                                        End If
-
-                                        tcs.SetResult(decodedHtml)
-                                    Catch ex As Exception
-                                        tcs.SetException(ex)
-                                    End Try
-                                End Sub)
-
-        Return Await tcs.Task
+        Return Await WebViewBridge.GetFullHtmlContentAsync()
     End Function
-
     Private Async Function EnsureWebView2InitializedAsync() As Task
         If ChatBrowser.CoreWebView2 Is Nothing Then
             Await ChatBrowser.EnsureCoreWebView2Async()

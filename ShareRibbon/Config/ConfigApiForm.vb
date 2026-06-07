@@ -499,14 +499,13 @@ Public Class ConfigApiForm
             ' 一次性处理：移除 handler 避免重复触发
             RemoveHandler mainTabControl.SelectedIndexChanged, AddressOf SkillsTab_SelectedIndexChanged
 
-            ' 延迟到消息循环，确保所有布局完成
-            Me.BeginInvoke(Sub()
-                               Try
-                                   AdjustRightSplitAfterHandle(skillsRightSplit)
-                               Catch ex As Exception
-                                   ' 忽略单次异常
-                               End Try
-                           End Sub)
+            RunAfterHandleCreated(Me,
+                Sub()
+                    Try
+                        AdjustRightSplitAfterHandle(skillsRightSplit)
+                    Catch ex As Exception
+                    End Try
+                End Sub)
         End If
     End Sub
 
@@ -805,6 +804,30 @@ Public Class ConfigApiForm
     ''' </summary>
     Private Async Sub InitializeSkillsWebView2()
         Try
+            If skillsWebView2.InvokeRequired Then
+                Await UiDispatcher.InvokeAsync(skillsWebView2,
+                    Async Function()
+                        Await InitializeSkillsWebView2Async()
+                    End Function)
+                Return
+            End If
+
+            Await InitializeSkillsWebView2Async()
+        Catch ex As Exception
+            Debug.WriteLine($"WebView2初始化失败: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Async Function InitializeSkillsWebView2Async() As Task
+        If skillsWebView2.InvokeRequired Then
+            Await UiDispatcher.InvokeAsync(skillsWebView2,
+                Async Function()
+                    Await InitializeSkillsWebView2Async()
+                End Function)
+            Return
+        End If
+
+        Try
             Dim userDataFolder As String = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 ConfigSettings.OfficeAiAppDataFolder,
@@ -825,7 +848,7 @@ Public Class ConfigApiForm
         Catch ex As Exception
             Debug.WriteLine($"WebView2初始化失败: {ex.Message}")
         End Try
-    End Sub
+    End Function
     ''' <summary>
     ''' 加载数据到UI
     ''' </summary>
@@ -1791,14 +1814,14 @@ Public Class ConfigApiForm
 
 #Region "辅助方法"
 
-    Private Sub RunAfterHandleCreated(control As Control, action As Action)
+    Private Async Sub RunAfterHandleCreated(control As Control, action As Action)
         If action Is Nothing Then Return
 
-        If control IsNot Nothing AndAlso control.IsHandleCreated AndAlso Not control.IsDisposed Then
-            control.BeginInvoke(action)
-        Else
-            action()
-        End If
+        Try
+            Await UiDispatcher.InvokeAsync(control, action)
+        Catch ex As Exception
+            Debug.WriteLine($"[ConfigApiForm] UI dispatch failed: {ex.Message}")
+        End Try
     End Sub
 
     Private Sub SelectCheckedModel(list As CheckedListBox)

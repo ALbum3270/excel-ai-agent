@@ -85,7 +85,7 @@ Public Class SkillsService
     ''' 只返回Skill的元数据，不返回详细内容
     ''' </summary>
     Public Shared Function GetSkillsCatalog() As List(Of SkillFileDefinition)
-        Dim skills = SkillsDirectoryService.GetAllSkills()
+        Dim skills = SkillsDirectoryService.GetSkillsCatalog()
 
         ' 加载使用统计并合并到Skills
         LoadUsageStats()
@@ -96,9 +96,34 @@ Public Class SkillsService
                 skill.LastUsedAt = stats.LastUsedAt
             End If
         Next
+        ApplyRegistryUsageStats(skills)
 
         Return skills
     End Function
+
+    Private Shared Sub ApplyRegistryUsageStats(skills As List(Of SkillFileDefinition))
+        If skills Is Nothing OrElse skills.Count = 0 Then Return
+
+        For Each skill In skills
+            Try
+                If skill Is Nothing OrElse String.IsNullOrWhiteSpace(skill.Name) Then Continue For
+                Dim record = AgentMemoryRepository.GetSkillRegistryByName(skill.Name)
+                If record Is Nothing Then Continue For
+
+                If record.UsageCount > 0 Then skill.UsageCount = record.UsageCount
+                If record.SuccessCount > 0 AndAlso record.UsageCount > 0 Then
+                    skill.SuccessRate = CDbl(record.SuccessCount) / record.UsageCount
+                End If
+
+                Dim lastUsed As DateTime
+                If Not String.IsNullOrWhiteSpace(record.LastIndexedAt) AndAlso DateTime.TryParse(record.LastIndexedAt, lastUsed) Then
+                    skill.LastUsedAt = lastUsed
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsService] ApplyRegistryUsageStats failed: {ex.Message}")
+            End Try
+        Next
+    End Sub
 
     ''' <summary>
     ''' 智能匹配Skills（基于用户查询，支持语义匹配）
@@ -238,27 +263,12 @@ Public Class SkillsService
             Next
         End If
 
-        ' === 4. 匹配Skill内容（深度匹配） ===
-        If Not String.IsNullOrWhiteSpace(skill.Content) Then
-            Dim contentLower = skill.Content.ToLowerInvariant()
-            Dim matchCount As Integer = 0
-
-            For Each word In queryWords
-                If word.Length > 1 AndAlso contentLower.Contains(word) Then
-                    matchCount += 1
-                    If matchCount <= 3 Then  ' 最多3个词有额外加分
-                        score += 3
-                    End If
-                End If
-            Next
-        End If
-
-        ' === 5. 使用频率加权（热门 Skill 加分，最多 +5） ===
+        ' === 4. 使用频率加权（热门 Skill 加分，最多 +5） ===
         If skill.UsageCount > 0 Then
             score += Math.Min(5.0, skill.UsageCount * 0.8)
         End If
 
-        ' === 6. 最近使用加分（活跃Skill） ===
+        ' === 5. 最近使用加分（活跃Skill） ===
         If skill.LastUsedAt.HasValue Then
             Dim daysSinceUse = (DateTime.Now - skill.LastUsedAt.Value).TotalDays
             If daysSinceUse < 1 Then
@@ -306,6 +316,14 @@ Public Class SkillsService
             End If
             stats.TotalTokens += tokensUsed
 
+            Try
+                AgentMemoryRepository.RecordSkillRegistryUsage(skillName, success)
+                MemoryRepository.RecordSkillUsage(skillName, success, tokensUsed)
+                SkillsIndexService.KickoffIndex()
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsService] RecordSkillUsage registry sync failed: {ex.Message}")
+            End Try
+
             ' 批量保存：每N次或程序退出时才写文件
             _unsavedChanges += 1
             If _unsavedChanges >= SAVE_BATCH_SIZE Then
@@ -314,7 +332,7 @@ Public Class SkillsService
             End If
 
             ' 更新内存中的Skill对象（使用缓存，避免刷新开销）
-            Dim skill = SkillsDirectoryService.GetAllSkills().FirstOrDefault(Function(s) String.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase))
+            Dim skill = SkillsDirectoryService.GetSkillsCatalog().FirstOrDefault(Function(s) String.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase))
             If skill IsNot Nothing Then
                 skill.UsageCount = stats.UsageCount
                 skill.LastUsedAt = stats.LastUsedAt
@@ -411,10 +429,12 @@ Public Class SkillsService
                     End If
                     sb.AppendLine()
 
+                    Dim detailSkill = SkillsDirectoryService.LoadSkillDetail(skill)
+
                     ' 注入Skill内容
-                    If Not String.IsNullOrWhiteSpace(skill.Content) Then
+                    If detailSkill IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(detailSkill.Content) Then
                         sb.AppendLine("```skill")
-                        sb.AppendLine(skill.Content)
+                        sb.AppendLine(detailSkill.Content)
                         sb.AppendLine("```")
                         sb.AppendLine()
                     End If
@@ -433,7 +453,7 @@ Public Class SkillsService
     ''' <summary>
     ''' 构建渐进式披露的第一步：Skills目录（增强版）
     ''' </summary>
-    Public Shared Function BuildSkillsCatalogMessage(skills As List(Of SkillFileDefinition)) As String
+    Public Shared Function BuildSkillsCatalogMessage(skills As List(Of SkillFileDefinition), Optional maxItems As Integer = 20) As String
         If skills Is Nothing OrElse skills.Count = 0 Then
             Return ""
         End If
@@ -442,17 +462,18 @@ Public Class SkillsService
         Dim sortedSkills = skills.OrderByDescending(Function(s) s.UsageCount) _
                                  .ThenByDescending(Function(s) s.LastUsedAt.GetValueOrDefault()) _
                                  .ToList()
+        Dim displayedSkills = sortedSkills.Take(Math.Max(1, maxItems)).ToList()
 
         Dim sb As New StringBuilder()
         sb.AppendLine("## 可用的Skills（目录）")
         sb.AppendLine()
-        sb.AppendLine("以下是可用的Skills，你可以根据需要选择使用：")
+        sb.AppendLine($"已安装 {skills.Count} 个 Skills。以下仅提供最多 {displayedSkills.Count} 个元数据摘要；命中后再加载完整 Skill。")
         sb.AppendLine()
 
         ' 分类显示：热门、最近使用、其他
-        Dim hotSkills = sortedSkills.Where(Function(s) s.UsageCount >= 3).ToList()
-        Dim recentSkills = sortedSkills.Where(Function(s) s.UsageCount < 3 AndAlso s.LastUsedAt.HasValue AndAlso (DateTime.Now - s.LastUsedAt.Value).TotalDays < 7).ToList()
-        Dim otherSkills = sortedSkills.Where(Function(s) Not hotSkills.Contains(s) AndAlso Not recentSkills.Contains(s)).ToList()
+        Dim hotSkills = displayedSkills.Where(Function(s) s.UsageCount >= 3).ToList()
+        Dim recentSkills = displayedSkills.Where(Function(s) s.UsageCount < 3 AndAlso s.LastUsedAt.HasValue AndAlso (DateTime.Now - s.LastUsedAt.Value).TotalDays < 7).ToList()
+        Dim otherSkills = displayedSkills.Where(Function(s) Not hotSkills.Contains(s) AndAlso Not recentSkills.Contains(s)).ToList()
 
         If hotSkills.Count > 0 Then
             sb.AppendLine("### 🔥 热门技能")
@@ -502,6 +523,9 @@ Public Class SkillsService
         sb.AppendLine("1. 根据用户需求，从上面的Skills中选择最相关的")
         sb.AppendLine("2. 如果需要某个Skill的详细内容，请明确指出需要哪个Skill")
         sb.AppendLine("3. 可以同时使用多个Skills")
+        If skills.Count > displayedSkills.Count Then
+            sb.AppendLine($"4. 还有 {skills.Count - displayedSkills.Count} 个 Skills 未展开，必要时通过索引召回。")
+        End If
 
         Return sb.ToString()
     End Function
@@ -513,6 +537,9 @@ Public Class SkillsService
         If skill Is Nothing Then
             Return ""
         End If
+
+        Dim detailSkill = SkillsDirectoryService.LoadSkillDetail(skill)
+        If detailSkill IsNot Nothing Then skill = detailSkill
 
         Dim sb As New StringBuilder()
         sb.AppendLine($"## Skill：{skill.Name}")
@@ -647,6 +674,20 @@ Public Class EnhancedSkillsService
     ''' </summary>
     Private Shared Sub LoadSkillUsageStats(skill As SkillFileDefinition)
         Try
+            Dim registry = AgentMemoryRepository.GetSkillRegistryByName(skill.Name)
+            If registry IsNot Nothing AndAlso registry.UsageCount > 0 Then
+                skill.UsageCount = registry.UsageCount
+                If registry.SuccessCount > 0 Then
+                    skill.SuccessRate = CDbl(registry.SuccessCount) / registry.UsageCount
+                End If
+
+                Dim lastUsed As DateTime
+                If Not String.IsNullOrWhiteSpace(registry.LastIndexedAt) AndAlso DateTime.TryParse(registry.LastIndexedAt, lastUsed) Then
+                    skill.LastUsedAt = lastUsed
+                End If
+                Return
+            End If
+
             Dim usage = MemoryRepository.GetSkillUsage(skill.Name)
             If usage IsNot Nothing Then
                 skill.UsageCount = usage.UsageCount
@@ -785,7 +826,7 @@ Public Class EnhancedSkillsService
         Optional tokensUsed As Long = 0)
 
         ' 更新使用统计
-        MemoryRepository.RecordSkillUsage(skillName, success, tokensUsed)
+        SkillsService.RecordSkillUsage(skillName, success, tokensUsed)
 
         ' 记录详细反馈到记忆
         If userRating.HasValue Then

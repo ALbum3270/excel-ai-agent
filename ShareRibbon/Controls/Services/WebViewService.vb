@@ -36,6 +36,14 @@ Public Class WebViewService
         ''' 初始化 WebView2
         ''' </summary>
         Public Async Function InitializeAsync() As Task
+            If _chatBrowser.InvokeRequired Then
+                Await UiDispatcher.InvokeAsync(_chatBrowser,
+                    Async Function()
+                        Await InitializeAsync()
+                    End Function)
+                Return
+            End If
+
             Try
                 ' 自定义用户数据目录
                 Dim userDataFolder As String = Path.Combine(
@@ -158,22 +166,18 @@ Public Class WebViewService
         ''' </summary>
         ''' <param name="js">JavaScript 代码</param>
         Public Async Function ExecuteScriptAsync(js As String) As Task
-            If _chatBrowser.InvokeRequired Then
-                _chatBrowser.Invoke(Sub() _chatBrowser.ExecuteScriptAsync(js))
-            Else
-                Await _chatBrowser.ExecuteScriptAsync(js)
-            End If
+            Await UiDispatcher.InvokeAsync(_chatBrowser,
+                Async Function()
+                    If _chatBrowser.CoreWebView2 Is Nothing Then Return
+                    Await _chatBrowser.ExecuteScriptAsync(js)
+                End Function)
         End Function
 
         ''' <summary>
         ''' 同步方式在 UI 线程执行操作
         ''' </summary>
         Public Sub InvokeIfRequired(action As Action)
-            If _chatBrowser.InvokeRequired Then
-                _chatBrowser.Invoke(action)
-            Else
-                action()
-            End If
+            UiDispatcher.InvokeAsync(_chatBrowser, action).GetAwaiter().GetResult()
         End Sub
 
         ''' <summary>

@@ -63,52 +63,57 @@ Public Class ChatContextBuilder
                 skillParts.Add(catalogMessage)
             End If
 
-            Dim matchedSkills = SkillsService.MatchSkills(currentQuery, 5)
-            If matchedSkills.Count > 0 Then
-                Dim topSkill = matchedSkills.First()
-                If topSkill.MatchScore >= 10 Then
-                    Dim detailMessage = SkillsService.BuildSkillDetailMessage(topSkill.Skill)
+            Dim indexedSkills = SkillsIndexService.SelectSkillDefinitions(currentQuery, Nothing, appNorm, 2)
+            If indexedSkills IsNot Nothing AndAlso indexedSkills.Count > 0 Then
+                For Each indexedSkill In indexedSkills
+                    Dim detailMessage = SkillsService.BuildSkillDetailMessage(indexedSkill)
                     If Not String.IsNullOrWhiteSpace(detailMessage) Then
-                        skillParts.Add("#### 推荐技能（基于当前查询）")
+                        skillParts.Add("#### 推荐技能（基于索引召回）")
                         skillParts.Add(detailMessage)
                     End If
-
-                    ' 如果 Skill 有脚本，添加脚本信息
-                    If topSkill.Skill.Scripts IsNot Nothing AndAlso topSkill.Skill.Scripts.Count > 0 Then
-                        Dim scriptInfo As New List(Of String)()
-                        scriptInfo.Add("**可执行脚本：**")
-                        For Each script In topSkill.Skill.Scripts
-                            scriptInfo.Add($"- `{script.FileName}` ({script.ScriptType})" &
-                                If(Not String.IsNullOrEmpty(script.Description), $" - {script.Description}", ""))
-                        Next
-                        If topSkill.Skill.Scripts.Count > 0 Then
-                            scriptInfo.Add("")
-                            scriptInfo.Add("**脚本调用格式：**")
-                            scriptInfo.Add("```json")
-                            scriptInfo.Add($"{{""command"": ""skill_script.{topSkill.Skill.Name}.{topSkill.Skill.Scripts(0).FileName}"", ""params"": {{""arg1"": ""value1""}}}}")
-                            scriptInfo.Add("```")
-                        End If
-                        skillParts.Add(String.Join(vbCrLf, scriptInfo))
-                    End If
-
-                    Dim metaHints As New List(Of String)()
-                    metaHints.Add($"当前推荐: {topSkill.Skill.Name}")
-                    If topSkill.Skill.Tags IsNot Nothing AndAlso topSkill.Skill.Tags.Count > 0 Then
-                        metaHints.Add($"标签: {String.Join(", ", topSkill.Skill.Tags)}")
-                    End If
-                    If Not String.IsNullOrWhiteSpace(topSkill.Skill.Compatibility) Then
-                        metaHints.Add($"兼容性: {topSkill.Skill.Compatibility}")
-                    End If
-                    If topSkill.MatchedKeywords.Count > 0 Then
-                        metaHints.Add($"匹配关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
-                    End If
-                    skillParts.Add("> " & String.Join(" | ", metaHints))
-
-                    Debug.WriteLine($"[ChatContextBuilder] 匹配到Skill: {topSkill.Skill.Name}, 分数: {topSkill.MatchScore:F1}, 关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
-                    SkillsService.RecordSkillUsage(topSkill.Skill.Name)
-                End If
+                    AppendSkillScriptInfo(skillParts, indexedSkill)
+                    skillParts.Add($"> 当前推荐: {indexedSkill.Name}")
+                    SkillsService.RecordSkillUsage(indexedSkill.Name)
+                    AgentMemoryRepository.RecordSkillRegistryUsage(indexedSkill.Name)
+                    Debug.WriteLine($"[ChatContextBuilder] 索引召回Skill: {indexedSkill.Name}")
+                Next
             Else
-                Debug.WriteLine($"[ChatContextBuilder] 未匹配到Skills，提供 {skillsCatalog.Count} 个Skill目录")
+                Dim matchedSkills = SkillsService.MatchSkills(currentQuery, 5)
+                If matchedSkills.Count > 0 Then
+                    Dim topSkill = matchedSkills.First()
+                    If topSkill.MatchScore >= 10 Then
+                        Dim topSkillDetail = SkillsDirectoryService.LoadSkillDetail(topSkill.Skill)
+                        If topSkillDetail Is Nothing Then topSkillDetail = topSkill.Skill
+
+                        Dim detailMessage = SkillsService.BuildSkillDetailMessage(topSkillDetail)
+                        If Not String.IsNullOrWhiteSpace(detailMessage) Then
+                            skillParts.Add("#### 推荐技能（基于当前查询）")
+                            skillParts.Add(detailMessage)
+                        End If
+
+                        ' 如果 Skill 有脚本，添加脚本信息
+                        AppendSkillScriptInfo(skillParts, topSkillDetail)
+
+                        Dim metaHints As New List(Of String)()
+                        metaHints.Add($"当前推荐: {topSkillDetail.Name}")
+                        If topSkillDetail.Tags IsNot Nothing AndAlso topSkillDetail.Tags.Count > 0 Then
+                            metaHints.Add($"标签: {String.Join(", ", topSkillDetail.Tags)}")
+                        End If
+                        If Not String.IsNullOrWhiteSpace(topSkillDetail.Compatibility) Then
+                            metaHints.Add($"兼容性: {topSkillDetail.Compatibility}")
+                        End If
+                        If topSkill.MatchedKeywords.Count > 0 Then
+                            metaHints.Add($"匹配关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
+                        End If
+                        skillParts.Add("> " & String.Join(" | ", metaHints))
+
+                        Debug.WriteLine($"[ChatContextBuilder] 匹配到Skill: {topSkillDetail.Name}, 分数: {topSkill.MatchScore:F1}, 关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
+                        SkillsService.RecordSkillUsage(topSkillDetail.Name)
+                        AgentMemoryRepository.RecordSkillRegistryUsage(topSkillDetail.Name)
+                    End If
+                Else
+                    Debug.WriteLine($"[ChatContextBuilder] 未匹配到Skills，提供 {skillsCatalog.Count} 个Skill目录")
+                End If
             End If
 
             sysParts.Add(String.Join(vbCrLf & vbCrLf, skillParts))
@@ -126,18 +131,32 @@ Public Class ChatContextBuilder
                 memParts.Add("#### 用户画像" & vbCrLf & userProfile.Trim())
             End If
 
-            Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appNorm)
-            If memories IsNot Nothing AndAlso memories.Count > 0 Then
-                ragCountOut = memories.Count
-                Debug.WriteLine($"[ChatContextBuilder] 找到 {memories.Count} 条相关记忆")
+            Dim structuredMemories = MemoryService.GetRelevantStructuredMemories(currentQuery, Nothing, appNorm)
+            If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
+                ragCountOut = structuredMemories.Count
+                Debug.WriteLine($"[ChatContextBuilder] 找到 {structuredMemories.Count} 条结构化记忆")
                 Dim memLines As New List(Of String)()
                 memLines.Add("#### 相关记忆")
-                For Each m In memories
-                    memLines.Add("- " & m.Content)
+                For Each m In structuredMemories
+                    Dim label = If(String.IsNullOrWhiteSpace(m.MemoryType), "memory", m.MemoryType)
+                    memLines.Add($"- [{label}] {m.Content}")
                 Next
                 memParts.Add(String.Join(vbCrLf, memLines))
             Else
-                Debug.WriteLine($"[ChatContextBuilder] 没有找到相关记忆，查询: {currentQuery.Substring(0, Math.Min(100, currentQuery.Length))}...")
+                Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appNorm)
+                If memories IsNot Nothing AndAlso memories.Count > 0 Then
+                    ragCountOut = memories.Count
+                    Debug.WriteLine($"[ChatContextBuilder] 找到 {memories.Count} 条原子记忆")
+                    Dim memLines As New List(Of String)()
+                    memLines.Add("#### 相关记忆")
+                    For Each m In memories
+                        memLines.Add("- " & m.Content)
+                    Next
+                    memParts.Add(String.Join(vbCrLf, memLines))
+                Else
+                    Dim q = If(currentQuery, "")
+                    Debug.WriteLine($"[ChatContextBuilder] 没有找到相关记忆，查询: {q.Substring(0, Math.Min(100, q.Length))}...")
+                End If
             End If
 
             Dim summaries = MemoryService.GetRecentSessionSummaries(Nothing)
@@ -206,12 +225,21 @@ Public Class ChatContextBuilder
         If Not String.IsNullOrWhiteSpace(userProfile) Then
             parts.Add("[用户画像]" & vbCrLf & userProfile)
         End If
-        Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appType)
-        If memories IsNot Nothing AndAlso memories.Count > 0 Then
+        Dim structuredMemories = MemoryService.GetRelevantStructuredMemories(currentQuery, Nothing, appType)
+        If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
             parts.Add("[相关记忆]")
-            For Each m In memories
-                parts.Add("- " & m.Content)
+            For Each m In structuredMemories
+                Dim label = If(String.IsNullOrWhiteSpace(m.MemoryType), "memory", m.MemoryType)
+                parts.Add($"- [{label}] {m.Content}")
             Next
+        Else
+            Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appType)
+            If memories IsNot Nothing AndAlso memories.Count > 0 Then
+                parts.Add("[相关记忆]")
+                For Each m In memories
+                    parts.Add("- " & m.Content)
+                Next
+            End If
         End If
         Dim summaries = MemoryService.GetRecentSessionSummaries(Nothing)
         If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
@@ -224,4 +252,22 @@ Public Class ChatContextBuilder
         If parts.Count <= 1 Then Return baseSystem
         Return String.Join(vbCrLf & vbCrLf, parts)
     End Function
+
+    Private Shared Sub AppendSkillScriptInfo(skillParts As List(Of String), skill As SkillFileDefinition)
+        If skill Is Nothing OrElse skill.Scripts Is Nothing OrElse skill.Scripts.Count = 0 Then Return
+
+        Dim scriptInfo As New List(Of String)()
+        scriptInfo.Add("**可执行脚本：**")
+        For Each script In skill.Scripts
+            scriptInfo.Add($"- `{script.FileName}` ({script.ScriptType})" &
+                If(Not String.IsNullOrEmpty(script.Description), $" - {script.Description}", ""))
+        Next
+
+        scriptInfo.Add("")
+        scriptInfo.Add("**脚本调用格式：**")
+        scriptInfo.Add("```json")
+        scriptInfo.Add($"{{""command"": ""skill_script.{skill.Name}.{skill.Scripts(0).FileName}"", ""params"": {{""arg1"": ""value1""}}}}")
+        scriptInfo.Add("```")
+        skillParts.Add(String.Join(vbCrLf, scriptInfo))
+    End Sub
 End Class
