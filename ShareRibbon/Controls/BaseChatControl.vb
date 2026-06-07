@@ -368,7 +368,8 @@ Public MustInherit Class BaseChatControl
             ChatBrowser.CreationProperties = New CoreWebView2CreationProperties With {
                 .UserDataFolder = userDataFolder
             }
-            Await ChatBrowser.EnsureCoreWebView2Async(Nothing)
+            Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(userDataFolder)
+            Await ChatBrowser.EnsureCoreWebView2Async(env)
 
             If ChatBrowser.CoreWebView2 IsNot Nothing Then
                 ChatBrowser.CoreWebView2.Settings.IsScriptEnabled = True
@@ -646,7 +647,7 @@ Public MustInherit Class BaseChatControl
     Private Sub RegisterWebViewCommandHandlers(router As ChatCommandRouter)
         router.Register("checkedChange", Sub(jsonDoc) HandleCheckedChange(jsonDoc))
         router.Register("sendMessage", Sub(jsonDoc) HandleSendMessage(jsonDoc))
-        router.Register("stopMessage", Sub(jsonDoc) stopReaderStream = True)
+        router.Register("stopMessage", Sub(jsonDoc) HandleStopMessage(jsonDoc))
         router.Register("executeCode", Sub(jsonDoc) HandleExecuteCode(jsonDoc))
         router.Register("saveSettings", Sub(jsonDoc) HandleSaveSettings(jsonDoc))
         router.Register("getHistoryFiles", Sub(jsonDoc) HandleGetHistoryFiles())
@@ -727,6 +728,19 @@ Public MustInherit Class BaseChatControl
         router.Register("switchReformatTemplate", Sub(jsonDoc) HandleSwitchReformatTemplate(jsonDoc))
         router.Register("previewReformatCompare", Sub(jsonDoc) HandlePreviewReformatCompare(jsonDoc))
         router.Register("proofread", Sub(jsonDoc) HandleProofreadFocusMode(jsonDoc))
+    End Sub
+
+    Private Sub HandleStopMessage(jsonDoc As JObject)
+        stopReaderStream = True
+
+        Dim requestUuid As String = ""
+        Try
+            requestUuid = If(jsonDoc("requestUuid")?.ToString(), "")
+        Catch
+            requestUuid = ""
+        End Try
+
+        HttpStreamSvc.CancelRequest(requestUuid)
     End Sub
 
     Protected Sub WebView2_WebMessageReceived(sender As Object, e As CoreWebView2WebMessageReceivedEventArgs)
@@ -2135,9 +2149,8 @@ Public MustInherit Class BaseChatControl
 
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromMinutes(2)
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Dim client = HttpClientPool.GetClient(apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
 
                 ' Anthropic 兼容
                 If apiUrl.Contains("anthropic.com") Then
@@ -2149,9 +2162,10 @@ Public MustInherit Class BaseChatControl
 
                 request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
 
-                Using response As HttpResponseMessage = Await client.SendAsync(request)
-                    response.EnsureSuccessStatusCode()
-                    Dim jsonContent As String = Await response.Content.ReadAsStringAsync()
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(2))
+                    Using response As HttpResponseMessage = Await client.SendAsync(request, timeoutCts.Token)
+                        response.EnsureSuccessStatusCode()
+                        Dim jsonContent As String = Await response.Content.ReadAsStringAsync()
 
                     ' 提取 content
                     Dim json = JObject.Parse(jsonContent)
@@ -2173,7 +2187,8 @@ Public MustInherit Class BaseChatControl
                         End If
                     End If
 
-                    Return content
+                        Return content
+                    End Using
                 End Using
             End Using
         Catch ex As Exception

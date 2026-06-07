@@ -113,7 +113,15 @@ Public Class PhaseStartupManager
                                                 End Try
                                             End Sub)
 
-                     Task.WaitAll(wv2Task, sqliteTask, resTask)
+                     Dim wv2EnvTask = Task.Run(Async Function()
+                                                   Try
+                                                       Await WebView2EnvironmentCache.PrewarmDefaultAsync()
+                                                   Catch ex As Exception
+                                                       Debug.WriteLine($"[Startup] Phase2 WebView2Environment failed: {ex.Message}")
+                                                   End Try
+                                               End Function)
+
+                     Task.WaitAll(wv2Task, sqliteTask, resTask, wv2EnvTask)
                      sw.Stop()
                      _backgroundPhaseComplete = True
                      Debug.WriteLine($"[Startup] Phase2-Background 完成: {sw.ElapsedMilliseconds}ms")

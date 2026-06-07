@@ -4,6 +4,7 @@
 Imports System.Diagnostics
 Imports Microsoft.Office.Interop.Excel
 Imports Newtonsoft.Json.Linq
+Imports ShareRibbon
 
 ''' <summary>
 ''' Excel直接操作服务
@@ -814,6 +815,8 @@ Public Class ExcelDirectOperationService
     ''' 执行数据清洗命令
     ''' </summary>
     Private Function ExecuteCleanData(params As JToken) As Boolean
+        Dim ws As Worksheet = Nothing
+        Dim range As Range = Nothing
         Try
             Dim operation = params("operation")?.ToString()
             Dim targetRange = params("range")?.ToString()
@@ -822,8 +825,8 @@ Public Class ExcelDirectOperationService
                 Return False
             End If
 
-            Dim ws As Worksheet = _excelApp.ActiveSheet
-            Dim range As Range = ws.Range(targetRange)
+            ws = _excelApp.ActiveSheet
+            range = ws.Range(targetRange)
 
             Select Case operation?.ToLower()
                 Case "removeduplicates"
@@ -834,16 +837,24 @@ Public Class ExcelDirectOperationService
                     If String.IsNullOrEmpty(fillValue) Then fillValue = "0"
 
                     For Each cell As Range In range.Cells
-                        If cell.Value Is Nothing OrElse String.IsNullOrEmpty(cell.Value.ToString()) Then
-                            cell.Value = fillValue
-                        End If
+                        Try
+                            If cell.Value Is Nothing OrElse String.IsNullOrEmpty(cell.Value.ToString()) Then
+                                cell.Value = fillValue
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(cell)
+                        End Try
                     Next
 
                 Case "trim"
                     For Each cell As Range In range.Cells
-                        If cell.Value IsNot Nothing AndAlso TypeOf cell.Value Is String Then
-                            cell.Value = cell.Value.ToString().Trim()
-                        End If
+                        Try
+                            If cell.Value IsNot Nothing AndAlso TypeOf cell.Value Is String Then
+                                cell.Value = cell.Value.ToString().Trim()
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(cell)
+                        End Try
                     Next
 
                 Case "replace"
@@ -860,6 +871,9 @@ Public Class ExcelDirectOperationService
         Catch ex As Exception
             Debug.WriteLine($"ExecuteCleanData 出错: {ex.Message}")
             Return False
+        Finally
+            ComObjectHelper.ReleaseComObject(range)
+            ComObjectHelper.ReleaseComObject(ws)
         End Try
     End Function
 

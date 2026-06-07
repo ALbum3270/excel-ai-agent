@@ -555,18 +555,19 @@ Public Class IntentRecognitionService
             requestBody("stream") = False
 
             ' 发送请求
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(30)
+            Dim client = HttpClientPool.GetClient(apiUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
                 request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
                 request.Content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
 
-                Using response = Await client.SendAsync(request)
-                    If response.IsSuccessStatusCode Then
-                        Dim responseContent = Await response.Content.ReadAsStringAsync()
-                        result = ParseLLMIntentResponse(responseContent, question)
-                    End If
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
+                        If response.IsSuccessStatusCode Then
+                            Dim responseContent = Await response.Content.ReadAsStringAsync()
+                            result = ParseLLMIntentResponse(responseContent, question)
+                        End If
+                    End Using
                 End Using
             End Using
 
@@ -1974,18 +1975,19 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
             requestBody("stream") = False
 
             ' 发送请求
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(15)
+            Dim client = HttpClientPool.GetClient(apiUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
                 request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
                 request.Content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
 
-                Using response = Await client.SendAsync(request)
-                    If response.IsSuccessStatusCode Then
-                        Dim responseContent = Await response.Content.ReadAsStringAsync()
-                        Return ParseFollowUpResponse(responseContent)
-                    End If
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
+                        If response.IsSuccessStatusCode Then
+                            Dim responseContent = Await response.Content.ReadAsStringAsync()
+                            Return ParseFollowUpResponse(responseContent)
+                        End If
+                    End Using
                 End Using
             End Using
 

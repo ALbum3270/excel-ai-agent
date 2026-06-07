@@ -9,11 +9,11 @@ Imports System.Security
 
 '查看程序集特性的值
 
-<Assembly: AssemblyTitle("ExcelAi")> 
-<Assembly: AssemblyDescription("")> 
-<Assembly: AssemblyCompany("")> 
-<Assembly: AssemblyProduct("ExcelAi")> 
-<Assembly: AssemblyCopyright("Copyright ?  2025")> 
+<Assembly: AssemblyTitle("ExcelAi")>
+<Assembly: AssemblyDescription("")>
+<Assembly: AssemblyCompany("")>
+<Assembly: AssemblyProduct("ExcelAi")>
+<Assembly: AssemblyCopyright("Copyright ?  2025")>
 <Assembly: AssemblyTrademark("")>
 
 '将 ComVisible 设置为 false 将使此程序集中的类型
@@ -22,7 +22,7 @@ Imports System.Security
 <Assembly: ComVisible(True)>
 
 '如果此项目向 COM 公开，则下列 GUID 用于类型库的 ID
-<Assembly: Guid("9d7e14b7-cfa3-45df-90c3-43fc080611cf")> 
+<Assembly: Guid("9d7e14b7-cfa3-45df-90c3-43fc080611cf")>
 
 ' 程序集的版本信息由下列四个值组成:
 '
@@ -33,11 +33,13 @@ Imports System.Security
 '
 '可以指定所有这些值，也可以使用“生成号”和“修订号”的默认值，
 ' 方法是按如下所示使用“*”: :
-' <Assembly: AssemblyVersion("1.0.*")> 
+' <Assembly: AssemblyVersion("2.0.0.0")>
 
-<Assembly: AssemblyVersion("1.0.0.0")> 
-<Assembly: AssemblyFileVersion("1.0.0.0")> 
+<Assembly: AssemblyVersion("2.0.0.0")>
+<Assembly: AssemblyFileVersion("2.8.0.0")>
 
+
+<Assembly: AssemblyInformationalVersion("2.8.0")>
 Friend Module DesignTimeConstants
     Public Const RibbonTypeSerializer As String = "Microsoft.VisualStudio.Tools.Office.Ribbon.Serialization.RibbonTypeCodeDomSerializer, Microsoft.VisualStudio.Tools.Office.Designer, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
     Public Const RibbonBaseTypeSerializer As String = "System.ComponentModel.Design.Serialization.TypeCodeDomSerializer, System.Design"

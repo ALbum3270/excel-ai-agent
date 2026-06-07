@@ -75,25 +75,36 @@ Public Class Ribbon1
 
             Dim cellIndices As New StringBuilder()
             Dim cellList As New List(Of String)
+            Dim selectionWorksheet As Excel.Worksheet = Nothing
 
             ' 按列遍历，每列用局部变量记录连续空行数
-            For col As Integer = selection.Column To selection.Column + selection.Columns.Count - 1
-                Dim emptyCount As Integer = 0
-                For row As Integer = selection.Row To selection.Row + selection.Rows.Count - 1
-                    Dim cell As Excel.Range = selection.Worksheet.Cells(row, col)
-                    ' 如果存在非空内容，则处理，并重置空计数
-                    If cell.Value IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(cell.Value.ToString()) Then
-                        cellValues.AppendLine(cell.Value.ToString())
-                        cellList.Add(cell.Address(False, False))
-                        emptyCount = 0
-                    Else
-                        emptyCount += 1
-                        If emptyCount >= 50 Then
-                            Exit For  ' 本列连续50行为空，退出当前列循环
-                        End If
-                    End If
+            Try
+                selectionWorksheet = selection.Worksheet
+                For col As Integer = selection.Column To selection.Column + selection.Columns.Count - 1
+                    Dim emptyCount As Integer = 0
+                    For row As Integer = selection.Row To selection.Row + selection.Rows.Count - 1
+                        Dim cell As Excel.Range = Nothing
+                        Try
+                            cell = TryCast(selectionWorksheet.Cells(row, col), Excel.Range)
+                            ' 如果存在非空内容，则处理，并重置空计数
+                            If cell IsNot Nothing AndAlso cell.Value IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(cell.Value.ToString()) Then
+                                cellValues.AppendLine(cell.Value.ToString())
+                                cellList.Add(cell.Address(False, False))
+                                emptyCount = 0
+                            Else
+                                emptyCount += 1
+                                If emptyCount >= 50 Then
+                                    Exit For  ' 本列连续50行为空，退出当前列循环
+                                End If
+                            End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(cell)
+                        End Try
+                    Next
                 Next
-            Next
+            Finally
+                ComObjectHelper.ReleaseComObject(selectionWorksheet)
+            End Try
 
 
             ' 按照矩阵展开方式显示单元格索引

@@ -29,6 +29,8 @@ Public Class HttpStreamService
     ' ReAct 工具调用循环
     Private _toolCallIterations As Integer = 0
     Private Const MAX_TOOL_CALL_ITERATIONS As Integer = 5
+    Private Const STREAM_FLUSH_MIN_CHARS As Integer = 96
+    Private Shared ReadOnly STREAM_FLUSH_INTERVAL As TimeSpan = TimeSpan.FromMilliseconds(80)
     Private _originalRequestMessages As JArray = Nothing
 
     ' 流处理状态
@@ -37,6 +39,8 @@ Public Class HttpStreamService
     Private _pendingMcpTasks As Integer = 0
     Private _finalUuid As String = String.Empty
     Private _currentMarkdownBuffer As New StringBuilder()
+    Private _lastFlushUtc As DateTime = DateTime.MinValue
+    Private ReadOnly _activeRequestCancellations As New System.Collections.Concurrent.ConcurrentDictionary(Of String, System.Threading.CancellationTokenSource)(StringComparer.OrdinalIgnoreCase)
 
     ' 停止标志
     Public Property StopStream As Boolean = False
@@ -84,6 +88,59 @@ Public Class HttpStreamService
         _onAgentCompleted = onAgentCompleted
     End Sub
 
+    Public Sub CancelRequest(Optional requestUuid As String = Nothing)
+        StopStream = True
+
+        If Not String.IsNullOrWhiteSpace(requestUuid) Then
+            Dim cts As System.Threading.CancellationTokenSource = Nothing
+            If _activeRequestCancellations.TryRemove(requestUuid, cts) AndAlso cts IsNot Nothing Then
+                Try
+                    cts.Cancel()
+                Catch ex As Exception
+                    Debug.WriteLine($"[HttpStream] 取消请求失败: {ex.Message}")
+                End Try
+            End If
+            Return
+        End If
+
+        For Each key In _activeRequestCancellations.Keys.ToArray()
+            Dim cts As System.Threading.CancellationTokenSource = Nothing
+            If _activeRequestCancellations.TryRemove(key, cts) AndAlso cts IsNot Nothing Then
+                Try
+                    cts.Cancel()
+                Catch ex As Exception
+                    Debug.WriteLine($"[HttpStream] 取消请求失败: {ex.Message}")
+                End Try
+            End If
+        Next
+    End Sub
+
+    Private Function RegisterRequestCancellation(requestUuid As String) As System.Threading.CancellationTokenSource
+        Dim cts As New System.Threading.CancellationTokenSource()
+        If Not String.IsNullOrWhiteSpace(requestUuid) Then
+            Dim previous As System.Threading.CancellationTokenSource = Nothing
+            If _activeRequestCancellations.TryRemove(requestUuid, previous) AndAlso previous IsNot Nothing Then
+                previous.Dispose()
+            End If
+            _activeRequestCancellations(requestUuid) = cts
+        End If
+        Return cts
+    End Function
+
+    Private Sub UnregisterRequestCancellation(requestUuid As String, cts As System.Threading.CancellationTokenSource)
+        If Not String.IsNullOrWhiteSpace(requestUuid) Then
+            Dim current As System.Threading.CancellationTokenSource = Nothing
+            If _activeRequestCancellations.TryGetValue(requestUuid, current) AndAlso Object.ReferenceEquals(current, cts) Then
+                Dim removed As System.Threading.CancellationTokenSource = Nothing
+                _activeRequestCancellations.TryRemove(requestUuid, removed)
+            End If
+        End If
+
+        If cts IsNot Nothing Then
+            cts.Dispose()
+        End If
+    End Sub
+
 #Region "发送请求"
 
     ''' <summary>
@@ -108,13 +165,15 @@ Public Class HttpStreamService
             responseMode As String,
             responseUuid As String) As Task
 
+        Dim requestCts As System.Threading.CancellationTokenSource = Nothing
         Try
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
+            requestCts = RegisterRequestCancellation(requestUuid)
+            requestCts.CancelAfter(TimeSpan.FromMinutes(5))
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromMinutes(5)
+            Dim client = HttpClientPool.GetClient(apiUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
 
                 ' 检测是否是 Anthropic API
                 Dim isAnthropic As Boolean = apiUrl.Contains("anthropic.com")
@@ -142,7 +201,7 @@ Public Class HttpStreamService
                 End If
 
                 ' 设置 requestId
-                Dim jsSetMapping As String = $"(function(){{ var el = document.getElementById('chat-{responseUuid}'); if(el) el.dataset.requestId = '{requestUuid}'; }})();"
+                Dim jsSetMapping As String = $"(function(){{ var el = document.getElementById('chat-{responseUuid}'); if(el) el.dataset.requestId = '{requestUuid}'; window.officeAiActiveRequestUuid = '{requestUuid}'; window.officeAiActiveResponseUuid = '{responseUuid}'; }})();"
                 Await _executeScript(jsSetMapping)
 
                 ' 显示"正在思考"提示
@@ -150,18 +209,22 @@ Public Class HttpStreamService
                 Await FlushBufferAsync("content", responseUuid)
 
                 ' 发送非流式请求
-                Using response As HttpResponseMessage = Await client.SendAsync(request)
+                Using response As HttpResponseMessage = Await client.SendAsync(request, requestCts.Token)
                     response.EnsureSuccessStatusCode()
 
                     Dim jsonContent As String = Await response.Content.ReadAsStringAsync()
                     Await ProcessNonStreamingResponseAsync(jsonContent, responseUuid, originQuestion, isAnthropic)
                 End Using
             End Using
+        Catch ex As OperationCanceledException
+            Debug.WriteLine($"[NonStreaming] 请求已取消: {requestUuid}")
+            StopStream = True
         Catch ex As Exception
             Debug.WriteLine($"[NonStreaming] 请求失败: {ex.Message}")
             _currentMarkdownBuffer.Append($"<br/>**请求失败: {ex.Message}**<br/>")
             _catchException = ex
         Finally
+            UnregisterRequestCancellation(requestUuid, requestCts)
             _mainStreamCompleted = True
             FinalizeStream(addHistory, originQuestion)
         End Try
@@ -333,7 +396,7 @@ Public Class HttpStreamService
             If Not String.IsNullOrEmpty(contentText) Then
                 _currentMarkdownBuffer.Append(contentText)
                 _stateService.PlainMarkdownBuffer.Append(contentText)
-                Await FlushBufferAsync("content", uuid)
+                Await FlushBufferAsync("content", uuid, True)
                 _onAgentContent?.Invoke(contentText)
             End If
 
@@ -399,14 +462,15 @@ Public Class HttpStreamService
 
         ' 检测是否是 Anthropic API
         Dim isAnthropic As Boolean = apiUrl.Contains("anthropic.com")
+        Dim requestCts As System.Threading.CancellationTokenSource = Nothing
 
         Try
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
+            requestCts = RegisterRequestCancellation(requestUuid)
 
-            Using client As New HttpClient()
-                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan
+            Dim client = HttpClientPool.GetClient(apiUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
 
                 ' Anthropic 使用不同的认证方式
                 If isAnthropic Then
@@ -430,7 +494,7 @@ Public Class HttpStreamService
 
                 Dim aiName As String = ConfigSettings.platform & " " & ConfigSettings.ModelName
 
-                Using response As HttpResponseMessage = Await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                Using response As HttpResponseMessage = Await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
                     response.EnsureSuccessStatusCode()
 
                     ' 创建前端聊天节
@@ -443,14 +507,20 @@ Public Class HttpStreamService
                     End If
 
                     ' 设置 requestId
-                    Dim jsSetMapping As String = $"(function(){{ var el = document.getElementById('chat-{responseUuid}'); if(el) el.dataset.requestId = '{requestUuid}'; }})();"
+                    Dim jsSetMapping As String = $"(function(){{ var el = document.getElementById('chat-{responseUuid}'); if(el) el.dataset.requestId = '{requestUuid}'; window.officeAiActiveRequestUuid = '{requestUuid}'; window.officeAiActiveResponseUuid = '{responseUuid}'; }})();"
                     Await _executeScript(jsSetMapping)
 
                     ' 处理流 - 按SSE规范逐行解析
                     Using responseStream As Stream = Await response.Content.ReadAsStreamAsync()
+                        Using cancelRegistration = requestCts.Token.Register(Sub()
+                                                                                 Try
+                                                                                     responseStream.Dispose()
+                                                                                 Catch
+                                                                                 End Try
+                                                                             End Sub)
                         Using reader As New StreamReader(responseStream, Encoding.UTF8)
                             Do
-                                If StopStream Then
+                                If StopStream OrElse requestCts.IsCancellationRequested Then
                                     _currentMarkdownBuffer.Clear()
                                     _stateService.MarkdownBuffer.Clear()
                                     Exit Do
@@ -465,7 +535,10 @@ Public Class HttpStreamService
                                 If String.IsNullOrEmpty(line) OrElse line.StartsWith(":") Then Continue Do
 
                                 ' 处理 [DONE] 信号
-                                If line = "data: [DONE]" OrElse line = "[DONE]" Then Exit Do
+                                If line = "data: [DONE]" OrElse line = "[DONE]" Then
+                                    Await FlushBufferAsync("content", responseUuid, True)
+                                    Exit Do
+                                End If
 
                                 ' Anthropic 使用 SSE 格式，但数据格式不同
                                 If isAnthropic Then
@@ -492,13 +565,19 @@ Public Class HttpStreamService
                                     End If
                                 End If
                             Loop
+                            Await FlushBufferAsync("content", responseUuid, True)
+                        End Using
                         End Using
                     End Using
                 End Using
             End Using
+        Catch ex As OperationCanceledException
+            Debug.WriteLine($"[HttpStream] 请求已取消: {requestUuid}")
+            StopStream = True
         Catch ex As Exception
             Throw
         Finally
+            UnregisterRequestCancellation(requestUuid, requestCts)
             _mainStreamCompleted = True
             FinalizeStream(addHistory, originQuestion)
         End Try
@@ -740,7 +819,7 @@ Public Class HttpStreamService
                     If _pendingToolCalls.Count > 0 Then
                         Await ProcessCompletedToolCallsAsync(uuid, originQuestion)
                     End If
-                    Await FlushBufferAsync("content", uuid)
+                    Await FlushBufferAsync("content", uuid, True)
                     ' Agent 响应完成回调
                     _onAgentCompleted?.Invoke()
                     Return
@@ -810,12 +889,28 @@ Public Class HttpStreamService
     ''' <summary>
     ''' 刷新缓冲区到前端
     ''' </summary>
-    Private Async Function FlushBufferAsync(contentType As String, uuid As String) As Task
+    Private Async Function FlushBufferAsync(contentType As String, uuid As String, Optional force As Boolean = False) As Task
         If _currentMarkdownBuffer.Length = 0 Then Return
+
+        If contentType = "reasoning" Then
+            force = True
+        End If
+
+        If _currentMarkdownBuffer.ToString().Contains("<br/>") Then
+            force = True
+        End If
+
+        If Not force Then
+            Dim elapsed = DateTime.UtcNow - _lastFlushUtc
+            If _currentMarkdownBuffer.Length < STREAM_FLUSH_MIN_CHARS AndAlso elapsed < STREAM_FLUSH_INTERVAL Then
+                Return
+            End If
+        End If
 
         Dim plainContent As String = _currentMarkdownBuffer.ToString()
         Dim escapedContent = HttpUtility.JavaScriptStringEncode(_currentMarkdownBuffer.ToString())
         _currentMarkdownBuffer.Clear()
+        _lastFlushUtc = DateTime.UtcNow
 
         Dim js As String
         If contentType = "reasoning" Then
@@ -959,22 +1054,15 @@ Public Class HttpStreamService
                         Dim connections = MCPConnectionManager.LoadConnections()
                         Dim conn = connections.FirstOrDefault(Function(c) c.Name = connName AndAlso c.IsActive)
                         If conn IsNot Nothing Then
-                            Dim client As StreamJsonRpcMCPClient = Nothing
                             Try
-                                client = New StreamJsonRpcMCPClient()
-                                Await client.ConfigureAsync(conn.Url)
-                                Dim initResult = Await client.InitializeAsync()
-                                If initResult.Success Then
-                                    Dim tools = Await client.ListToolsAsync()
-                                    If tools IsNot Nothing AndAlso tools.Any(Function(t) t.Name = toolName) Then
-                                        mcpConnectionName = connName
-                                        client.Dispose()
-                                        Exit For
-                                    End If
+                                Dim pooled = Await McpConnectionPool.Instance.GetOrCreateConnectionAsync(conn)
+                                Dim tools = pooled.GetTools()
+                                If tools IsNot Nothing AndAlso tools.Any(Function(t) t.Name = toolName) Then
+                                    mcpConnectionName = connName
+                                    Exit For
                                 End If
-                            Catch
-                            Finally
-                                If client IsNot Nothing Then client.Dispose()
+                            Catch ex As Exception
+                                Debug.WriteLine($"[MCP] 获取池化连接失败: {connName}, {ex.Message}")
                             End Try
                         End If
                     Next
@@ -1025,37 +1113,29 @@ Public Class HttpStreamService
                 Return CreateErrorResponse($"MCP连接 '{mcpConnectionName}' 未找到或未启用")
             End If
 
-            Using client As New StreamJsonRpcMCPClient()
-                Await client.ConfigureAsync(connection.Url)
+            Dim pooled = Await McpConnectionPool.Instance.GetOrCreateConnectionAsync(connection)
+            Dim result = Await pooled.CallToolAsync(toolName, arguments)
 
-                Dim initResult = Await client.InitializeAsync()
-                If Not initResult.Success Then
-                    Return CreateErrorResponse($"初始化MCP连接失败: {initResult.ErrorMessage}")
-                End If
+            If result.IsError Then
+                Return CreateErrorResponse($"调用MCP工具失败: {result.ErrorMessage}")
+            End If
 
-                Dim result = Await client.CallToolAsync(toolName, arguments)
+            Dim responseObj = New JObject()
+            Dim contentArray = New JArray()
 
-                If result.IsError Then
-                    Return CreateErrorResponse($"调用MCP工具失败: {result.ErrorMessage}")
-                End If
+            If result.Content IsNot Nothing Then
+                For Each contentItem In result.Content
+                    Dim contentObj = New JObject()
+                    contentObj("type") = contentItem.Type
+                    If Not String.IsNullOrEmpty(contentItem.Text) Then contentObj("text") = contentItem.Text
+                    If Not String.IsNullOrEmpty(contentItem.Data) Then contentObj("data") = contentItem.Data
+                    If Not String.IsNullOrEmpty(contentItem.MimeType) Then contentObj("mimeType") = contentItem.MimeType
+                    contentArray.Add(contentObj)
+                Next
+            End If
 
-                Dim responseObj = New JObject()
-                Dim contentArray = New JArray()
-
-                If result.Content IsNot Nothing Then
-                    For Each contentItem In result.Content
-                        Dim contentObj = New JObject()
-                        contentObj("type") = contentItem.Type
-                        If Not String.IsNullOrEmpty(contentItem.Text) Then contentObj("text") = contentItem.Text
-                        If Not String.IsNullOrEmpty(contentItem.Data) Then contentObj("data") = contentItem.Data
-                        If Not String.IsNullOrEmpty(contentItem.MimeType) Then contentObj("mimeType") = contentItem.MimeType
-                        contentArray.Add(contentObj)
-                    Next
-                End If
-
-                responseObj("content") = contentArray
-                Return responseObj
-            End Using
+            responseObj("content") = contentArray
+            Return responseObj
         Catch ex As Exception
             Return CreateErrorResponse($"MCP工具调用异常: {ex.Message}")
         End Try
@@ -1083,7 +1163,14 @@ Public Class HttpStreamService
         _toolCallIterations += 1
         Debug.WriteLine($"[ReAct] 开始第 {_toolCallIterations} 轮工具结果回注，共 {allToolCalls.Count} 个工具调用")
 
+        Dim reactRequestUuid As String = _stateService.GetRequestUuid(uuid)
+        If String.IsNullOrWhiteSpace(reactRequestUuid) Then
+            reactRequestUuid = uuid
+        End If
+
+        Dim requestCts As System.Threading.CancellationTokenSource = Nothing
         Try
+            requestCts = RegisterRequestCancellation(reactRequestUuid)
             ' 构建回注消息：原始消息 + assistant的tool_calls + tool结果
             Dim messagesArray As JArray
 
@@ -1155,10 +1242,9 @@ Public Class HttpStreamService
             ' 发送请求并流式处理
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
 
-            Using client As New HttpClient()
-                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan
+            Dim client = HttpClientPool.GetClient(apiUrl)
 
-                Dim request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
                 If isAnthropic Then
                     request.Headers.Add("x-api-key", apiKey)
                     request.Headers.Add("anthropic-version", "2023-06-01")
@@ -1167,13 +1253,19 @@ Public Class HttpStreamService
                 End If
                 request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
 
-                Using response As HttpResponseMessage = Await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                Using response As HttpResponseMessage = Await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
                     response.EnsureSuccessStatusCode()
 
                     Using responseStream As Stream = Await response.Content.ReadAsStreamAsync()
+                        Using cancelRegistration = requestCts.Token.Register(Sub()
+                                                                                 Try
+                                                                                     responseStream.Dispose()
+                                                                                 Catch
+                                                                                 End Try
+                                                                             End Sub)
                         Using reader As New StreamReader(responseStream, Encoding.UTF8)
                             Do
-                                If StopStream Then
+                                If StopStream OrElse requestCts.IsCancellationRequested Then
                                     _currentMarkdownBuffer.Clear()
                                     _stateService.MarkdownBuffer.Clear()
                                     Exit Do
@@ -1184,7 +1276,10 @@ Public Class HttpStreamService
                                 line = line.Trim()
 
                                 If String.IsNullOrEmpty(line) OrElse line.StartsWith(":") Then Continue Do
-                                If line = "data: [DONE]" OrElse line = "[DONE]" Then Exit Do
+                                If line = "data: [DONE]" OrElse line = "[DONE]" Then
+                                    Await FlushBufferAsync("content", uuid, True)
+                                    Exit Do
+                                End If
 
                                 If isAnthropic Then
                                     Dim chunk As String = ProcessAnthropicChunk(line)
@@ -1206,16 +1301,22 @@ Public Class HttpStreamService
                                     End If
                                 End If
                             Loop
+                            Await FlushBufferAsync("content", uuid, True)
+                        End Using
                         End Using
                     End Using
                 End Using
             End Using
-
             Debug.WriteLine($"[ReAct] 第 {_toolCallIterations} 轮完成")
+        Catch ex As OperationCanceledException
+            Debug.WriteLine($"[ReAct] 请求已取消: {reactRequestUuid}")
+            StopStream = True
         Catch ex As Exception
             Debug.WriteLine($"[ReAct] 工具结果回注失败: {ex.Message}")
             _currentMarkdownBuffer.Append($"<br/>**工具结果回注失败: {ex.Message}**<br/>")
             _catchException = ex
+        Finally
+            UnregisterRequestCancellation(reactRequestUuid, requestCts)
         End Try
 
         If _catchException IsNot Nothing Then

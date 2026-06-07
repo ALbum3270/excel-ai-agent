@@ -80,7 +80,8 @@ Public Class WebViewService
                 }
 
                 ' 初始化 WebView2
-                Await _chatBrowser.EnsureCoreWebView2Async(Nothing)
+                Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(userDataFolder)
+                Await _chatBrowser.EnsureCoreWebView2Async(env)
 
                 ' 确保 CoreWebView2 已初始化
                 If _chatBrowser.CoreWebView2 IsNot Nothing Then

@@ -146,14 +146,14 @@ Public Class LLMUtil
             ' 强制使用 TLS 1.2
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(120)
-                client.DefaultRequestHeaders.Add("Authorization", "Bearer " & apiKey)
-
-                Dim content As New StringContent(requestBody, Encoding.UTF8, "application/json")
+            Dim client = HttpClientPool.GetClient(apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
+                request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
 
                 ' 使用 .Result 进行同步调用
-                Dim response As HttpResponseMessage = client.PostAsync(apiUrl, content).Result
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(120))
+                    Using response As HttpResponseMessage = client.SendAsync(request, timeoutCts.Token).Result
 
                 Debug.WriteLine($"HTTP响应状态码: {response.StatusCode}")
 
@@ -165,6 +165,8 @@ Public Class LLMUtil
 
                 Dim responseContent As String = response.Content.ReadAsStringAsync().Result
                 Return responseContent
+                    End Using
+                End Using
             End Using
 
         Catch ex As AggregateException

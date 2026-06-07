@@ -46,8 +46,9 @@ Public Class DeepseekControl
     End Function
 
     Protected Overrides Function AppendCurrentSelectedContent(message As String) As String
+        Dim selection As Microsoft.Office.Interop.PowerPoint.Selection = Nothing
         Try
-            Dim selection = Globals.ThisAddIn.Application.ActiveWindow.Selection
+            selection = Globals.ThisAddIn.Application.ActiveWindow.Selection
             If selection Is Nothing Then Return message
 
             Dim sb As New System.Text.StringBuilder()
@@ -58,21 +59,34 @@ Public Class DeepseekControl
                     sb.AppendLine(selection.TextRange.Text)
                 Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionShapes
                     For i As Integer = 1 To selection.ShapeRange.Count
-                        Dim shp = selection.ShapeRange(i)
-                        If shp.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
-                           shp.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                            sb.AppendLine(shp.TextFrame.TextRange.Text)
-                        End If
-                    Next
-                Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionSlides
-                    For Each slide As Microsoft.Office.Interop.PowerPoint.Slide In selection.SlideRange
-                        sb.AppendLine($"幻灯片 {slide.SlideIndex}")
-                        For Each shp As Microsoft.Office.Interop.PowerPoint.Shape In slide.Shapes
+                        Dim shp As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                        Try
+                            shp = selection.ShapeRange(i)
                             If shp.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
                                shp.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
                                 sb.AppendLine(shp.TextFrame.TextRange.Text)
                             End If
+                        Finally
+                            ComObjectHelper.ReleaseComObject(shp)
+                        End Try
+                    Next
+                Case Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionSlides
+                    For Each slide As Microsoft.Office.Interop.PowerPoint.Slide In selection.SlideRange
+                        Try
+                        sb.AppendLine($"幻灯片 {slide.SlideIndex}")
+                        For Each shp As Microsoft.Office.Interop.PowerPoint.Shape In slide.Shapes
+                            Try
+                                If shp.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
+                                   shp.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                    sb.AppendLine(shp.TextFrame.TextRange.Text)
+                                End If
+                            Finally
+                                ComObjectHelper.ReleaseComObject(shp)
+                            End Try
                         Next
+                        Finally
+                            ComObjectHelper.ReleaseComObject(slide)
+                        End Try
                     Next
                 Case Else
                     Return message
@@ -84,6 +98,8 @@ Public Class DeepseekControl
         Catch ex As Exception
             Debug.WriteLine($"附加 PowerPoint 选区失败: {ex.Message}")
             Return message
+        Finally
+            ComObjectHelper.ReleaseComObject(selection)
         End Try
     End Function
 

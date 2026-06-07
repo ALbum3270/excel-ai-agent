@@ -837,7 +837,7 @@ Public Class ConfigApiForm
                 Directory.CreateDirectory(userDataFolder)
             End If
 
-            Dim env = Await CoreWebView2Environment.CreateAsync(Nothing, userDataFolder)
+            Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(userDataFolder)
             Await skillsWebView2.EnsureCoreWebView2Async(env)
 
             If skillsWebView2.CoreWebView2 IsNot Nothing Then
@@ -1893,9 +1893,9 @@ Public Class ConfigApiForm
     Private Async Function ValidateApiAsync(apiUrl As String, apiKey As String, modelName As String, Optional reasoningMode As String = Nothing, Optional platformName As String = Nothing) As Task(Of Boolean)
         Try
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(30)
-                client.DefaultRequestHeaders.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
+            Dim client = HttpClientPool.GetClient(apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+                request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
 
                 ' 构造一个简单的聊天请求来验证API
                 Dim requestBody = New JObject() From {
@@ -1910,10 +1910,13 @@ Public Class ConfigApiForm
                 }
                 ReasoningRequestHelper.ApplyReasoningOptions(requestBody, reasoningMode, modelName, platformName, apiUrl)
 
-                Dim content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
-                Dim response = Await client.PostAsync(apiUrl, content)
+                request.Content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
 
-                Return response.IsSuccessStatusCode
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
+                        Return response.IsSuccessStatusCode
+                    End Using
+                End Using
             End Using
         Catch
             Return False

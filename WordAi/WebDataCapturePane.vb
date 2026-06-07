@@ -197,9 +197,12 @@ Public Class WebDataCapturePane
             ThreadPool.QueueUserWorkItem(
                 Sub(state)
                     Try
-                        Using client As New HttpClient()
-                            client.Timeout = TimeSpan.FromSeconds(30)
-                            Dim imageData = client.GetByteArrayAsync(imageUrl).Result
+                        Dim client = HttpClientPool.GetClient(imageUrl)
+                        Using request As New HttpRequestMessage(HttpMethod.Get, imageUrl)
+                            Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
+                                Using response = client.SendAsync(request, timeoutCts.Token).Result
+                                    response.EnsureSuccessStatusCode()
+                                    Dim imageData = response.Content.ReadAsByteArrayAsync().Result
 
                             ' 创建临时文件
                             Dim tempPath = Path.GetTempFileName()
@@ -250,6 +253,8 @@ Public Class WebDataCapturePane
                                               MessageBox.Show($"插入图片失败: {ex.Message}", "错误")
                                           End Try
                                       End Sub)
+                                End Using
+                            End Using
                         End Using
                     Catch ex As Exception
                         Me.Invoke(Sub()
@@ -348,9 +353,12 @@ Public Class WebDataCapturePane
                 ThreadPool.QueueUserWorkItem(
                 Sub(state)
                     Try
-                        Using client As New HttpClient()
-                            client.Timeout = TimeSpan.FromSeconds(30)
-                            Dim imageData = client.GetByteArrayAsync(posterUrl).Result
+                        Dim client = HttpClientPool.GetClient(posterUrl)
+                        Using request As New HttpRequestMessage(HttpMethod.Get, posterUrl)
+                            Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
+                                Using response = client.SendAsync(request, timeoutCts.Token).Result
+                                    response.EnsureSuccessStatusCode()
+                                    Dim imageData = response.Content.ReadAsByteArrayAsync().Result
 
                             Dim tempPath = Path.GetTempFileName()
                             Dim extension = Path.GetExtension(New Uri(posterUrl).LocalPath)
@@ -407,6 +415,8 @@ Public Class WebDataCapturePane
                                               Debug.WriteLine($"插入预览图失败: {ex.Message}")
                                           End Try
                                       End Sub)
+                                End Using
+                            End Using
                         End Using
                     Catch ex As Exception
                         Debug.WriteLine($"下载预览图失败: {ex.Message}")
@@ -651,9 +661,12 @@ Public Class WebDataCapturePane
                                 imageUrl = New Uri(baseUri, src).ToString()
                             End If
 
-                            Using client As New HttpClient()
-                                client.Timeout = TimeSpan.FromSeconds(30)
-                                Dim imageData = client.GetByteArrayAsync(imageUrl).Result
+                            Dim client = HttpClientPool.GetClient(imageUrl)
+                            Using request As New HttpRequestMessage(HttpMethod.Get, imageUrl)
+                                Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
+                                    Using response = client.SendAsync(request, timeoutCts.Token).Result
+                                        response.EnsureSuccessStatusCode()
+                                        Dim imageData = response.Content.ReadAsByteArrayAsync().Result
 
                                 Dim tempPath = Path.GetTempFileName()
                                 Dim extension = Path.GetExtension(New Uri(imageUrl).LocalPath)
@@ -732,8 +745,10 @@ Public Class WebDataCapturePane
                                               Catch ex As Exception
                                                   Debug.WriteLine($"插入图片失败: {ex.Message}")
                                                   MessageBox.Show($"插入图片失败: {ex.Message}", "错误")
-                                              End Try
-                                          End Sub)
+                                          End Try
+                                      End Sub)
+                                    End Using
+                                End Using
                             End Using
                         End If
                     Catch ex As Exception

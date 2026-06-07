@@ -51,7 +51,7 @@ Public MustInherit Class BaseDoubaoChat
             ' 仅在WebView2尚未初始化时，使用自定义环境初始化
             ' 避免与控件自动初始化产生CoreWebView2Environment冲突
             If ChatBrowser.CoreWebView2 Is Nothing Then
-                Dim env = Await CoreWebView2Environment.CreateAsync(Nothing, userDataFolder, options)
+                Dim env = Await WebView2EnvironmentCache.GetOrCreateAsync(userDataFolder, options)
                 Await ChatBrowser.EnsureCoreWebView2Async(env)
             End If
 

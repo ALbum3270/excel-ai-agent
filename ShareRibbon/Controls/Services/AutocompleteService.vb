@@ -151,19 +151,23 @@ Public Class AutocompleteService
             requestObj("stream") = False
             Dim requestBody = requestObj.ToString(Newtonsoft.Json.Formatting.None)
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(10)
-                client.DefaultRequestHeaders.Add("Authorization", "Bearer " & apiKey)
-                Dim content As New StringContent(requestBody, Encoding.UTF8, "application/json")
-                Dim response = Await client.PostAsync(fimUrl, content)
-                response.EnsureSuccessStatusCode()
-                Dim responseBody = Await response.Content.ReadAsStringAsync()
+            Dim client = HttpClientPool.GetClient(fimUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, fimUrl)
+                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
+                request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
+
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
+                        response.EnsureSuccessStatusCode()
+                        Dim responseBody = Await response.Content.ReadAsStringAsync()
                 Dim jObj = JObject.Parse(responseBody)
                 Dim text = jObj("choices")?(0)?("text")?.ToString()
                 If Not String.IsNullOrWhiteSpace(text) Then
                     text = text.Trim().Split({vbCr, vbLf, vbCrLf}, StringSplitOptions.RemoveEmptyEntries)(0)
                     If text.Length <= 50 Then completions.Add(text)
                 End If
+                    End Using
+                End Using
             End Using
         Catch ex As Exception
             Debug.WriteLine($"RequestCompletionsWithFIM 出错: {ex.Message}")
@@ -210,13 +214,15 @@ Public Class AutocompleteService
             requestObj("messages") = messages
             Dim requestBody = requestObj.ToString(Newtonsoft.Json.Formatting.None)
 
-            Using client As New HttpClient()
-                client.Timeout = TimeSpan.FromSeconds(10)
-                client.DefaultRequestHeaders.Add("Authorization", "Bearer " & apiKey)
-                Dim content As New StringContent(requestBody, Encoding.UTF8, "application/json")
-                Dim response = Await client.PostAsync(apiUrl, content)
-                response.EnsureSuccessStatusCode()
-                Dim responseBody = Await response.Content.ReadAsStringAsync()
+            Dim client = HttpClientPool.GetClient(apiUrl)
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
+                request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
+
+                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10))
+                    Using response = Await client.SendAsync(request, timeoutCts.Token)
+                        response.EnsureSuccessStatusCode()
+                        Dim responseBody = Await response.Content.ReadAsStringAsync()
 
                 Dim jObj As JObject = Nothing
                 Try
@@ -264,6 +270,8 @@ Public Class AutocompleteService
                         End If
                     End Try
                 End If
+                    End Using
+                End Using
             End Using
         Catch ex As Exception
             Debug.WriteLine($"RequestCompletionsWithChat 出错: {ex.Message}")

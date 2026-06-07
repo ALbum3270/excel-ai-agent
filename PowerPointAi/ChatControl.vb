@@ -495,58 +495,92 @@ Public Class ChatControl
                 Dim maxSlides As Integer = Math.Min(presentation.Slides.Count, 20)
 
                 For slideIndex As Integer = 1 To maxSlides
-                    Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = presentation.Slides(slideIndex)
-                    contentBuilder.AppendLine($"=== 幻灯片 {slideIndex} ===")
+                    Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                    Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+                    Try
+                        slide = presentation.Slides(slideIndex)
+                        contentBuilder.AppendLine($"=== 幻灯片 {slideIndex} ===")
 
-                    ' 遍历幻灯片中的形状
-                    For Each shape As Microsoft.Office.Interop.PowerPoint.Shape In slide.Shapes
-                        Try
-                            ' 检查是否有文本框架
-                            If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                                If shape.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                                    Dim text As String = shape.TextFrame.TextRange.Text.Trim()
-                                    If Not String.IsNullOrEmpty(text) Then
-                                        ' 判断形状类型
-                                        Dim shapeType As String = "文本"
-                                        If shape.PlaceholderFormat IsNot Nothing Then
-                                            Select Case shape.PlaceholderFormat.Type
-                                                Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle,
-                                                     Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderCenterTitle
-                                                    shapeType = "标题"
-                                                Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle
-                                                    shapeType = "副标题"
-                                                Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody
-                                                    shapeType = "正文"
-                                            End Select
-                                        End If
-                                        contentBuilder.AppendLine($"  [{shapeType}] {text}")
+                        ' 遍历幻灯片中的形状
+                        shapes = slide.Shapes
+                        For shapeIndex As Integer = 1 To shapes.Count
+                            Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                            Try
+                                shape = shapes(shapeIndex)
+
+                                ' 检查是否有文本框架
+                                If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                    If shape.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                        Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                                        Try
+                                            textRange = shape.TextFrame.TextRange
+                                            Dim text As String = textRange.Text.Trim()
+                                            If Not String.IsNullOrEmpty(text) Then
+                                                ' 判断形状类型
+                                                Dim shapeType As String = "文本"
+                                                If shape.PlaceholderFormat IsNot Nothing Then
+                                                    Select Case shape.PlaceholderFormat.Type
+                                                        Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle,
+                                                             Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderCenterTitle
+                                                            shapeType = "标题"
+                                                        Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle
+                                                            shapeType = "副标题"
+                                                        Case Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody
+                                                            shapeType = "正文"
+                                                    End Select
+                                                End If
+                                                contentBuilder.AppendLine($"  [{shapeType}] {text}")
+                                            End If
+                                        Finally
+                                            ComObjectHelper.ReleaseComObject(textRange)
+                                        End Try
                                     End If
                                 End If
-                            End If
 
-                            ' 检查是否是表格
-                            If shape.HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                                Dim table = shape.Table
-                                contentBuilder.AppendLine($"  [表格 {table.Rows.Count}行×{table.Columns.Count}列]")
-                                ' 读取表格内容（限制行数）
-                                Dim maxRows = Math.Min(table.Rows.Count, 10)
-                                For rowIdx = 1 To maxRows
-                                    Dim rowContent As New StringBuilder("    ")
-                                    For colIdx = 1 To table.Columns.Count
-                                        Try
-                                            Dim cellText = table.Cell(rowIdx, colIdx).Shape.TextFrame.TextRange.Text.Trim()
-                                            If cellText.Length > 20 Then cellText = cellText.Substring(0, 17) & "..."
-                                            rowContent.Append(cellText & " | ")
-                                        Catch
-                                        End Try
-                                    Next
-                                    contentBuilder.AppendLine(rowContent.ToString().TrimEnd(" |".ToCharArray()))
-                                Next
-                            End If
-                        Catch shapeEx As Exception
-                            Debug.WriteLine($"处理形状时出错: {shapeEx.Message}")
-                        End Try
-                    Next
+                                ' 检查是否是表格
+                                If shape.HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                    Dim table As Microsoft.Office.Interop.PowerPoint.Table = Nothing
+                                    Try
+                                        table = shape.Table
+                                        contentBuilder.AppendLine($"  [表格 {table.Rows.Count}行×{table.Columns.Count}列]")
+                                        ' 读取表格内容（限制行数）
+                                        Dim maxRows = Math.Min(table.Rows.Count, 10)
+                                        For rowIdx = 1 To maxRows
+                                            Dim rowContent As New StringBuilder("    ")
+                                            For colIdx = 1 To table.Columns.Count
+                                                Dim cell As Microsoft.Office.Interop.PowerPoint.Cell = Nothing
+                                                Dim cellShape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                                                Dim cellTextRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                                                Try
+                                                    cell = table.Cell(rowIdx, colIdx)
+                                                    cellShape = cell.Shape
+                                                    cellTextRange = cellShape.TextFrame.TextRange
+                                                    Dim cellText = cellTextRange.Text.Trim()
+                                                    If cellText.Length > 20 Then cellText = cellText.Substring(0, 17) & "..."
+                                                    rowContent.Append(cellText & " | ")
+                                                Catch
+                                                Finally
+                                                    ComObjectHelper.ReleaseComObject(cellTextRange)
+                                                    ComObjectHelper.ReleaseComObject(cellShape)
+                                                    ComObjectHelper.ReleaseComObject(cell)
+                                                End Try
+                                            Next
+                                            contentBuilder.AppendLine(rowContent.ToString().TrimEnd(" |".ToCharArray()))
+                                        Next
+                                    Finally
+                                        ComObjectHelper.ReleaseComObject(table)
+                                    End Try
+                                End If
+                            Catch shapeEx As Exception
+                                Debug.WriteLine($"处理形状时出错: {shapeEx.Message}")
+                            Finally
+                                ComObjectHelper.ReleaseComObject(shape)
+                            End Try
+                        Next
+                    Finally
+                        ComObjectHelper.ReleaseComObject(shapes)
+                        ComObjectHelper.ReleaseComObject(slide)
+                    End Try
 
                     contentBuilder.AppendLine()
                 Next
@@ -746,62 +780,23 @@ Public Class ChatControl
                     Dim maxSlides = Math.Min(slideRange.Count, 5)
 
                     For i = 1 To maxSlides
-                        Dim slide = slideRange(i)
-                        contentBuilder.AppendLine($"幻灯片 {slide.SlideIndex}:")
+                        Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                        Try
+                            slide = slideRange(i)
+                            contentBuilder.AppendLine($"幻灯片 {slide.SlideIndex}:")
 
-                        ' 获取幻灯片标题
-                        Dim title As String = ""
-                        For Each shape In slide.Shapes
-                            If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                                If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                                    If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                                        title = shape.TextFrame.TextRange.Text.Trim()
-                                        Exit For
-                                    End If
-                                End If
-                            End If
-                        Next
-
-                        If title <> "" Then
-                            contentBuilder.AppendLine($"  标题: {title}")
-                        Else
-                            contentBuilder.AppendLine("  [无标题]")
-                        End If
-
-                        ' 获取幻灯片上的内容
-                        Dim textShapesCount = 0
-
-                        For Each shape In slide.Shapes
-                            ' 跳过标题形状
-                            If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
-                           shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                                Continue For
+                            Dim title = GetSlideTitle(slide)
+                            If title <> "[无标题]" Then
+                                contentBuilder.AppendLine($"  标题: {title}")
+                            Else
+                                contentBuilder.AppendLine("  [无标题]")
                             End If
 
-                            ' 处理文本形状
-                            If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
-                           shape.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
-
-                                textShapesCount += 1
-                                If textShapesCount > 3 Then Continue For ' 每张幻灯片最多处理3个文本框
-
-                                Dim text = shape.TextFrame.TextRange.Text.Trim()
-                                If text.Length > 0 Then
-                                    ' 限制文本长度
-                                    If text.Length > 200 Then
-                                        contentBuilder.AppendLine($"  文本: {text.Substring(0, 200)}...")
-                                    Else
-                                        contentBuilder.AppendLine($"  文本: {text}")
-                                    End If
-                                End If
-                            ElseIf shape.HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                                contentBuilder.AppendLine("  [包含表格]")
-                            ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoPicture Then
-                                contentBuilder.AppendLine("  [包含图片]")
-                            End If
-                        Next
-
-                        contentBuilder.AppendLine("  ---")
+                            contentBuilder.Append(GetSlideContent(slide))
+                            contentBuilder.AppendLine("  ---")
+                        Finally
+                            ComObjectHelper.ReleaseComObject(slide)
+                        End Try
                     Next
 
                     ' 如果有更多幻灯片未显示，添加提示
@@ -1045,25 +1040,54 @@ Public Class ChatControl
     Private Function GetSlideTitle(slide As Microsoft.Office.Interop.PowerPoint.Slide) As String
         Try
             ' 检查幻灯片是否有标题占位符
-            For Each shape In slide.Shapes
-                If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                    If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                        If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                            Return shape.TextFrame.TextRange.Text.Trim()
+            Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+            Try
+                shapes = slide.Shapes
+                For i = 1 To shapes.Count
+                    Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                    Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                    Try
+                        shape = shapes(i)
+                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
+                            If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
+                                If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                                    textRange = shape.TextFrame.TextRange
+                                    Return textRange.Text.Trim()
+                                End If
+                            End If
                         End If
-                    End If
-                End If
-            Next
+                    Finally
+                        ComObjectHelper.ReleaseComObject(textRange)
+                        ComObjectHelper.ReleaseComObject(shape)
+                    End Try
+                Next
+            Finally
+                ComObjectHelper.ReleaseComObject(shapes)
+            End Try
 
             ' 如果没有找到标题占位符，尝试查找任何可能的标题
-            For Each shape In slide.Shapes
-                If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                    Dim text = shape.TextFrame.TextRange.Text.Trim()
-                    If Not String.IsNullOrEmpty(text) AndAlso text.Length < 100 Then
-                        Return text ' 假设第一个简短文本是标题
-                    End If
-                End If
-            Next
+            Try
+                shapes = slide.Shapes
+                For i = 1 To shapes.Count
+                    Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                    Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                    Try
+                        shape = shapes(i)
+                        If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                            textRange = shape.TextFrame.TextRange
+                            Dim text = textRange.Text.Trim()
+                            If Not String.IsNullOrEmpty(text) AndAlso text.Length < 100 Then
+                                Return text ' 假设第一个简短文本是标题
+                            End If
+                        End If
+                    Finally
+                        ComObjectHelper.ReleaseComObject(textRange)
+                        ComObjectHelper.ReleaseComObject(shape)
+                    End Try
+                Next
+            Finally
+                ComObjectHelper.ReleaseComObject(shapes)
+            End Try
 
             Return "[无标题]"
         Catch ex As Exception
@@ -1080,49 +1104,64 @@ Public Class ChatControl
             Dim maxTextShapes As Integer = 5 ' 限制每张幻灯片处理的文本形状数量
 
             ' 处理幻灯片上的形状
-            For Each shape In slide.Shapes
-                ' 跳过标题形状，因为已经单独处理过了
-                If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
-               shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                    Continue For
-                End If
-
-                ' 处理文本形状
-                If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
-               shape.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
-
-                    If processedTextShapes >= maxTextShapes Then
-                        contentBuilder.AppendLine("  [更多文本内容未显示...]")
-                        Exit For
-                    End If
-
-                    Dim text = shape.TextFrame.TextRange.Text.Trim()
-                    If Not String.IsNullOrEmpty(text) Then
-                        ' 限制文本长度
-                        If text.Length > 200 Then
-                            contentBuilder.AppendLine($"  文本: {text.Substring(0, 200)}...")
-                        Else
-                            contentBuilder.AppendLine($"  文本: {text}")
+            Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+            Try
+                shapes = slide.Shapes
+                For i = 1 To shapes.Count
+                    Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                    Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                    Try
+                        shape = shapes(i)
+                        ' 跳过标题形状，因为已经单独处理过了
+                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
+                       shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
+                            Continue For
                         End If
-                        processedTextShapes += 1
-                    End If
-                    ' 处理表格形状
-                ElseIf shape.HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                    contentBuilder.AppendLine("  [包含表格]")
-                    ' 处理图片形状
-                ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoPicture Then
-                    contentBuilder.AppendLine("  [包含图片]")
-                    If shape.AlternativeText <> "" Then
-                        contentBuilder.AppendLine($"  图片说明: {shape.AlternativeText}")
-                    End If
-                    ' 处理图表形状
-                ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoChart Then
-                    contentBuilder.AppendLine("  [包含图表]")
-                    ' 处理SmartArt形状
-                ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoSmartArt Then
-                    contentBuilder.AppendLine("  [包含SmartArt图形]")
-                End If
-            Next
+
+                        ' 处理文本形状
+                        If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue AndAlso
+                       shape.TextFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
+
+                            If processedTextShapes >= maxTextShapes Then
+                                contentBuilder.AppendLine("  [更多文本内容未显示...]")
+                                Exit For
+                            End If
+
+                            textRange = shape.TextFrame.TextRange
+                            Dim text = textRange.Text.Trim()
+                            If Not String.IsNullOrEmpty(text) Then
+                                ' 限制文本长度
+                                If text.Length > 200 Then
+                                    contentBuilder.AppendLine($"  文本: {text.Substring(0, 200)}...")
+                                Else
+                                    contentBuilder.AppendLine($"  文本: {text}")
+                                End If
+                                processedTextShapes += 1
+                            End If
+                            ' 处理表格形状
+                        ElseIf shape.HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                            contentBuilder.AppendLine("  [包含表格]")
+                            ' 处理图片形状
+                        ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoPicture Then
+                            contentBuilder.AppendLine("  [包含图片]")
+                            If shape.AlternativeText <> "" Then
+                                contentBuilder.AppendLine($"  图片说明: {shape.AlternativeText}")
+                            End If
+                            ' 处理图表形状
+                        ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoChart Then
+                            contentBuilder.AppendLine("  [包含图表]")
+                            ' 处理SmartArt形状
+                        ElseIf shape.Type = Microsoft.Office.Core.MsoShapeType.msoSmartArt Then
+                            contentBuilder.AppendLine("  [包含SmartArt图形]")
+                        End If
+                    Finally
+                        ComObjectHelper.ReleaseComObject(textRange)
+                        ComObjectHelper.ReleaseComObject(shape)
+                    End Try
+                Next
+            Finally
+                ComObjectHelper.ReleaseComObject(shapes)
+            End Try
 
             ' 如果没有找到任何内容
             If contentBuilder.Length = 0 Then
@@ -1588,27 +1627,19 @@ Public Class ChatControl
             End If
 
             ' 添加幻灯片 (使用标题和内容布局 ppLayoutTitleOnly = 11)
-            Dim slide = pres.Slides.Add(slideIndex, 11)
+            Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+            Try
+                slide = pres.Slides.Add(slideIndex, 11)
 
-            ' 设置标题
-            If Not String.IsNullOrEmpty(title) Then
-                For Each shape In slide.Shapes
-                    If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                        If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                            shape.TextFrame.TextRange.Text = title
-                            Exit For
-                        End If
-                    End If
-                Next
-            End If
+                TrySetPlaceholderText(slide, title, Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle)
 
-            ' 如果有内容，添加文本框
-            If Not String.IsNullOrEmpty(content) Then
-                Dim textBox = slide.Shapes.AddTextbox(
-                    Microsoft.Office.Core.MsoTextOrientation.msoTextOrientationHorizontal,
-                    50, 150, 600, 300)
-                textBox.TextFrame.TextRange.Text = content
-            End If
+                ' 如果有内容，添加文本框
+                If Not String.IsNullOrEmpty(content) Then
+                    AddTextBoxToSlide(slide, content, 50, 150, 600, 300)
+                End If
+            Finally
+                ComObjectHelper.ReleaseComObject(slide)
+            End Try
 
             Return True
         Catch ex As Exception
@@ -1771,43 +1802,28 @@ Public Class ChatControl
 
                 ' 根据layout选择布局类型
                 Dim layoutType As Integer = GetLayoutType(layout)
-                Dim slide = pres.Slides.Add(startIndex + i, layoutType)
+                Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                Try
+                    slide = pres.Slides.Add(startIndex + i, layoutType)
 
-                ' 填充标题
-                If Not String.IsNullOrEmpty(title) Then
-                    For Each shape In slide.Shapes
-                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                            If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                                shape.TextFrame.TextRange.Text = title
-                                Exit For
-                            End If
+                    TrySetPlaceholderText(slide, title, Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle)
+
+                    ' 填充内容
+                    If Not String.IsNullOrEmpty(content) Then
+                        Dim contentFilled = TrySetPlaceholderText(
+                            slide,
+                            content,
+                            Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody,
+                            Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle)
+
+                        ' 如果没有内容占位符，添加文本框
+                        If Not contentFilled Then
+                            AddTextBoxToSlide(slide, content, 50, 150, 620, 350, 18)
                         End If
-                    Next
-                End If
-
-                ' 填充内容
-                If Not String.IsNullOrEmpty(content) Then
-                    Dim contentFilled = False
-                    For Each shape In slide.Shapes
-                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                            If shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody OrElse
-                               shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle Then
-                                shape.TextFrame.TextRange.Text = content
-                                contentFilled = True
-                                Exit For
-                            End If
-                        End If
-                    Next
-
-                    ' 如果没有内容占位符，添加文本框
-                    If Not contentFilled Then
-                        Dim textBox = slide.Shapes.AddTextbox(
-                            Microsoft.Office.Core.MsoTextOrientation.msoTextOrientationHorizontal,
-                            50, 150, 620, 350)
-                        textBox.TextFrame.TextRange.Text = content
-                        textBox.TextFrame.TextRange.Font.Size = 18
                     End If
-                End If
+                Finally
+                    ComObjectHelper.ReleaseComObject(slide)
+                End Try
             Next
 
             ShareRibbon.GlobalStatusStrip.ShowInfo($"成功创建 {slidesArray.Count} 张幻灯片")
@@ -1818,6 +1834,70 @@ Public Class ChatControl
             Return False
         End Try
     End Function
+
+    Private Function TrySetPlaceholderText(
+        slide As Microsoft.Office.Interop.PowerPoint.Slide,
+        text As String,
+        ParamArray placeholderTypes() As Microsoft.Office.Interop.PowerPoint.PpPlaceholderType) As Boolean
+
+        If slide Is Nothing OrElse String.IsNullOrEmpty(text) Then Return False
+
+        Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+        Try
+            shapes = slide.Shapes
+            For i = 1 To shapes.Count
+                Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                Try
+                    shape = shapes(i)
+                    If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
+                        Dim placeholderType = shape.PlaceholderFormat.Type
+                        If placeholderTypes.Contains(placeholderType) Then
+                            textRange = shape.TextFrame.TextRange
+                            textRange.Text = text
+                            Return True
+                        End If
+                    End If
+                Finally
+                    ComObjectHelper.ReleaseComObject(textRange)
+                    ComObjectHelper.ReleaseComObject(shape)
+                End Try
+            Next
+        Finally
+            ComObjectHelper.ReleaseComObject(shapes)
+        End Try
+
+        Return False
+    End Function
+
+    Private Sub AddTextBoxToSlide(
+        slide As Microsoft.Office.Interop.PowerPoint.Slide,
+        text As String,
+        x As Single,
+        y As Single,
+        width As Single,
+        height As Single,
+        Optional fontSize As Single = 0)
+
+        Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+        Dim textBox As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+        Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+        Try
+            shapes = slide.Shapes
+            textBox = shapes.AddTextbox(
+                Microsoft.Office.Core.MsoTextOrientation.msoTextOrientationHorizontal,
+                x, y, width, height)
+            textRange = textBox.TextFrame.TextRange
+            textRange.Text = text
+            If fontSize > 0 Then
+                textRange.Font.Size = fontSize
+            End If
+        Finally
+            ComObjectHelper.ReleaseComObject(textRange)
+            ComObjectHelper.ReleaseComObject(textBox)
+            ComObjectHelper.ReleaseComObject(shapes)
+        End Try
+    End Sub
 
     ''' <summary>
     ''' 获取布局类型
@@ -1848,42 +1928,63 @@ Public Class ChatControl
             Dim effect = If(params("effect")?.ToString(), "fadeIn")
             Dim targetShapes = If(params("targetShapes")?.ToString(), "all")
 
-            Dim slide As Object
-            If slideIndex < 0 Then
-                slide = Globals.ThisAddIn.Application.ActiveWindow.View.Slide
-            Else
-                slide = pres.Slides(Math.Min(slideIndex + 1, pres.Slides.Count))
-            End If
-
-            Dim timeline = slide.TimeLine
             Dim msoEffect = GetMsoAnimEffect(effect)
-
-            For Each shape In slide.Shapes
-                Dim shouldAnimate = False
-
-                If targetShapes.ToLower() = "all" Then
-                    shouldAnimate = True
-                ElseIf targetShapes.ToLower() = "title" Then
-                    If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
-                       shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
-                        shouldAnimate = True
-                    End If
-                ElseIf targetShapes.ToLower() = "content" Then
-                    If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
-                       (shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody OrElse
-                        shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle) Then
-                        shouldAnimate = True
-                    End If
+            Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+            Dim timeline As Microsoft.Office.Interop.PowerPoint.TimeLine = Nothing
+            Dim sequence As Microsoft.Office.Interop.PowerPoint.Sequence = Nothing
+            Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+            Try
+                If slideIndex < 0 Then
+                    slide = Globals.ThisAddIn.Application.ActiveWindow.View.Slide
+                Else
+                    slide = pres.Slides(Math.Min(slideIndex + 1, pres.Slides.Count))
                 End If
 
-                If shouldAnimate AndAlso shape.HasTextFrame Then
+                timeline = slide.TimeLine
+                sequence = timeline.MainSequence
+                shapes = slide.Shapes
+
+                For i = 1 To shapes.Count
+                    Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
                     Try
-                        timeline.MainSequence.AddEffect(shape, msoEffect)
-                    Catch
-                        ' 某些形状可能不支持动画
+                        shape = shapes(i)
+                        Dim shouldAnimate = False
+
+                        If targetShapes.ToLower() = "all" Then
+                            shouldAnimate = True
+                        ElseIf targetShapes.ToLower() = "title" Then
+                            If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
+                               shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle Then
+                                shouldAnimate = True
+                            End If
+                        ElseIf targetShapes.ToLower() = "content" Then
+                            If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder AndAlso
+                               (shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderBody OrElse
+                                shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderSubtitle) Then
+                                shouldAnimate = True
+                            End If
+                        End If
+
+                        If shouldAnimate AndAlso shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                            Dim animationEffect As Microsoft.Office.Interop.PowerPoint.Effect = Nothing
+                            Try
+                                animationEffect = sequence.AddEffect(shape, msoEffect)
+                            Catch
+                                ' 某些形状可能不支持动画
+                            Finally
+                                ComObjectHelper.ReleaseComObject(animationEffect)
+                            End Try
+                        End If
+                    Finally
+                        ComObjectHelper.ReleaseComObject(shape)
                     End Try
-                End If
-            Next
+                Next
+            Finally
+                ComObjectHelper.ReleaseComObject(shapes)
+                ComObjectHelper.ReleaseComObject(sequence)
+                ComObjectHelper.ReleaseComObject(timeline)
+                ComObjectHelper.ReleaseComObject(slide)
+            End Try
 
             Return True
 
@@ -1926,22 +2027,46 @@ Public Class ChatControl
 
             Dim transEffect = GetTransitionEffect(transType)
 
-            Dim slidesToProcess As New List(Of Object)()
+            Dim processedCount As Integer = 0
             If scope.ToLower() = "all" Then
-                For Each slide In pres.Slides
-                    slidesToProcess.Add(slide)
-                Next
+                Dim slides As Microsoft.Office.Interop.PowerPoint.Slides = Nothing
+                Try
+                    slides = pres.Slides
+                    For i = 1 To slides.Count
+                        Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                        Dim transition As Microsoft.Office.Interop.PowerPoint.SlideShowTransition = Nothing
+                        Try
+                            slide = slides(i)
+                            transition = slide.SlideShowTransition
+                            transition.EntryEffect = transEffect
+                            transition.Duration = duration
+                            transition.AdvanceOnClick = True
+                            processedCount += 1
+                        Finally
+                            ComObjectHelper.ReleaseComObject(transition)
+                            ComObjectHelper.ReleaseComObject(slide)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(slides)
+                End Try
             Else
-                slidesToProcess.Add(Globals.ThisAddIn.Application.ActiveWindow.View.Slide)
+                Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                Dim transition As Microsoft.Office.Interop.PowerPoint.SlideShowTransition = Nothing
+                Try
+                    slide = Globals.ThisAddIn.Application.ActiveWindow.View.Slide
+                    transition = slide.SlideShowTransition
+                    transition.EntryEffect = transEffect
+                    transition.Duration = duration
+                    transition.AdvanceOnClick = True
+                    processedCount = 1
+                Finally
+                    ComObjectHelper.ReleaseComObject(transition)
+                    ComObjectHelper.ReleaseComObject(slide)
+                End Try
             End If
 
-            For Each slide In slidesToProcess
-                slide.SlideShowTransition.EntryEffect = transEffect
-                slide.SlideShowTransition.Duration = duration
-                slide.SlideShowTransition.AdvanceOnClick = True
-            Next
-
-            ShareRibbon.GlobalStatusStrip.ShowInfo($"已为 {slidesToProcess.Count} 张幻灯片应用切换效果")
+            ShareRibbon.GlobalStatusStrip.ShowInfo($"已为 {processedCount} 张幻灯片应用切换效果")
             Return True
 
         Catch ex As Exception
@@ -1980,45 +2105,36 @@ Public Class ChatControl
             Dim scope = If(params("scope")?.ToString(), "all")
             Dim theme = params("theme")
 
-            Dim slidesToProcess As New List(Of Object)()
+            Dim processedCount As Integer = 0
             If scope.ToLower() = "all" Then
-                For Each slide In pres.Slides
-                    slidesToProcess.Add(slide)
-                Next
+                Dim slides As Microsoft.Office.Interop.PowerPoint.Slides = Nothing
+                Try
+                    slides = pres.Slides
+                    For i = 1 To slides.Count
+                        Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                        Try
+                            slide = slides(i)
+                            BeautifySingleSlide(slide, theme)
+                            processedCount += 1
+                        Finally
+                            ComObjectHelper.ReleaseComObject(slide)
+                        End Try
+                    Next
+                Finally
+                    ComObjectHelper.ReleaseComObject(slides)
+                End Try
             Else
-                slidesToProcess.Add(Globals.ThisAddIn.Application.ActiveWindow.View.Slide)
+                Dim slide As Microsoft.Office.Interop.PowerPoint.Slide = Nothing
+                Try
+                    slide = Globals.ThisAddIn.Application.ActiveWindow.View.Slide
+                    BeautifySingleSlide(slide, theme)
+                    processedCount = 1
+                Finally
+                    ComObjectHelper.ReleaseComObject(slide)
+                End Try
             End If
 
-            For Each slide In slidesToProcess
-                ' 应用背景色
-                If theme IsNot Nothing AndAlso theme("background") IsNot Nothing Then
-                    Try
-                        Dim bgColor = theme("background").ToString()
-                        Dim color = System.Drawing.ColorTranslator.FromHtml(bgColor)
-                        slide.FollowMasterBackground = False
-                        slide.Background.Fill.Solid()
-                        slide.Background.Fill.ForeColor.RGB = System.Drawing.ColorTranslator.ToOle(color)
-                    Catch
-                    End Try
-                End If
-
-                ' 应用字体样式
-                For Each shape In slide.Shapes
-                    If shape.HasTextFrame Then
-                        Dim isTitle = False
-                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
-                            isTitle = (shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle)
-                        End If
-
-                        Dim fontTheme = If(isTitle, theme?("titleFont"), theme?("bodyFont"))
-                        If fontTheme IsNot Nothing Then
-                            ApplyFontStyle(shape.TextFrame.TextRange, fontTheme)
-                        End If
-                    End If
-                Next
-            Next
-
-            ShareRibbon.GlobalStatusStrip.ShowInfo($"已美化 {slidesToProcess.Count} 张幻灯片")
+            ShareRibbon.GlobalStatusStrip.ShowInfo($"已美化 {processedCount} 张幻灯片")
             Return True
 
         Catch ex As Exception
@@ -2026,6 +2142,52 @@ Public Class ChatControl
             Return False
         End Try
     End Function
+
+    Private Sub BeautifySingleSlide(slide As Microsoft.Office.Interop.PowerPoint.Slide, theme As JToken)
+        If slide Is Nothing Then Return
+
+        ' 应用背景色
+        If theme IsNot Nothing AndAlso theme("background") IsNot Nothing Then
+            Try
+                Dim bgColor = theme("background").ToString()
+                Dim color = System.Drawing.ColorTranslator.FromHtml(bgColor)
+                slide.FollowMasterBackground = False
+                slide.Background.Fill.Solid()
+                slide.Background.Fill.ForeColor.RGB = System.Drawing.ColorTranslator.ToOle(color)
+            Catch
+            End Try
+        End If
+
+        ' 应用字体样式
+        Dim shapes As Microsoft.Office.Interop.PowerPoint.Shapes = Nothing
+        Try
+            shapes = slide.Shapes
+            For i = 1 To shapes.Count
+                Dim shape As Microsoft.Office.Interop.PowerPoint.Shape = Nothing
+                Dim textRange As Microsoft.Office.Interop.PowerPoint.TextRange = Nothing
+                Try
+                    shape = shapes(i)
+                    If shape.HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
+                        Dim isTitle = False
+                        If shape.Type = Microsoft.Office.Core.MsoShapeType.msoPlaceholder Then
+                            isTitle = (shape.PlaceholderFormat.Type = Microsoft.Office.Interop.PowerPoint.PpPlaceholderType.ppPlaceholderTitle)
+                        End If
+
+                        Dim fontTheme = If(isTitle, theme?("titleFont"), theme?("bodyFont"))
+                        If fontTheme IsNot Nothing Then
+                            textRange = shape.TextFrame.TextRange
+                            ApplyFontStyle(textRange, fontTheme)
+                        End If
+                    End If
+                Finally
+                    ComObjectHelper.ReleaseComObject(textRange)
+                    ComObjectHelper.ReleaseComObject(shape)
+                End Try
+            Next
+        Finally
+            ComObjectHelper.ReleaseComObject(shapes)
+        End Try
+    End Sub
 
     ''' <summary>
     ''' 应用字体样式
