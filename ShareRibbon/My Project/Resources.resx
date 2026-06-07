@@ -160,6 +160,9 @@
   <data name="styles" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\css\styles.css;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>
+  <data name="office_ai_bridge" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\js\office-ai-bridge.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
   <data name="utils" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\utils.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>

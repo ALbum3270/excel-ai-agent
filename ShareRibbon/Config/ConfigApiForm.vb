@@ -38,6 +38,8 @@ Public Class ConfigApiForm
     Private cloudApiKeyTextBox As TextBox
     Private cloudGetApiKeyButton As Button
     Private cloudChatModelCheckedListBox As CheckedListBox
+    Private cloudReasoningModeComboBox As ComboBox
+    Private cloudReasoningTipLabel As Label
     Private cloudRefreshModelsButton As Button
     Private cloudAddModelButton As Button
     Private cloudTranslateCheckBox As CheckBox
@@ -51,6 +53,8 @@ Public Class ConfigApiForm
     Private localApiKeyTextBox As TextBox
     Private localDefaultKeyLabel As Label
     Private localChatModelCheckedListBox As CheckedListBox
+    Private localReasoningModeComboBox As ComboBox
+    Private localReasoningTipLabel As Label
     Private localRefreshModelsButton As Button
     Private localAddModelButton As Button
     Private localTranslateCheckBox As CheckBox
@@ -74,6 +78,7 @@ Public Class ConfigApiForm
     Private currentCloudConfig As ConfigItem
     Private currentLocalConfig As ConfigItem
     Private _applicationInfo As ApplicationInfo
+    Private _updatingReasoningControls As Boolean = False
 
     Public Sub New(appInfo As ApplicationInfo)
         _applicationInfo = appInfo
@@ -223,8 +228,31 @@ Public Class ConfigApiForm
         cloudChatModelCheckedListBox.Size = New Size(285, 180)
         cloudChatModelCheckedListBox.CheckOnClick = True
         AddHandler cloudChatModelCheckedListBox.ItemCheck, AddressOf CloudChatModelCheckedListBox_ItemCheck
+        AddHandler cloudChatModelCheckedListBox.SelectedIndexChanged, AddressOf CloudChatModelCheckedListBox_SelectedIndexChanged
         AddHandler cloudChatModelCheckedListBox.MouseDown, AddressOf CloudModelList_MouseDown
         cloudTab.Controls.Add(cloudChatModelCheckedListBox)
+
+        Dim cloudReasoningLabel As New Label()
+        cloudReasoningLabel.Text = "推理设置："
+        cloudReasoningLabel.Location = New Point(rightX + 310, 175)
+        cloudReasoningLabel.AutoSize = True
+        cloudTab.Controls.Add(cloudReasoningLabel)
+
+        cloudReasoningModeComboBox = New ComboBox()
+        cloudReasoningModeComboBox.Location = New Point(rightX + 310, 200)
+        cloudReasoningModeComboBox.Size = New Size(265, 25)
+        cloudReasoningModeComboBox.DropDownStyle = ComboBoxStyle.DropDownList
+        cloudReasoningModeComboBox.Items.AddRange(New Object() {"默认（不传参数）", "开启推理", "关闭推理"})
+        AddHandler cloudReasoningModeComboBox.SelectedIndexChanged, AddressOf CloudReasoningModeComboBox_SelectedIndexChanged
+        cloudTab.Controls.Add(cloudReasoningModeComboBox)
+
+        cloudReasoningTipLabel = New Label()
+        cloudReasoningTipLabel.Text = "选择模型后设置。开启/关闭会在请求中发送 enable_thinking。"
+        cloudReasoningTipLabel.Location = New Point(rightX + 310, 232)
+        cloudReasoningTipLabel.Size = New Size(265, 55)
+        cloudReasoningTipLabel.ForeColor = Color.Gray
+        cloudReasoningTipLabel.Font = New Font(Me.Font.FontFamily, 8)
+        cloudTab.Controls.Add(cloudReasoningTipLabel)
 
         ' 刷新模型按钮（对话模型标题右侧，与标题同行）
         cloudRefreshModelsButton = New Button()
@@ -361,8 +389,31 @@ Public Class ConfigApiForm
         localChatModelCheckedListBox.Size = New Size(285, 130)
         localChatModelCheckedListBox.CheckOnClick = True
         AddHandler localChatModelCheckedListBox.ItemCheck, AddressOf LocalChatModelCheckedListBox_ItemCheck
+        AddHandler localChatModelCheckedListBox.SelectedIndexChanged, AddressOf LocalChatModelCheckedListBox_SelectedIndexChanged
         AddHandler localChatModelCheckedListBox.MouseDown, AddressOf LocalModelList_MouseDown
         localTab.Controls.Add(localChatModelCheckedListBox)
+
+        Dim localReasoningLabel As New Label()
+        localReasoningLabel.Text = "推理设置："
+        localReasoningLabel.Location = New Point(rightX + 310, 220)
+        localReasoningLabel.AutoSize = True
+        localTab.Controls.Add(localReasoningLabel)
+
+        localReasoningModeComboBox = New ComboBox()
+        localReasoningModeComboBox.Location = New Point(rightX + 310, 245)
+        localReasoningModeComboBox.Size = New Size(265, 25)
+        localReasoningModeComboBox.DropDownStyle = ComboBoxStyle.DropDownList
+        localReasoningModeComboBox.Items.AddRange(New Object() {"默认（不传参数）", "开启推理", "关闭推理"})
+        AddHandler localReasoningModeComboBox.SelectedIndexChanged, AddressOf LocalReasoningModeComboBox_SelectedIndexChanged
+        localTab.Controls.Add(localReasoningModeComboBox)
+
+        localReasoningTipLabel = New Label()
+        localReasoningTipLabel.Text = "选择模型后设置。开启/关闭会在请求中发送 enable_thinking。"
+        localReasoningTipLabel.Location = New Point(rightX + 310, 277)
+        localReasoningTipLabel.Size = New Size(265, 55)
+        localReasoningTipLabel.ForeColor = Color.Gray
+        localReasoningTipLabel.Font = New Font(Me.Font.FontFamily, 8)
+        localTab.Controls.Add(localReasoningTipLabel)
 
         ' 刷新模型按钮（对话模型标题右侧，与标题同行）
         localRefreshModelsButton = New Button()
@@ -448,14 +499,13 @@ Public Class ConfigApiForm
             ' 一次性处理：移除 handler 避免重复触发
             RemoveHandler mainTabControl.SelectedIndexChanged, AddressOf SkillsTab_SelectedIndexChanged
 
-            ' 延迟到消息循环，确保所有布局完成
-            Me.BeginInvoke(Sub()
-                               Try
-                                   AdjustRightSplitAfterHandle(skillsRightSplit)
-                               Catch ex As Exception
-                                   ' 忽略单次异常
-                               End Try
-                           End Sub)
+            RunAfterHandleCreated(Me,
+                Sub()
+                    Try
+                        AdjustRightSplitAfterHandle(skillsRightSplit)
+                    Catch ex As Exception
+                    End Try
+                End Sub)
         End If
     End Sub
 
@@ -754,6 +804,30 @@ Public Class ConfigApiForm
     ''' </summary>
     Private Async Sub InitializeSkillsWebView2()
         Try
+            If skillsWebView2.InvokeRequired Then
+                Await UiDispatcher.InvokeAsync(skillsWebView2,
+                    Async Function()
+                        Await InitializeSkillsWebView2Async()
+                    End Function)
+                Return
+            End If
+
+            Await InitializeSkillsWebView2Async()
+        Catch ex As Exception
+            Debug.WriteLine($"WebView2初始化失败: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Async Function InitializeSkillsWebView2Async() As Task
+        If skillsWebView2.InvokeRequired Then
+            Await UiDispatcher.InvokeAsync(skillsWebView2,
+                Async Function()
+                    Await InitializeSkillsWebView2Async()
+                End Function)
+            Return
+        End If
+
+        Try
             Dim userDataFolder As String = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 ConfigSettings.OfficeAiAppDataFolder,
@@ -774,7 +848,7 @@ Public Class ConfigApiForm
         Catch ex As Exception
             Debug.WriteLine($"WebView2初始化失败: {ex.Message}")
         End Try
-    End Sub
+    End Function
     ''' <summary>
     ''' 加载数据到UI
     ''' </summary>
@@ -1152,6 +1226,7 @@ Public Class ConfigApiForm
         cloudTranslateCheckBox.Checked = currentCloudConfig.translateSelected
 
         RefreshCloudModelLists()
+        UpdateCloudReasoningControls()
 
         cloudDeleteButton.Enabled = Not isPreset
     End Sub
@@ -1167,6 +1242,9 @@ Public Class ConfigApiForm
                 cloudChatModelCheckedListBox.Items.Add(model, model.selected)
             End If
         Next
+
+        SelectCheckedModel(cloudChatModelCheckedListBox)
+        UpdateCloudReasoningControls()
     End Sub
 
     Private Sub CloudApiKeyTextBox_Enter(sender As Object, e As EventArgs)
@@ -1251,6 +1329,18 @@ Public Class ConfigApiForm
                 End If
             Next
         End If
+        RunAfterHandleCreated(cloudChatModelCheckedListBox, Sub() UpdateCloudReasoningControls())
+    End Sub
+
+    Private Sub CloudChatModelCheckedListBox_SelectedIndexChanged(sender As Object, e As EventArgs)
+        UpdateCloudReasoningControls()
+    End Sub
+
+    Private Sub CloudReasoningModeComboBox_SelectedIndexChanged(sender As Object, e As EventArgs)
+        If _updatingReasoningControls Then Return
+        Dim model = TryCast(cloudChatModelCheckedListBox.SelectedItem, ConfigItemModel)
+        If model Is Nothing Then Return
+        model.reasoningMode = ComboIndexToReasoningMode(cloudReasoningModeComboBox.SelectedIndex)
     End Sub
 
     Private Async Sub CloudSaveButton_Click(sender As Object, e As EventArgs)
@@ -1307,7 +1397,9 @@ Public Class ConfigApiForm
         currentCloudConfig.key = apiKey
 
         Try
-            Dim validationResult = Await ValidateApiAsync(apiUrl, apiKey, selectedChatModelName)
+            Dim selectedChatModel = currentCloudConfig.model.FirstOrDefault(Function(m) m.modelName = selectedChatModelName)
+            Dim selectedReasoningMode = If(selectedChatModel Is Nothing, ReasoningRequestHelper.ReasoningDefault, selectedChatModel.reasoningMode)
+            Dim validationResult = Await ValidateApiAsync(apiUrl, apiKey, selectedChatModelName, selectedReasoningMode, platformName)
             If validationResult Then
                 currentCloudConfig.platform = platformName
                 currentCloudConfig.url = apiUrl
@@ -1333,9 +1425,11 @@ Public Class ConfigApiForm
                 ConfigSettings.platform = currentCloudConfig.platform
                 ConfigSettings.ModelName = selectedChatModelName
 
-                Dim selectedChatModel = currentCloudConfig.model.FirstOrDefault(Function(m) m.modelName = selectedChatModelName)
                 If selectedChatModel IsNot Nothing Then
                     ConfigSettings.mcpable = selectedChatModel.mcpable
+                    ConfigSettings.fimSupported = selectedChatModel.fimSupported
+                    ConfigSettings.fimUrl = If(String.IsNullOrEmpty(selectedChatModel.fimUrl), currentCloudConfig.url, selectedChatModel.fimUrl)
+                    ConfigSettings.ReasoningMode = selectedChatModel.reasoningMode
                 End If
 
                 SaveConfig()
@@ -1470,6 +1564,7 @@ Public Class ConfigApiForm
         localTranslateCheckBox.Checked = currentLocalConfig.translateSelected
 
         RefreshLocalModelLists()
+        UpdateLocalReasoningControls()
 
         localDeleteButton.Enabled = Not currentLocalConfig.isPreset
         localPlatformTextBox.ReadOnly = currentLocalConfig.isPreset
@@ -1486,6 +1581,9 @@ Public Class ConfigApiForm
                 localChatModelCheckedListBox.Items.Add(model, model.selected)
             End If
         Next
+
+        SelectCheckedModel(localChatModelCheckedListBox)
+        UpdateLocalReasoningControls()
     End Sub
 
     Private Async Sub LocalRefreshModelsButton_Click(sender As Object, e As EventArgs)
@@ -1546,6 +1644,18 @@ Public Class ConfigApiForm
                 End If
             Next
         End If
+        RunAfterHandleCreated(localChatModelCheckedListBox, Sub() UpdateLocalReasoningControls())
+    End Sub
+
+    Private Sub LocalChatModelCheckedListBox_SelectedIndexChanged(sender As Object, e As EventArgs)
+        UpdateLocalReasoningControls()
+    End Sub
+
+    Private Sub LocalReasoningModeComboBox_SelectedIndexChanged(sender As Object, e As EventArgs)
+        If _updatingReasoningControls Then Return
+        Dim model = TryCast(localChatModelCheckedListBox.SelectedItem, ConfigItemModel)
+        If model Is Nothing Then Return
+        model.reasoningMode = ComboIndexToReasoningMode(localReasoningModeComboBox.SelectedIndex)
     End Sub
 
     Private Async Sub LocalSaveButton_Click(sender As Object, e As EventArgs)
@@ -1591,7 +1701,9 @@ Public Class ConfigApiForm
         currentLocalConfig.key = apiKey
 
         Try
-            Dim validationResult = Await ValidateApiAsync(apiUrl, apiKey, selectedChatModelName)
+            Dim selectedChatModel = currentLocalConfig.model.FirstOrDefault(Function(m) m.modelName = selectedChatModelName)
+            Dim selectedReasoningMode = If(selectedChatModel Is Nothing, ReasoningRequestHelper.ReasoningDefault, selectedChatModel.reasoningMode)
+            Dim validationResult = Await ValidateApiAsync(apiUrl, apiKey, selectedChatModelName, selectedReasoningMode, platformName)
             If validationResult Then
                 currentLocalConfig.validated = True
                 currentLocalConfig.translateSelected = localTranslateCheckBox.Checked
@@ -1614,9 +1726,11 @@ Public Class ConfigApiForm
                 ConfigSettings.platform = currentLocalConfig.platform
                 ConfigSettings.ModelName = selectedChatModelName
 
-                Dim selectedChatModel = currentLocalConfig.model.FirstOrDefault(Function(m) m.modelName = selectedChatModelName)
                 If selectedChatModel IsNot Nothing Then
                     ConfigSettings.mcpable = selectedChatModel.mcpable
+                    ConfigSettings.fimSupported = selectedChatModel.fimSupported
+                    ConfigSettings.fimUrl = If(String.IsNullOrEmpty(selectedChatModel.fimUrl), currentLocalConfig.url, selectedChatModel.fimUrl)
+                    ConfigSettings.ReasoningMode = selectedChatModel.reasoningMode
                 End If
 
                 SaveConfig()
@@ -1700,7 +1814,83 @@ Public Class ConfigApiForm
 
 #Region "辅助方法"
 
-    Private Async Function ValidateApiAsync(apiUrl As String, apiKey As String, modelName As String) As Task(Of Boolean)
+    Private Async Sub RunAfterHandleCreated(control As Control, action As Action)
+        If action Is Nothing Then Return
+
+        Try
+            Await UiDispatcher.InvokeAsync(control, action)
+        Catch ex As Exception
+            Debug.WriteLine($"[ConfigApiForm] UI dispatch failed: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub SelectCheckedModel(list As CheckedListBox)
+        If list Is Nothing OrElse list.Items.Count = 0 Then Return
+
+        For i = 0 To list.Items.Count - 1
+            If list.GetItemChecked(i) Then
+                list.SelectedIndex = i
+                Return
+            End If
+        Next
+
+        list.SelectedIndex = 0
+    End Sub
+
+    Private Function ComboIndexToReasoningMode(index As Integer) As String
+        Select Case index
+            Case 1
+                Return ReasoningRequestHelper.ReasoningEnabled
+            Case 2
+                Return ReasoningRequestHelper.ReasoningDisabled
+            Case Else
+                Return ReasoningRequestHelper.ReasoningDefault
+        End Select
+    End Function
+
+    Private Function ReasoningModeToComboIndex(mode As String) As Integer
+        Select Case ReasoningRequestHelper.NormalizeReasoningMode(mode)
+            Case ReasoningRequestHelper.ReasoningEnabled
+                Return 1
+            Case ReasoningRequestHelper.ReasoningDisabled
+                Return 2
+            Case Else
+                Return 0
+        End Select
+    End Function
+
+    Private Sub UpdateCloudReasoningControls()
+        UpdateReasoningControls(cloudChatModelCheckedListBox, cloudReasoningModeComboBox, cloudReasoningTipLabel)
+    End Sub
+
+    Private Sub UpdateLocalReasoningControls()
+        UpdateReasoningControls(localChatModelCheckedListBox, localReasoningModeComboBox, localReasoningTipLabel)
+    End Sub
+
+    Private Sub UpdateReasoningControls(list As CheckedListBox, combo As ComboBox, tipLabel As Label)
+        If combo Is Nothing Then Return
+
+        Dim model = If(list Is Nothing, Nothing, TryCast(list.SelectedItem, ConfigItemModel))
+        _updatingReasoningControls = True
+        Try
+            combo.Enabled = (model IsNot Nothing)
+            combo.SelectedIndex = If(model Is Nothing, 0, ReasoningModeToComboIndex(model.reasoningMode))
+
+            If tipLabel IsNot Nothing Then
+                If model Is Nothing Then
+                    tipLabel.Text = "选择模型后设置。开启/关闭会在请求中发送 enable_thinking。"
+                ElseIf model.isReasoningModel Then
+                    tipLabel.Text = "该模型标记为推理模型。默认不附加参数；开启/关闭会发送 enable_thinking。"
+                Else
+                    tipLabel.Text = "适用于支持 enable_thinking 的模型。默认不附加参数。"
+                End If
+            End If
+        Finally
+            _updatingReasoningControls = False
+        End Try
+    End Sub
+
+    Private Async Function ValidateApiAsync(apiUrl As String, apiKey As String, modelName As String, Optional reasoningMode As String = Nothing, Optional platformName As String = Nothing) As Task(Of Boolean)
         Try
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
             Using client As New HttpClient()
@@ -1718,6 +1908,7 @@ Public Class ConfigApiForm
                     }},
                     {"max_tokens", 5}
                 }
+                ReasoningRequestHelper.ApplyReasoningOptions(requestBody, reasoningMode, modelName, platformName, apiUrl)
 
                 Dim content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
                 Dim response = Await client.PostAsync(apiUrl, content)
@@ -1819,59 +2010,59 @@ Public Class ConfigApiForm
     ''' 初始化记忆管理Tab - 左右布局
     ''' </summary>
     Private Sub InitializeMemoryTab()
-    ' 可拖拽分隔的左右布局
-    _memorySplitContainer = New SplitContainer() With {
+        ' 可拖拽分隔的左右布局
+        _memorySplitContainer = New SplitContainer() With {
             .Location = New Point(10, 10),
             .Size = New Size(850, 490),
             .Panel1MinSize = 200,
             .Panel2MinSize = 300,
             .FixedPanel = FixedPanel.None
         }
-    _memorySplitContainer.Panel1.SuspendLayout()
-    _memorySplitContainer.Panel2.SuspendLayout()
+        _memorySplitContainer.Panel1.SuspendLayout()
+        _memorySplitContainer.Panel2.SuspendLayout()
 
-    ' 左侧：记忆配置
-    Dim lblConfigTitle As New Label() With {
+        ' 左侧：记忆配置
+        Dim lblConfigTitle As New Label() With {
             .Text = "记忆配置",
             .Location = New Point(10, 10),
             .Size = New Size(260, 20),
             .Font = New Font(Me.Font.FontFamily, 10, FontStyle.Bold)
         }
-    _memorySplitContainer.Panel1.Controls.Add(lblConfigTitle)
+        _memorySplitContainer.Panel1.Controls.Add(lblConfigTitle)
 
-    Dim y As Integer = 40
-    chkUseContextBuilder = New CheckBox() With {
+        Dim y As Integer = 40
+        chkUseContextBuilder = New CheckBox() With {
             .Text = "使用 ContextBuilder（分层组装 Memory/Skills）",
             .Location = New Point(10, y),
             .Size = New Size(260, 24),
             .Checked = MemoryConfig.UseContextBuilder
         }
-    _memorySplitContainer.Panel1.Controls.Add(chkUseContextBuilder)
-    y += 32
+        _memorySplitContainer.Panel1.Controls.Add(chkUseContextBuilder)
+        y += 32
 
-    chkEnableUserProfile = New CheckBox() With {
+        chkEnableUserProfile = New CheckBox() With {
             .Text = "启用用户画像",
             .Location = New Point(10, y),
             .Size = New Size(200, 24),
             .Checked = MemoryConfig.EnableUserProfile
         }
-    AddHandler chkEnableUserProfile.CheckedChanged, Sub(s, e)
-                                                        txtUserProfile.Enabled = chkEnableUserProfile.Checked
-                                                    End Sub
-    _memorySplitContainer.Panel1.Controls.Add(chkEnableUserProfile)
-    y += 28
+        AddHandler chkEnableUserProfile.CheckedChanged, Sub(s, e)
+                                                            txtUserProfile.Enabled = chkEnableUserProfile.Checked
+                                                        End Sub
+        _memorySplitContainer.Panel1.Controls.Add(chkEnableUserProfile)
+        y += 28
 
-    Dim lblRag As New Label() With {.Text = "RAG 检索条数 (1-20)：", .Location = New Point(10, y + 2), .Size = New Size(160, 20)}
-    _memorySplitContainer.Panel1.Controls.Add(lblRag)
-    numRagTopN = New NumericUpDown() With {
+        Dim lblRag As New Label() With {.Text = "RAG 检索条数 (1-20)：", .Location = New Point(10, y + 2), .Size = New Size(160, 20)}
+        _memorySplitContainer.Panel1.Controls.Add(lblRag)
+        numRagTopN = New NumericUpDown() With {
             .Location = New Point(175, y),
             .Size = New Size(80, 24),
             .Minimum = 1,
             .Maximum = 20,
             .Value = MemoryConfig.RagTopN
         }
-    _memorySplitContainer.Panel1.Controls.Add(numRagTopN)
-    y += 32
+        _memorySplitContainer.Panel1.Controls.Add(numRagTopN)
+        y += 32
 
         Dim lblAtomic As New Label() With {.Text = "记忆片段最大长度 (10-2000)：", .Location = New Point(10, y + 2), .Size = New Size(160, 20)}
         _memorySplitContainer.Panel1.Controls.Add(lblAtomic)
@@ -1883,45 +2074,45 @@ Public Class ConfigApiForm
             .Value = MemoryConfig.AtomicContentMaxLength
         }
         _memorySplitContainer.Panel1.Controls.Add(numAtomicMaxLen)
-    y += 32
+        y += 32
 
-    Dim lblSummary As New Label() With {.Text = "近期会话摘要条数 (1-15)：", .Location = New Point(10, y + 2), .Size = New Size(160, 20)}
-    _memorySplitContainer.Panel1.Controls.Add(lblSummary)
-    numSessionSummaryLimit = New NumericUpDown() With {
+        Dim lblSummary As New Label() With {.Text = "近期会话摘要条数 (1-15)：", .Location = New Point(10, y + 2), .Size = New Size(160, 20)}
+        _memorySplitContainer.Panel1.Controls.Add(lblSummary)
+        numSessionSummaryLimit = New NumericUpDown() With {
             .Location = New Point(175, y),
             .Size = New Size(80, 24),
             .Minimum = 1,
             .Maximum = 15,
             .Value = MemoryConfig.SessionSummaryLimit
         }
-    _memorySplitContainer.Panel1.Controls.Add(numSessionSummaryLimit)
-    y += 32
+        _memorySplitContainer.Panel1.Controls.Add(numSessionSummaryLimit)
+        y += 32
 
-    chkEnableAgenticSearch = New CheckBox() With {
+        chkEnableAgenticSearch = New CheckBox() With {
             .Text = "启用 MCP 记忆搜索（Agentic Search）",
             .Location = New Point(10, y),
             .Size = New Size(260, 24),
             .Checked = MemoryConfig.EnableAgenticSearch
         }
-    _memorySplitContainer.Panel1.Controls.Add(chkEnableAgenticSearch)
-    y += 40
+        _memorySplitContainer.Panel1.Controls.Add(chkEnableAgenticSearch)
+        y += 40
 
-    ' 用户画像编辑区
-    Dim lblProfile As New Label() With {.Text = "用户画像内容：", .Location = New Point(10, y), .Size = New Size(200, 20)}
-    _memorySplitContainer.Panel1.Controls.Add(lblProfile)
-    y += 22
-    txtUserProfile = New TextBox() With {
+        ' 用户画像编辑区
+        Dim lblProfile As New Label() With {.Text = "用户画像内容：", .Location = New Point(10, y), .Size = New Size(200, 20)}
+        _memorySplitContainer.Panel1.Controls.Add(lblProfile)
+        y += 22
+        txtUserProfile = New TextBox() With {
             .Location = New Point(10, y),
             .Size = New Size(250, 120),
             .Multiline = True,
             .ScrollBars = ScrollBars.Vertical,
             .Enabled = MemoryConfig.EnableUserProfile
         }
-    _memorySplitContainer.Panel1.Controls.Add(txtUserProfile)
-    y += 130
+        _memorySplitContainer.Panel1.Controls.Add(txtUserProfile)
+        y += 130
 
-    ' 保存配置按钮
-    Dim btnSaveConfig As New Button() With {
+        ' 保存配置按钮
+        Dim btnSaveConfig As New Button() With {
             .Text = "保存配置",
             .Location = New Point(10, y),
             .Size = New Size(120, 30),
@@ -1929,17 +2120,17 @@ Public Class ConfigApiForm
             .ForeColor = Color.White,
             .FlatStyle = FlatStyle.Flat
         }
-    AddHandler btnSaveConfig.Click, AddressOf SaveMemoryConfigClick
-    _memorySplitContainer.Panel1.Controls.Add(btnSaveConfig)
+        AddHandler btnSaveConfig.Click, AddressOf SaveMemoryConfigClick
+        _memorySplitContainer.Panel1.Controls.Add(btnSaveConfig)
 
-    ' 右侧：记忆片段和用户画像（Tab形式）
-    Dim tabControl As New TabControl() With {
+        ' 右侧：记忆片段和用户画像（Tab形式）
+        Dim tabControl As New TabControl() With {
             .Dock = DockStyle.Fill
         }
 
-    ' Tab 1: 记忆片段（可拖拽分隔条）
-    Dim tabMemory As New TabPage("记忆片段")
-    _memoryListSplitContainer = New SplitContainer() With {
+        ' Tab 1: 记忆片段（可拖拽分隔条）
+        Dim tabMemory As New TabPage("记忆片段")
+        _memoryListSplitContainer = New SplitContainer() With {
             .Location = New Point(0, 0),
             .Size = New Size(640, 440),          ' 合理非零大小
             .SplitterDistance = 260,             ' 在 Panel1MinSize 与 Width - Panel2MinSize 之间
@@ -1948,168 +2139,168 @@ Public Class ConfigApiForm
             .Dock = DockStyle.Fill
         }
 
-    Dim lblList As New Label() With {.Text = "记忆片段列表（最近 100 条）", .Location = New Point(5, 5), .Size = New Size(200, 20)}
-    _memoryListSplitContainer.Panel1.Controls.Add(lblList)
-    listMemory = New ListBox() With {
+        Dim lblList As New Label() With {.Text = "记忆片段列表（最近 100 条）", .Location = New Point(5, 5), .Size = New Size(200, 20)}
+        _memoryListSplitContainer.Panel1.Controls.Add(lblList)
+        listMemory = New ListBox() With {
             .Location = New Point(5, 28),
             .Size = New Size(250, 420),
             .DisplayMember = "DisplayText",
             .HorizontalScrollbar = True,
             .HorizontalExtent = 3000
         }
-    AddHandler listMemory.SelectedIndexChanged, AddressOf MemorySelectionChanged
-    _memoryListSplitContainer.Panel1.Controls.Add(listMemory)
+        AddHandler listMemory.SelectedIndexChanged, AddressOf MemorySelectionChanged
+        _memoryListSplitContainer.Panel1.Controls.Add(listMemory)
 
-    txtMemoryContent = New TextBox() With {
+        txtMemoryContent = New TextBox() With {
             .Location = New Point(5, 5),
             .Size = New Size(300, 380),
             .Multiline = True,
             .ScrollBars = ScrollBars.Both,
             .ReadOnly = True
         }
-    _memoryListSplitContainer.Panel2.Controls.Add(txtMemoryContent)
-    Dim btnRefreshMemory As New Button() With {.Text = "刷新", .Location = New Point(5, 390), .Size = New Size(70, 28)}
-    AddHandler btnRefreshMemory.Click, AddressOf LoadMemories
-    _memoryListSplitContainer.Panel2.Controls.Add(btnRefreshMemory)
-    Dim btnDeleteMemory As New Button() With {.Text = "删除选中", .Location = New Point(85, 390), .Size = New Size(80, 28)}
-    AddHandler btnDeleteMemory.Click, AddressOf BtnDeleteMemoryClick
-    _memoryListSplitContainer.Panel2.Controls.Add(btnDeleteMemory)
-    Dim btnCopyMemory As New Button() With {.Text = "复制选中", .Location = New Point(175, 390), .Size = New Size(70, 28)}
-    AddHandler btnCopyMemory.Click, Sub(s, ev)
-                                        If listMemory.SelectedItem IsNot Nothing Then
-                                            Try
-                                                Clipboard.SetText(listMemory.SelectedItem.ToString())
-                                            Catch ex As Exception
-                                            End Try
-                                        End If
-                                    End Sub
-    _memoryListSplitContainer.Panel2.Controls.Add(btnCopyMemory)
-    tabMemory.Controls.Add(_memoryListSplitContainer)
-    tabControl.TabPages.Add(tabMemory)
+        _memoryListSplitContainer.Panel2.Controls.Add(txtMemoryContent)
+        Dim btnRefreshMemory As New Button() With {.Text = "刷新", .Location = New Point(5, 390), .Size = New Size(70, 28)}
+        AddHandler btnRefreshMemory.Click, AddressOf LoadMemories
+        _memoryListSplitContainer.Panel2.Controls.Add(btnRefreshMemory)
+        Dim btnDeleteMemory As New Button() With {.Text = "删除选中", .Location = New Point(85, 390), .Size = New Size(80, 28)}
+        AddHandler btnDeleteMemory.Click, AddressOf BtnDeleteMemoryClick
+        _memoryListSplitContainer.Panel2.Controls.Add(btnDeleteMemory)
+        Dim btnCopyMemory As New Button() With {.Text = "复制选中", .Location = New Point(175, 390), .Size = New Size(70, 28)}
+        AddHandler btnCopyMemory.Click, Sub(s, ev)
+                                            If listMemory.SelectedItem IsNot Nothing Then
+                                                Try
+                                                    Clipboard.SetText(listMemory.SelectedItem.ToString())
+                                                Catch ex As Exception
+                                                End Try
+                                            End If
+                                        End Sub
+        _memoryListSplitContainer.Panel2.Controls.Add(btnCopyMemory)
+        tabMemory.Controls.Add(_memoryListSplitContainer)
+        tabControl.TabPages.Add(tabMemory)
 
-    _memorySplitContainer.Panel2.Controls.Add(tabControl)
+        _memorySplitContainer.Panel2.Controls.Add(tabControl)
 
-    _memorySplitContainer.Panel1.ResumeLayout(False)
-    _memorySplitContainer.Panel2.ResumeLayout(False)
-    memoryTab.Controls.Add(_memorySplitContainer)
+        _memorySplitContainer.Panel1.ResumeLayout(False)
+        _memorySplitContainer.Panel2.ResumeLayout(False)
+        memoryTab.Controls.Add(_memorySplitContainer)
 
-    ' 加载数据
-    LoadMemoryConfig()
-    LoadMemories()
-End Sub
-
-''' <summary>
-''' 加载记忆配置
-''' </summary>
-Private Sub LoadMemoryConfig()
-    chkUseContextBuilder.Checked = MemoryConfig.UseContextBuilder
-    chkEnableUserProfile.Checked = MemoryConfig.EnableUserProfile
-    numRagTopN.Value = MemoryConfig.RagTopN
-    numAtomicMaxLen.Value = MemoryConfig.AtomicContentMaxLength
-    numSessionSummaryLimit.Value = MemoryConfig.SessionSummaryLimit
-    chkEnableAgenticSearch.Checked = MemoryConfig.EnableAgenticSearch
-    txtUserProfile.Enabled = MemoryConfig.EnableUserProfile
-    Try
-        txtUserProfile.Text = MemoryRepository.GetUserProfile()
-    Catch
-        txtUserProfile.Text = ""
-    End Try
-End Sub
-
-''' <summary>
-''' 保存记忆配置
-''' </summary>
-Private Sub SaveMemoryConfigClick(sender As Object, e As EventArgs)
-    Try
-        MemoryConfig.UseContextBuilder = chkUseContextBuilder.Checked
-        MemoryConfig.EnableUserProfile = chkEnableUserProfile.Checked
-        MemoryConfig.RagTopN = CInt(numRagTopN.Value)
-        MemoryConfig.AtomicContentMaxLength = CInt(numAtomicMaxLen.Value)
-        MemoryConfig.SessionSummaryLimit = CInt(numSessionSummaryLimit.Value)
-        MemoryConfig.EnableAgenticSearch = chkEnableAgenticSearch.Checked
-        If chkEnableUserProfile.Checked Then
-            MemoryRepository.UpdateUserProfile(txtUserProfile.Text)
-        End If
-        MessageBox.Show("记忆配置已保存", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
-    Catch ex As Exception
-        MessageBox.Show("保存失败: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-    End Try
-End Sub
-
-''' <summary>
-''' 加载记忆片段
-''' </summary>
-Private Sub LoadMemories()
-    Try
-        OfficeAiDatabase.EnsureInitialized()
-        _memoryRecords = MemoryRepository.ListAtomicMemories(100, 0)
-        listMemory.DataSource = Nothing
-        listMemory.Items.Clear()
-        For Each r In _memoryRecords
-            Dim preview = If(r.Content?.Length > 40, r.Content.Substring(0, 40) & "...", r.Content)
-            listMemory.Items.Add(New MemoryItem With {.Record = r, .DisplayText = $"[{r.CreateTime}] {preview}"})
-        Next
-    Catch ex As Exception
-        listMemory.Items.Clear()
-        listMemory.Items.Add("(加载失败: " & ex.Message & ")")
-    End Try
-End Sub
-
-''' <summary>
-''' 记忆片段选中事件
-''' </summary>
-Private Sub MemorySelectionChanged(sender As Object, e As EventArgs)
-    Dim item = TryCast(listMemory.SelectedItem, MemoryItem)
-    If item Is Nothing Then
-        txtMemoryContent.Text = ""
-        Return
-    End If
-    txtMemoryContent.Text = item.Record.Content
-End Sub
-
-''' <summary>
-''' 删除记忆片段
-''' </summary>
-Private Sub BtnDeleteMemoryClick(sender As Object, e As EventArgs)
-    Dim item = TryCast(listMemory.SelectedItem, MemoryItem)
-    If item Is Nothing Then
-        MessageBox.Show("请先选择一条记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning)
-        Return
-    End If
-    If MessageBox.Show("确定删除此条记忆片段？", "确认", MessageBoxButtons.YesNo) <> DialogResult.Yes Then Return
-    Try
-        MemoryRepository.DeleteAtomicMemory(item.Record.Id)
+        ' 加载数据
+        LoadMemoryConfig()
         LoadMemories()
-    Catch ex As Exception
-        MessageBox.Show("删除失败: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-    End Try
-End Sub
+    End Sub
 
-''' <summary>
-''' 记忆片段列表项
-''' </summary>
-Private Class MemoryItem
-    Public Property Record As AtomicMemoryRecord
-    Public Property DisplayText As String
-    Public Overrides Function ToString() As String
-        Return DisplayText
+    ''' <summary>
+    ''' 加载记忆配置
+    ''' </summary>
+    Private Sub LoadMemoryConfig()
+        chkUseContextBuilder.Checked = MemoryConfig.UseContextBuilder
+        chkEnableUserProfile.Checked = MemoryConfig.EnableUserProfile
+        numRagTopN.Value = MemoryConfig.RagTopN
+        numAtomicMaxLen.Value = MemoryConfig.AtomicContentMaxLength
+        numSessionSummaryLimit.Value = MemoryConfig.SessionSummaryLimit
+        chkEnableAgenticSearch.Checked = MemoryConfig.EnableAgenticSearch
+        txtUserProfile.Enabled = MemoryConfig.EnableUserProfile
+        Try
+            txtUserProfile.Text = MemoryRepository.GetUserProfile()
+        Catch
+            txtUserProfile.Text = ""
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' 保存记忆配置
+    ''' </summary>
+    Private Sub SaveMemoryConfigClick(sender As Object, e As EventArgs)
+        Try
+            MemoryConfig.UseContextBuilder = chkUseContextBuilder.Checked
+            MemoryConfig.EnableUserProfile = chkEnableUserProfile.Checked
+            MemoryConfig.RagTopN = CInt(numRagTopN.Value)
+            MemoryConfig.AtomicContentMaxLength = CInt(numAtomicMaxLen.Value)
+            MemoryConfig.SessionSummaryLimit = CInt(numSessionSummaryLimit.Value)
+            MemoryConfig.EnableAgenticSearch = chkEnableAgenticSearch.Checked
+            If chkEnableUserProfile.Checked Then
+                MemoryRepository.UpdateUserProfile(txtUserProfile.Text)
+            End If
+            MessageBox.Show("记忆配置已保存", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        Catch ex As Exception
+            MessageBox.Show("保存失败: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' 加载记忆片段
+    ''' </summary>
+    Private Sub LoadMemories()
+        Try
+            OfficeAiDatabase.EnsureInitialized()
+            _memoryRecords = MemoryRepository.ListAtomicMemories(100, 0)
+            listMemory.DataSource = Nothing
+            listMemory.Items.Clear()
+            For Each r In _memoryRecords
+                Dim preview = If(r.Content?.Length > 40, r.Content.Substring(0, 40) & "...", r.Content)
+                listMemory.Items.Add(New MemoryItem With {.Record = r, .DisplayText = $"[{r.CreateTime}] {preview}"})
+            Next
+        Catch ex As Exception
+            listMemory.Items.Clear()
+            listMemory.Items.Add("(加载失败: " & ex.Message & ")")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' 记忆片段选中事件
+    ''' </summary>
+    Private Sub MemorySelectionChanged(sender As Object, e As EventArgs)
+        Dim item = TryCast(listMemory.SelectedItem, MemoryItem)
+        If item Is Nothing Then
+            txtMemoryContent.Text = ""
+            Return
+        End If
+        txtMemoryContent.Text = item.Record.Content
+    End Sub
+
+    ''' <summary>
+    ''' 删除记忆片段
+    ''' </summary>
+    Private Sub BtnDeleteMemoryClick(sender As Object, e As EventArgs)
+        Dim item = TryCast(listMemory.SelectedItem, MemoryItem)
+        If item Is Nothing Then
+            MessageBox.Show("请先选择一条记录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End If
+        If MessageBox.Show("确定删除此条记忆片段？", "确认", MessageBoxButtons.YesNo) <> DialogResult.Yes Then Return
+        Try
+            MemoryRepository.DeleteAtomicMemory(item.Record.Id)
+            LoadMemories()
+        Catch ex As Exception
+            MessageBox.Show("删除失败: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' 记忆片段列表项
+    ''' </summary>
+    Private Class MemoryItem
+        Public Property Record As AtomicMemoryRecord
+        Public Property DisplayText As String
+        Public Overrides Function ToString() As String
+            Return DisplayText
+        End Function
+    End Class
+
+    ''' <summary>
+    ''' 获取完整异常信息
+    ''' </summary>
+    Private Shared Function GetFullExceptionMessage(ex As Exception) As String
+        Dim sb As New StringBuilder()
+        Dim current As Exception = ex
+        Dim depth As Integer = 0
+        While current IsNot Nothing AndAlso depth < 5
+            If depth > 0 Then sb.Append(" <- ")
+            sb.Append(current.GetType().Name).Append(": ").Append(current.Message)
+            current = current.InnerException
+            depth += 1
+        End While
+        Return sb.ToString()
     End Function
-End Class
-
-''' <summary>
-''' 获取完整异常信息
-''' </summary>
-Private Shared Function GetFullExceptionMessage(ex As Exception) As String
-    Dim sb As New StringBuilder()
-    Dim current As Exception = ex
-    Dim depth As Integer = 0
-    While current IsNot Nothing AndAlso depth < 5
-        If depth > 0 Then sb.Append(" <- ")
-        sb.Append(current.GetType().Name).Append(": ").Append(current.Message)
-        current = current.InnerException
-        depth += 1
-    End While
-    Return sb.ToString()
-End Function
 
 End Class

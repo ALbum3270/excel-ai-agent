@@ -69,6 +69,34 @@ Public Class MemoryService
         Return Await Task.Run(Function() MemoryRepository.GetRelevantMemories(query, n, queryEmbedding, startTime, endTime, appType))
     End Function
 
+    Public Shared Function GetRelevantStructuredMemories(query As String, Optional topN As Integer? = Nothing, Optional appType As String = Nothing, Optional documentId As String = Nothing, Optional projectId As String = Nothing) As List(Of MemoryItemRecord)
+        Dim n = If(topN.HasValue, topN.Value, MemoryConfig.RagTopN)
+        Dim queryEmbedding As Single() = Nothing
+
+        Try
+            If Not String.IsNullOrWhiteSpace(query) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
+               AgentMemoryRepository.HasReadyMemoryEmbeddings(appType) Then
+                Dim embTask = Task.Run(Async Function()
+                    Return Await EmbeddingService.GetEmbeddingAsync(query)
+                End Function)
+                If embTask.Wait(3000) Then
+                    queryEmbedding = embTask.Result
+                End If
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[MemoryService] 生成结构化记忆查询向量失败: {ex.Message}")
+        End Try
+
+        If queryEmbedding IsNot Nothing AndAlso queryEmbedding.Length > 0 Then
+            Dim vectorResults = AgentMemoryRepository.RetrieveMemoryItemsByVector(queryEmbedding, query, appType, documentId, projectId, n)
+            If vectorResults IsNot Nothing AndAlso vectorResults.Count > 0 Then
+                Return vectorResults
+            End If
+        End If
+
+        Return AgentMemoryRepository.RetrieveMemoryItems(query, appType, documentId, projectId, n)
+    End Function
+
     ''' <summary>
     ''' 获取用户画像
     ''' </summary>

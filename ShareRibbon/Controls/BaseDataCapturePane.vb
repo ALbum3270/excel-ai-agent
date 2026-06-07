@@ -88,7 +88,11 @@ Public MustInherit Class BaseDataCapturePane
                     .IsScriptEnabled = True
                     .AreDefaultScriptDialogsEnabled = True
                     .IsWebMessageEnabled = True
+#If DEBUG Then
                     .AreDevToolsEnabled = True
+#Else
+                    .AreDevToolsEnabled = False
+#End If
                     .AreHostObjectsAllowed = True
                     .IsGeneralAutofillEnabled = True
                 End With
@@ -120,15 +124,14 @@ Public MustInherit Class BaseDataCapturePane
 
     ' 添加权限请求处理方法
     Private Sub OnPermissionRequested(sender As Object, e As CoreWebView2PermissionRequestedEventArgs)
-        ' 允许所有权限请求（包括弹窗）
         Select Case e.PermissionKind
             Case CoreWebView2PermissionKind.Camera,
              CoreWebView2PermissionKind.Microphone,
              CoreWebView2PermissionKind.Geolocation,
              CoreWebView2PermissionKind.Notifications
-                e.State = CoreWebView2PermissionState.Allow
+                e.State = CoreWebView2PermissionState.Deny
             Case Else
-                e.State = CoreWebView2PermissionState.Allow
+                e.State = CoreWebView2PermissionState.Default
         End Select
     End Sub
 

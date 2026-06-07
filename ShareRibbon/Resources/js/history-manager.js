@@ -200,7 +200,9 @@ window.historyManager = {
     // Send message to VB backend
     sendMessageToVB: function (message) {
         try {
-            if (window.chrome && window.chrome.webview) {
+            if (window.officeAi && typeof window.officeAi.post === 'function') {
+                window.officeAi.post(message);
+            } else if (window.chrome && window.chrome.webview) {
                 window.chrome.webview.postMessage(message);
             } else if (window.vsto) {
                 if (typeof window.vsto.sendMessage === 'function') {

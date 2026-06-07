@@ -809,9 +809,10 @@ Public Class DocumentAnalyzer
             Dim text = paragraphs(i)
             If String.IsNullOrWhiteSpace(text) Then Continue For
 
-            Dim isHeading = docStructure.Headings.Any(Function(h) h.ParagraphIndex = i)
-            Dim isList = docStructure.ListParagraphIndices.Contains(i)
-            Dim isTable = docStructure.TableParagraphIndices.Contains(i)
+            Dim paragraphIndex = i
+            Dim isHeading = docStructure.Headings.Any(Function(h) h.ParagraphIndex = paragraphIndex)
+            Dim isList = docStructure.ListParagraphIndices.Contains(paragraphIndex)
+            Dim isTable = docStructure.TableParagraphIndices.Contains(paragraphIndex)
 
             If Not isHeading AndAlso Not isList AndAlso Not isTable Then
                 If bodyStart = -1 Then

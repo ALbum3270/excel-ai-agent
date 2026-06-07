@@ -1,82 +1,78 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code / AI Agent 在本仓库工作的项目级协议。请优先遵守本文件；进入具体目录后，再阅读距离目标文件最近的 `AGENTS.md` 作为局部补充。
+
+## 交互与协作语言
+
+- 默认使用中文与用户交流。
+- 代码符号、文件路径、命令、API 名称保持原文。
+- 修改代码前先确认目标目录职责、相关 `.vbproj` 注册方式、以及是否存在局部 `AGENTS.md`。
 
 ## Project Overview
 
-Office AI 智能体是基于 **Visual Studio Community 2026 + Visual Basic.NET + VSTO** 开发的 Office AI 插件，为 Excel/Word/PowerPoint 提供 AI 驱动的辅助功能。
+Office AI 智能体是基于 **Visual Basic.NET + VSTO + .NET Framework 4.7.2** 的 Office AI 插件解决方案，为 Excel、Word、PowerPoint 提供 AI 驱动的辅助能力。
 
-- **开发环境**: Windows 10 + Visual Studio Community 2026 + VB.NET + VSTO + .NET Framework 4.7.2
-- **支持 Office**: Microsoft Office 2016+ / WPS Office
-- **官网**: https://www.officeso.cn
-- **License**: Apache 2.0
+- **开发环境**：Windows + Visual Studio（VSTO 工作负载）+ .NET Framework 4.7.2
+- **语言**：Visual Basic.NET
+- **Office 集成**：VSTO，支持 Microsoft Office 2016+ / WPS Office
+- **官网**：https://www.officeso.cn
+- **License**：Apache 2.0
 
 ## Repository Structure
 
-```
+```text
 AiHelper/
-├── ExcelAi/                    # Excel VSTO 插件
-│   ├── ChatControl.vb         # Excel 聊天面板
-│   ├── Ribbon1.vb             # Excel 功能区
-│   ├── ExcelJsonCommandSchema.vb   # Excel JSON 命令模式
-│   ├── ExcelDirectOperationService.vb  # Excel 直接操作服务
-│   ├── ExcelDnaFunctions.vb   # Excel DNA 函数
-│   └── BatchDataGenerationForm.vb  # 批量数据生成
-├── WordAi/                    # Word VSTO 插件
-│   ├── ChatControl.vb        # Word 聊天面板
-│   ├── Ribbon1.vb             # Word 功能区
-│   ├── WordJsonCommandSchema.vb    # Word JSON 命令模式
-│   ├── WordDocumentTranslateService.vb  # Word 翻译服务
-│   ├── WordCompletionManager.vb     # Word 续写管理
-│   └── OpenXmlWordTranslator.vb     # Word 翻译器
-├── PowerPointAi/              # PowerPoint VSTO 插件
-│   ├── ChatControl.vb        # PowerPoint 聊天面板
-│   ├── Ribbon1.vb             # PowerPoint 功能区
-│   ├── PowerPointJsonCommandSchema.vb  # PowerPoint JSON 命令模式
-│   ├── PowerPointCompletionManager.vb   # PPT 续写管理
-│   └── PowerPointDocumentTranslateService.vb  # PPT 翻译服务
-├── ShareRibbon/               # 共享组件（所有插件引用）
-├── OfficeAgent/               # 安装包项目 (.vdproj)
-└── AiHelper.sln              # 主解决方案文件
+├── AiHelper.sln                         # 主解决方案
+├── CLAUDE.md                            # AI Agent 项目级规则
+├── AGENTS.md                            # 仓库级目录导航
+├── ExcelAi/                             # Excel VSTO 插件
+├── WordAi/                              # Word VSTO 插件
+├── PowerPointAi/                        # PowerPoint VSTO 插件
+├── ShareRibbon/                         # 共享组件库，所有 Office 插件引用
+├── OfficeAgent/                         # Visual Studio Installer 安装包项目 (.vdproj)
+├── OfficeAgentSetupCustomActions/        # 安装包自定义动作项目
+├── docs/                                # 调试、迁移、说明文档
+├── openspec/                            # 需求/变更规格与归档
+├── packages/                            # NuGet packages 还原目录
+└── .codegraph/                          # CodeGraph 语义索引（如存在）
 ```
+
+各子目录可能包含自己的 `AGENTS.md`。进入目标目录工作时，应按以下顺序读取：
+
+1. 根目录 `CLAUDE.md`
+2. 根目录 `AGENTS.md`
+3. 目标目录最近的 `AGENTS.md`
+4. 相关 `.vbproj`、`packages.config`
+5. 目标功能源码
 
 ## Tech Stack
 
 | 类别 | 技术 |
-|------|------|
-| **Framework** | .NET Framework 4.7.2 |
-| **Language** | Visual Basic.NET |
-| **Office Integration** | VSTO (Visual Studio Tools for Office) |
-| **UI** | WebView2 + HTML/CSS/JS (Office Virtual Server) |
-| **Database** | SQLite (System.Data.SQLite, EntityFramework 6) |
-| **AI Protocol** | MCP (Model Context Protocol) via StreamJsonRpc |
-| **JSON** | Newtonsoft.Json, System.Text.Json |
-| **Markdown** | Markdig |
-
-### Excel 特有功能
-- 数据分析、图表生成、公式辅助
-- ALLM/CLLM 函数（ExcelDNA）
-- 批量数据生成
-- 选中单元格/Sheet 引用分析
-
-### Word 特有功能
-- 文档处理、内容生成/补全
-- OpenXml 翻译引擎
-- 多语言文档翻译
-
-### PowerPoint 特有功能
-- 演示文稿创建、幻灯片设计
-- PPT 内容续写与翻译
+|---|---|
+| Framework | .NET Framework 4.7.2 |
+| Language | Visual Basic.NET |
+| Office Integration | VSTO (Visual Studio Tools for Office) |
+| UI | WebView2 + HTML/CSS/JS + Office Virtual Server |
+| Database | SQLite (`System.Data.SQLite`, `Microsoft.Data.Sqlite.Core`) + EntityFramework 6 |
+| AI / Protocol | MCP (Model Context Protocol) via StreamJsonRpc |
+| JSON | Newtonsoft.Json, System.Text.Json |
+| Markdown | Markdig |
+| Excel 特有 | ExcelDna.AddIn / ExcelDna.Integration |
+| Word/文档处理 | DocumentFormat.OpenXml, AngleSharp, HtmlAgilityPack |
+| Async/Runtime | Microsoft.Bcl.AsyncInterfaces, System.Threading.Tasks.Dataflow |
 
 ## Build & Development
 
 ### Prerequisites
-- Visual Studio 2026 (with VSTO 工作负载)
-- .NET Framework 4.7.2
-- Office 2016+ / WPS
-- NuGet packages (restore before build)
+
+- Windows + Visual Studio（带 VSTO 工作负载）
+- .NET Framework 4.7.2 targeting pack
+- Office 2016+ 或 WPS Office
+- NuGet packages 已还原
+- 构建安装包项目 `OfficeAgent/*.vdproj` 需要 Visual Studio Installer Projects 支持
 
 ### Build Commands
+
 ```bash
 # 还原 NuGet 包
 msbuild AiHelper.sln -t:Restore
@@ -84,110 +80,158 @@ msbuild AiHelper.sln -t:Restore
 # 构建整个解决方案
 msbuild AiHelper.sln
 
-# 构建单个项目
+# 构建共享库
 msbuild ShareRibbon/ShareRibbon.vbproj
+
+# 构建单个 Office 插件
 msbuild ExcelAi/ExcelAi.vbproj
 msbuild WordAi/WordAi.vbproj
 msbuild PowerPointAi/PowerPointAi.vbproj
+
+# 构建安装自定义动作项目
+msbuild OfficeAgentSetupCustomActions/OfficeAgentSetupCustomActions.vbproj
 ```
 
 ### Debug
-- 使用 `docs/VisualStudio调试问题诊断.md` 排查 VSTO 调试问题
-- 查看 `docs/VS2025-VSTO-Migration-Guide.md` 了解 VSTO 迁移指南
 
-## Key Architecture
-### Office Application-Specific Structure
+- VSTO 调试问题优先查看 `docs/VisualStudio调试问题诊断.md`。
+- VSTO 迁移/兼容性问题查看 `docs/VS2025-VSTO-Migration-Guide.md`。
+- 插件启动、Ribbon、任务窗格、WebView2 相关问题通常需要在 Visual Studio + Office 宿主进程中调试。
 
-Each Office app plugin (ExcelAi/WordAi/PowerPointAi) references ShareRibbon and provides:
+## Architecture Rules
 
-1. **Ribbon 实现** (`Ribbon1.vb`): 继承 `BaseOfficeRibbon`
-2. **聊天面板** (`ChatControl.vb`): 继承 `BaseChatControl` / `BaseDeepseekChat`
-3. **JSON 命令模式** (`*JsonCommandSchema.vb`): 应用特定的 JSON 命令解析
-4. **文档服务** (`*DocumentTranslateService.vb`): 应用特定的翻译服务
-5. **续写服务** (`*ContinuationService.vb`): 应用特定的续写服务
-6. **完成管理** (`*CompletionManager.vb`): AI 补全管理
+### 顶层职责
 
-## Important Conventions & Pitfalls
+- `ShareRibbon/` 是共享核心：公共 UI、配置、MCP、AI 通信、WebView2/HTML 资源、共享服务应放这里。
+- `ExcelAi/` 只放 Excel 特定逻辑：单元格、Range、Sheet、图表、ExcelDna 等。
+- `WordAi/` 只放 Word 特定逻辑：文档、段落、翻译、续写、OpenXml 等。
+- `PowerPointAi/` 只放 PowerPoint 特定逻辑：演示文稿、幻灯片、形状、续写、翻译等。
+- `OfficeAgent/` 是安装包项目，`.vdproj` 慎改。
+- `OfficeAgentSetupCustomActions/` 放安装过程自定义动作，比直接大改 `.vdproj` 更适合承载安装逻辑。
+- `openspec/` 放需求、变更规格与归档，不是运行时代码。
 
-### 前端资源 (HTML/JS/CSS)
-- Chat 使用 Office Virtual Server 加载 `html/css/js`
-- 新增脚本必须加入 `.vbproj` 的 `<None Include="...">` 或 `<EmbeddedResource>`
-- 检查：JS 是否被主 html 引用、是否通过 virtual server 可访问
-- 错误表现：「点击无反应、控制台 ERR_FILE_NOT_FOUND」
+### 共享与应用边界
 
-### vbproj 文件注册
-- `.vb` 文件 → `<Compile Include="...">`
-- `.js` 文件 → `<None Include="...">`
-- 遗漏会导致「类型未定义」编译错误
+- 可复用能力优先抽到 `ShareRibbon/`，不要复制到单个 Office 插件项目。
+- 单个 Office 应用项目不要直接访问其他 Office 应用的对象模型。
+- Office COM Interop 操作应保持应用边界清晰，并注意 UI 线程/宿主进程上下文。
+- 配置/API Key/Prompt 相关逻辑优先查 `ShareRibbon/Config/`。
+- MCP 协议相关逻辑优先查 `ShareRibbon/Mcp/`。
+- Chat UI、WebView2、HTTP/streaming 服务优先查 `ShareRibbon/Controls/`。
 
-### 安装项目 (vdproj)
-- `OfficeAgent/*.vdproj` 被自动修改后容易加载失败
-- 如需修改，尽量小范围编辑或单独分支；出问题先回退
+## Agent Working Protocol
 
-### 数据库迁移
-- 新增字段必须走 `ALTER TABLE` 迁移脚本
-- 配合版本号或迁移记录做升级控制
-- 避免「只在新环境建表」导致老用户升级后缺字段
+- 修改前先阅读目标目录最近的 `AGENTS.md`。
+- 多文件任务先计划再改，尤其是跨 `ShareRibbon` 和 Office 应用项目的改动。
+- 新增 `.vb` 文件必须加入对应 `.vbproj` 的 `<Compile Include="...">`。
+- 新增 `.js` / `.css` / `.html` 等前端资源必须加入对应 `.vbproj` 的 `<None Include="...">` 或 `<EmbeddedResource Include="...">`，并确认 HTML 引用路径能被 Office Virtual Server 访问。
+- 多 Agent 并行开发时，先定义共享模型/接口/数据契约，再实现消费者；完成后做 API 一致性检查。
+- 避免大范围格式化 `.vbproj`、`.vdproj`、生成文件、Designer 文件。
+- 不要硬编码 API Key、用户配置或本机绝对路径。
 
-### VB.NET 语法规范（AI Agent 极易犯错）
+## VB.NET / VSTO Pitfalls
+
+AI Agent 容易混入 C# 写法。写 VB.NET 时必须主动避免：
+
 | C# 写法（错误） | VB.NET 写法（正确） | 检测关键词 |
-|----------------|-------------------|-----------|
+|---|---|---|
 | `var x = ...` | `Dim x = ...` | `var ` |
 | `List<T>` | `List(Of T)` | `<T>` |
 | `Dictionary<K,V>` | `Dictionary(Of K, V)` | `<K,V>` |
 | `x ?? y` | `If(x, y)` | `??` |
 | `new()` | `New T()` | `new()` |
-| `string`/`int`/`bool`/`void` | `String`/`Integer`/`Boolean`/`Sub` | 小写类型名 |
-| `=>` lambda | `Function(x) ...` | `=>` |
-| `for (int i=0; i<n; i++)` | `For i = 0 To n-1` | `for (` |
+| `string` / `int` / `bool` / `void` | `String` / `Integer` / `Boolean` / `Sub` | 小写类型名 |
+| `=>` lambda | `Function(x) ...` 或 `Sub(x) ...` | `=>` |
+| `for (int i=0; i<n; i++)` | `For i = 0 To n - 1` | `for (` |
 
 ### VB.NET 关键字冲突
+
 | 关键字 | 正确写法 | 场景 |
-|--------|---------|------|
+|---|---|---|
 | `Error` | `[Error]` | 枚举值/属性名 |
 | `Resume` | `[Resume]` | 枚举值/属性名 |
-| `Structure` | `[Structure]` 或改名 | 属性名（建议改名） |
+| `Structure` | `[Structure]` 或改名 | 属性名，建议改名 |
 
-### Async 语法限制
-- `Async Sub ... As Task` 不合法，必须用 `Async Function ... As Task`
-- `Async Function` 中不能有 `ByRef` 参数
+### Async 限制
 
-## 代码审查重点 (AI Agent 协作时)
+- `Async Sub ... As Task` 不合法；返回 `Task` 必须写 `Async Function ... As Task`。
+- `Async Function` 不能有 `ByRef` 参数。
+- `Async Sub` 只适合事件处理器；普通异步流程应返回 `Task`。
 
-1. **VB.NET 语法检查**: 确认没有 C# 语法污染
-2. **新文件注册**: 确认新增 .vb/.js 文件已加入 .vbproj
-3. **API 一致性**: 多 Agent 协作时验证类型 API 一致性
-4. **上下文完整**: 给 Agent 的 prompt 必须包含语言、关键类型、文件路径、边界
+### VSTO / COM 注意事项
 
-## CodeGraph
+- Office 对象模型调用要考虑宿主应用、活动文档/工作簿/演示文稿是否存在。
+- UI 更新通常应在主线程/宿主 UI 上下文中进行。
+- COM 对象生命周期要谨慎，避免长期持有无效 Office 对象引用。
+- `Option Strict Off` 不代表可以忽略类型清晰度；新增代码应尽量显式、可读、便于编译检查。
 
-CodeGraph builds a semantic knowledge graph of codebases for faster, smarter code exploration.
+## Frontend Resource Rules
 
-### If `.codegraph/` exists in the project
+Chat 相关 HTML/JS/CSS 通过 Office Virtual Server 加载，是用户交互入口。新增或修改前端资源时必须检查：
 
-**NEVER call `codegraph_explore` or `codegraph_context` directly in the main session.** These tools return large amounts of source code that fills up main session context. Instead, ALWAYS spawn an Explore agent for any exploration question (e.g., "how does X work?", "explain the Y system", "where is Z implemented?").
+1. 文件是否被主 HTML 正确引用。
+2. 文件是否在对应 `.vbproj` 中注册。
+3. Virtual Server 是否能访问该路径。
+4. WebView2 控制台是否有 `ERR_FILE_NOT_FOUND` 或脚本错误。
 
-**When spawning Explore agents**, include this instruction in the prompt:
+常见错误表现：按钮点击无反应、前端没有日志、控制台资源 404、HTML 引用路径大小写/目录不匹配。
 
-> This project has CodeGraph initialized (.codegraph/ exists). Use `codegraph_explore` as your PRIMARY tool — it returns full source code sections from all relevant files in one call.
->
-> **Rules:**
-> 1. Follow the explore call budget in the `codegraph_explore` tool description — it scales automatically based on project size.
-> 2. Do NOT re-read files that codegraph_explore already returned source code for. The source sections are complete and authoritative.
-> 3. Only fall back to grep/glob/read for files listed under "Additional relevant files" if you need more detail, or if codegraph returned no results.
+## Database / Migration Rules
 
-**The main session may only use these lightweight tools directly** (for targeted lookups before making edits, not for exploration):
+- 新增 SQLite 字段必须设计升级迁移，例如 `ALTER TABLE ... ADD COLUMN`。
+- 不要只改建表逻辑；老用户数据库升级路径必须可用。
+- 新增表/字段应考虑版本号、迁移记录或幂等检查。
+- 涉及配置/记忆/RAG/历史数据时，优先检查现有迁移与初始化逻辑。
 
-| Tool | Use For |
-|------|---------|
-| `codegraph_search` | Find symbols by name |
-| `codegraph_callers` / `codegraph_callees` | Trace call flow |
-| `codegraph_impact` | Check what's affected before editing |
-| `codegraph_node` | Get a single symbol's details |
+## Installer / vdproj Rules
 
-### If `.codegraph/` does NOT exist
+- `OfficeAgent/*.vdproj` 自动修改后容易加载失败；除非必要，避免大范围编辑。
+- 修改安装逻辑时，优先评估是否应放在 `OfficeAgentSetupCustomActions/`。
+- 如必须修改 `.vdproj`，保持最小 diff，不做格式化，不批量重排。
+- 出现安装包加载失败时，优先回退最近的 `.vdproj` 改动。
 
-At the start of a session, ask the user if they'd like to initialize CodeGraph:
+## Verification Checklist
 
-"I notice this project doesn't have CodeGraph initialized. Would you like me to run `codegraph init -i` to build a code knowledge graph?"
+完成代码或文档改动前，按改动范围选择验证：
 
+- VB.NET 语法没有 C# 污染。
+- 新增 `.vb` / `.js` / `.css` / `.html` 已注册到对应 `.vbproj`。
+- 前端资源已被 HTML 引用，并能通过 Virtual Server 访问。
+- 共享 API 与消费者引用一致。
+- 相关项目可构建，至少构建被修改项目及其依赖。
+- 数据库字段/表变更有迁移路径。
+- `.vdproj` 没有被无意改动或格式化。
+- 文档没有过时日期、错误分支名或临时标记。
+
+## CodeGraph Rules
+
+本项目配置了 CodeGraph 语义索引时，请按以下规则使用：
+
+### `.codegraph/` 存在时
+
+- 主会话只直接使用轻量工具做定点查询：
+  - `codegraph_search`：查符号位置
+  - `codegraph_callers` / `codegraph_callees`：查调用关系
+  - `codegraph_impact`：查修改影响面
+  - `codegraph_node`：查单个符号详情
+- 对于“解释某系统如何工作 / 探索某功能在哪里实现 / 大范围代码阅读”这类问题，主会话不要直接调用 `codegraph_context` 或 `codegraph_explore`；应派发 Explore agent，并要求其使用 `codegraph_explore` 作为主要工具。
+- CodeGraph 结果来自 AST 索引；不要用 grep 重复验证同一结构性问题。
+
+给 Explore agent 的推荐提示：
+
+```text
+This project has CodeGraph initialized (.codegraph/ exists). Use `codegraph_explore` as your PRIMARY tool — it returns full source code sections from all relevant files in one call.
+
+Rules:
+1. Follow the explore call budget in the `codegraph_explore` tool description.
+2. Do NOT re-read files that codegraph_explore already returned source code for.
+3. Only fall back to grep/glob/read for files listed under "Additional relevant files" if you need more detail, or if codegraph returned no results.
+```
+
+### `.codegraph/` 不存在时
+
+如果项目没有 `.codegraph/`，先询问用户是否初始化：
+
+```text
+I notice this project doesn't have CodeGraph initialized. Would you like me to run `codegraph init -i` to build a code knowledge graph?
+```

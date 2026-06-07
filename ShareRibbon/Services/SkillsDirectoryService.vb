@@ -33,6 +33,9 @@ Public Class SkillFileDefinition
     ' 扩展字段
     Public Property FilePath As String
 
+    ''' <summary>是否已加载完整 Skill 内容。目录扫描阶段为 False，命中后再二次加载。</summary>
+    Public Property IsContentLoaded As Boolean = True
+
     ''' <summary>标签列表（从 front matter tags 字段解析）</summary>
     Public Property Tags As List(Of String) = New List(Of String)()
 
@@ -124,7 +127,9 @@ End Class
 Public Class SkillsDirectoryService
     Private Shared _skillsDirectory As String = ""
     Private Shared _cachedSkills As New List(Of SkillFileDefinition)()
+    Private Shared _cachedSkillCatalog As New List(Of SkillFileDefinition)()
     Private Shared _lastRefreshTime As DateTime = DateTime.MinValue
+    Private Shared _lastCatalogRefreshTime As DateTime = DateTime.MinValue
     Private Shared ReadOnly _cacheDuration As TimeSpan = TimeSpan.FromMinutes(5)
 
     ''' <summary>
@@ -150,7 +155,9 @@ Public Class SkillsDirectoryService
     Public Shared Sub SetSkillsDirectory(path As String)
         _skillsDirectory = path
         _cachedSkills.Clear()
+        _cachedSkillCatalog.Clear()
         _lastRefreshTime = DateTime.MinValue
+        _lastCatalogRefreshTime = DateTime.MinValue
     End Sub
 
     ''' <summary>
@@ -176,6 +183,18 @@ Public Class SkillsDirectoryService
     End Function
 
     ''' <summary>
+    ''' 获取 Skills 元数据目录。不会读取 reference/examples 全文，也不会把 Skill 内容注入上下文。
+    ''' </summary>
+    Public Shared Function GetSkillsCatalog(Optional forceRefresh As Boolean = False) As List(Of SkillFileDefinition)
+        If Not forceRefresh AndAlso _cachedSkillCatalog.Count > 0 AndAlso (DateTime.Now - _lastCatalogRefreshTime) < _cacheDuration Then
+            Return _cachedSkillCatalog.ToList()
+        End If
+
+        RefreshSkillCatalog()
+        Return _cachedSkillCatalog.ToList()
+    End Function
+
+    ''' <summary>
     ''' 刷新Skills缓存
     ''' </summary>
     Public Shared Sub RefreshSkills()
@@ -191,7 +210,7 @@ Public Class SkillsDirectoryService
         Dim skillDirs = Directory.GetDirectories(dir)
         For Each skillDir In skillDirs
             Try
-                Dim skill = ParseSkillDirectory(skillDir)
+                Dim skill = ParseSkillDirectory(skillDir, includeDetails:=True)
                 If skill IsNot Nothing Then
                     _cachedSkills.Add(skill)
                 End If
@@ -204,7 +223,7 @@ Public Class SkillsDirectoryService
         Dim jsonFiles = Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly)
         For Each file In jsonFiles
             Try
-                Dim skill = ParseSkillJsonFile(file)
+                Dim skill = ParseSkillJsonFile(file, includeDetails:=True)
                 If skill IsNot Nothing Then
                     _cachedSkills.Add(skill)
                 End If
@@ -217,6 +236,69 @@ Public Class SkillsDirectoryService
     End Sub
 
     ''' <summary>
+    ''' 只刷新元数据目录，用于请求前第一阶段扫描。
+    ''' </summary>
+    Public Shared Sub RefreshSkillCatalog()
+        _cachedSkillCatalog.Clear()
+
+        Dim dir = GetSkillsDirectory()
+        If Not Directory.Exists(dir) Then
+            _lastCatalogRefreshTime = DateTime.Now
+            Return
+        End If
+
+        For Each skillDir In Directory.GetDirectories(dir)
+            Try
+                Dim skill = ParseSkillDirectory(skillDir, includeDetails:=False)
+                If skill IsNot Nothing Then _cachedSkillCatalog.Add(skill)
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsDirectoryService] 解析元数据目录失败: {skillDir}, 错误: {ex.Message}")
+            End Try
+        Next
+
+        For Each file In Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly)
+            Try
+                Dim skill = ParseSkillJsonFile(file, includeDetails:=False)
+                If skill IsNot Nothing Then _cachedSkillCatalog.Add(skill)
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsDirectoryService] 解析JSON元数据失败: {file}, 错误: {ex.Message}")
+            End Try
+        Next
+
+        _lastCatalogRefreshTime = DateTime.Now
+    End Sub
+
+    ''' <summary>
+    ''' 二次加载完整 Skill。只在召回命中后调用。
+    ''' </summary>
+    Public Shared Function LoadSkillDetail(skill As SkillFileDefinition) As SkillFileDefinition
+        If skill Is Nothing Then Return Nothing
+        If skill.IsContentLoaded Then Return skill
+
+        Try
+            If Directory.Exists(skill.FilePath) Then
+                Return ParseSkillDirectory(skill.FilePath, includeDetails:=True)
+            End If
+
+            If File.Exists(skill.FilePath) Then
+                Return ParseSkillJsonFile(skill.FilePath, includeDetails:=True)
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[SkillsDirectoryService] 二次加载 Skill 失败: {skill.FilePath}, 错误: {ex.Message}")
+        End Try
+
+        Return skill
+    End Function
+
+    Public Shared Function GetSkillByNameOrPath(skillName As String, filePath As String) As SkillFileDefinition
+        Dim catalog = GetSkillsCatalog()
+        Dim matched = catalog.FirstOrDefault(Function(s) String.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase) OrElse
+                                                        SamePath(s.FilePath, filePath))
+        If matched Is Nothing Then Return Nothing
+        Return LoadSkillDetail(matched)
+    End Function
+
+    ''' <summary>
     ''' 解析Skill目录（Claude规范）
     ''' 目录结构：
     ''' my-skill/
@@ -226,7 +308,7 @@ Public Class SkillsDirectoryService
     '''   ├── scripts/ (optional)
     '''   └── templates/ (optional)
     ''' </summary>
-    Private Shared Function ParseSkillDirectory(dirPath As String) As SkillFileDefinition
+    Private Shared Function ParseSkillDirectory(dirPath As String, Optional includeDetails As Boolean = True) As SkillFileDefinition
         Dim skillMdPath = Path.Combine(dirPath, "SKILL.md")
         If Not File.Exists(skillMdPath) Then
             Return Nothing
@@ -238,20 +320,23 @@ Public Class SkillsDirectoryService
         Dim skill As New SkillFileDefinition()
         skill.Name = skillName
         skill.FilePath = dirPath
+        skill.IsContentLoaded = includeDetails
 
         ' 解析Front Matter和内容
-        ParseFrontMatterAndContent(fileContent, skill)
+        ParseFrontMatterAndContent(fileContent, skill, includeDetails)
 
-        ' 尝试读取reference.md
-        Dim refPath = Path.Combine(dirPath, "reference.md")
-        If File.Exists(refPath) Then
-            skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & vbCrLf & File.ReadAllText(refPath)
-        End If
+        If includeDetails Then
+            ' 尝试读取reference.md
+            Dim refPath = Path.Combine(dirPath, "reference.md")
+            If File.Exists(refPath) Then
+                skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & vbCrLf & File.ReadAllText(refPath)
+            End If
 
-        ' 尝试读取examples.md
-        Dim examplesPath = Path.Combine(dirPath, "examples.md")
-        If File.Exists(examplesPath) Then
-            skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & vbCrLf & File.ReadAllText(examplesPath)
+            ' 尝试读取examples.md
+            Dim examplesPath = Path.Combine(dirPath, "examples.md")
+            If File.Exists(examplesPath) Then
+                skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & vbCrLf & File.ReadAllText(examplesPath)
+            End If
         End If
 
         ' 发现并解析 scripts/ 目录下的脚本
@@ -339,7 +424,7 @@ Public Class SkillsDirectoryService
     ''' <summary>
     ''' 解析Front Matter和内容
     ''' </summary>
-    Private Shared Sub ParseFrontMatterAndContent(fileContent As String, skill As SkillFileDefinition)
+    Private Shared Sub ParseFrontMatterAndContent(fileContent As String, skill As SkillFileDefinition, Optional includeContent As Boolean = True)
         ' 查找Front Matter分隔符
         Dim lines = fileContent.Split({vbCrLf, vbLf, vbCr}, StringSplitOptions.None)
         Dim frontMatterLines As New List(Of String)()
@@ -375,8 +460,12 @@ Public Class SkillsDirectoryService
             ParseFrontMatterLines(frontMatterLines, skill)
         End If
 
-        ' 剩余部分作为内容
-        skill.Content = String.Join(vbCrLf, contentLines).Trim()
+        ' 剩余部分作为内容。目录扫描阶段不保留全文，避免第一阶段加载过重。
+        If includeContent Then
+            skill.Content = String.Join(vbCrLf, contentLines).Trim()
+        Else
+            skill.Content = ""
+        End If
 
         ' 如果没有从Front Matter获取到name，从第一个标题获取
         If String.IsNullOrWhiteSpace(skill.Name) OrElse skill.Name = Path.GetFileName(skill.FilePath) Then
@@ -386,6 +475,10 @@ Public Class SkillsDirectoryService
                     Exit For
                 End If
             Next
+        End If
+
+        If String.IsNullOrWhiteSpace(skill.Description) Then
+            skill.Description = FirstNonEmptyContentLine(contentLines)
         End If
     End Sub
 
@@ -491,12 +584,13 @@ Public Class SkillsDirectoryService
     ''' <summary>
     ''' 解析单个Skill JSON文件（兼容旧格式）
     ''' </summary>
-    Private Shared Function ParseSkillJsonFile(filePath As String) As SkillFileDefinition
+    Private Shared Function ParseSkillJsonFile(filePath As String, Optional includeDetails As Boolean = True) As SkillFileDefinition
         Dim content = File.ReadAllText(filePath)
         Dim jo = JObject.Parse(content)
 
         Dim skill As New SkillFileDefinition()
         skill.FilePath = filePath
+        skill.IsContentLoaded = includeDetails
 
         ' 读取基本信息
         skill.Name = If(jo("name")?.ToString(), Path.GetFileNameWithoutExtension(filePath))
@@ -510,23 +604,45 @@ Public Class SkillsDirectoryService
             ' 不做任何处理，保持兼容性
         End If
 
-        ' 读取Skill内容
-        Dim contentToken = jo("content")
-        If contentToken IsNot Nothing Then
-            skill.Content = contentToken.ToString()
-        Else
-            Dim promptToken = jo("prompt")
-            If promptToken IsNot Nothing Then
-                skill.Content = promptToken.ToString()
+        If includeDetails Then
+            ' 读取Skill内容
+            Dim contentToken = jo("content")
+            If contentToken IsNot Nothing Then
+                skill.Content = contentToken.ToString()
             Else
-                Dim promptTemplateToken = jo("promptTemplate")
-                If promptTemplateToken IsNot Nothing Then
-                    skill.Content = promptTemplateToken.ToString()
+                Dim promptToken = jo("prompt")
+                If promptToken IsNot Nothing Then
+                    skill.Content = promptToken.ToString()
+                Else
+                    Dim promptTemplateToken = jo("promptTemplate")
+                    If promptTemplateToken IsNot Nothing Then
+                        skill.Content = promptTemplateToken.ToString()
+                    End If
                 End If
             End If
+        Else
+            skill.Content = ""
         End If
 
         Return skill
+    End Function
+
+    Private Shared Function FirstNonEmptyContentLine(lines As List(Of String)) As String
+        If lines Is Nothing Then Return ""
+        For Each line In lines
+            Dim text = If(line, "").Trim()
+            If text.Length > 0 AndAlso Not text.StartsWith("#") Then Return text
+        Next
+        Return ""
+    End Function
+
+    Private Shared Function SamePath(leftPath As String, rightPath As String) As Boolean
+        If String.IsNullOrWhiteSpace(leftPath) OrElse String.IsNullOrWhiteSpace(rightPath) Then Return False
+        Try
+            Return String.Equals(Path.GetFullPath(leftPath), Path.GetFullPath(rightPath), StringComparison.OrdinalIgnoreCase)
+        Catch
+            Return String.Equals(leftPath.Trim(), rightPath.Trim(), StringComparison.OrdinalIgnoreCase)
+        End Try
     End Function
 
     ''' <summary>

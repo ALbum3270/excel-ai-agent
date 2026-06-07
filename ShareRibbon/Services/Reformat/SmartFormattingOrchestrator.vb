@@ -248,6 +248,7 @@ Public Class SmartFormattingOrchestrator
 
     Private ReadOnly _analyzer As DocumentAnalyzer
     Private ReadOnly _knowledgeEngine As FormattingKnowledgeEngine
+    Private ReadOnly _standardRegistry As FormattingStandardRegistry
     Private ReadOnly _refinementContext As RefinementContext
 
     ' ---- 标准名称关键词映射（用于 ParseUserIntent） ----
@@ -277,13 +278,15 @@ Public Class SmartFormattingOrchestrator
     Public Sub New()
         _analyzer = New DocumentAnalyzer()
         _knowledgeEngine = New FormattingKnowledgeEngine()
+        _standardRegistry = New FormattingStandardRegistry(_knowledgeEngine)
         _refinementContext = New RefinementContext()
     End Sub
 
     ''' <summary>注入自定义分析器和知识引擎</summary>
     Public Sub New(docAnalyzer As DocumentAnalyzer, knowledgeEngine As FormattingKnowledgeEngine)
         _analyzer = docAnalyzer
-        _knowledgeEngine = knowledgeEngine
+        _knowledgeEngine = If(knowledgeEngine, New FormattingKnowledgeEngine())
+        _standardRegistry = New FormattingStandardRegistry(_knowledgeEngine)
         _refinementContext = New RefinementContext()
     End Sub
 
@@ -305,7 +308,7 @@ Public Class SmartFormattingOrchestrator
         Dim analysis = _analyzer.Analyze(paragraphTexts)
 
         ' 2. 获取匹配标准
-        Dim standard = _knowledgeEngine.GetStandardForDocumentType(analysis.DocumentType)
+        Dim standard = _standardRegistry.SelectBest(Nothing, analysis)
 
         If standard Is Nothing Then
             Return New ReformatPreviewPlan With {
@@ -342,7 +345,7 @@ Public Class SmartFormattingOrchestrator
         ' 使用增强版分析器
         Dim analysis = _analyzer.Analyze(paragraphTexts, paragraphStyles, paragraphFontSizes, paragraphIsBold)
 
-        Dim standard = _knowledgeEngine.GetStandardForDocumentType(analysis.DocumentType)
+        Dim standard = _standardRegistry.SelectBest(Nothing, analysis)
 
         If standard Is Nothing Then
             Return New ReformatPreviewPlan With {
@@ -718,7 +721,9 @@ Public Class SmartFormattingOrchestrator
                 ' 指定标准排版：用用户指定的标准（如"按公文排版"→GB/T 9704-2012）
                 Dim standard As FormattingStandard = Nothing
                 If Not String.IsNullOrEmpty(intent.TargetStandardName) Then
-                    standard = _knowledgeEngine.GetStandardByName(intent.TargetStandardName)
+                    standard = _standardRegistry.FindStandardByName(intent.TargetStandardName)
+                ElseIf intent.TargetDocumentType <> DocumentType.Unknown Then
+                    standard = _standardRegistry.GetStandardForDocumentType(intent.TargetDocumentType)
                 End If
 
                 If standard IsNot Nothing Then
@@ -762,11 +767,15 @@ Public Class SmartFormattingOrchestrator
                                              wordParagraphs As List(Of Object),
                                              paragraphStyles As List(Of String),
                                              paragraphFontSizes As List(Of Single),
-                                             paragraphIsBold As List(Of Boolean)) As Task(Of ReformatPreviewPlan)
+                                             paragraphIsBold As List(Of Boolean),
+                                             Optional recognizedIntent As FormatIntent = Nothing) As Task(Of ReformatPreviewPlan)
 
         ' 解析用户意图
         Dim analysis = If(_refinementContext.CurrentAnalysis, New DocumentAnalysisResult())
-        Dim intent = ParseUserIntent(userMessage, analysis)
+        Dim intent As FormatIntent = recognizedIntent
+        If intent Is Nothing Then
+            intent = ParseUserIntent(userMessage, analysis)
+        End If
 
         Dim plan As ReformatPreviewPlan
 
@@ -780,7 +789,9 @@ Public Class SmartFormattingOrchestrator
             Case IntentType.StandardFormat
                 Dim standard As FormattingStandard = Nothing
                 If Not String.IsNullOrEmpty(intent.TargetStandardName) Then
-                    standard = _knowledgeEngine.GetStandardByName(intent.TargetStandardName)
+                    standard = _standardRegistry.FindStandardByName(intent.TargetStandardName)
+                ElseIf intent.TargetDocumentType <> DocumentType.Unknown Then
+                    standard = _standardRegistry.GetStandardForDocumentType(intent.TargetDocumentType)
                 End If
                 If standard IsNot Nothing Then
                     Dim docAnalysis = _analyzer.Analyze(paragraphs, paragraphStyles, paragraphFontSizes, paragraphIsBold)
@@ -887,6 +898,23 @@ Public Class SmartFormattingOrchestrator
         ' 附件说明
         If trimmed.StartsWith("附件") Then
             If mapping.FindTag("body.attachment") IsNot Nothing Then Return "body.attachment"
+        End If
+
+        If IsOfficialDocumentStandard(standard) Then
+            If System.Text.RegularExpressions.Regex.IsMatch(trimmed, "^[一二三四五六七八九十]+、") Then
+                If mapping.FindTag("title.1") IsNot Nothing Then Return "title.1"
+            End If
+            If System.Text.RegularExpressions.Regex.IsMatch(trimmed, "^（[一二三四五六七八九十]+）") OrElse
+               System.Text.RegularExpressions.Regex.IsMatch(trimmed, "^\([一二三四五六七八九十]+\)") Then
+                If mapping.FindTag("title.2") IsNot Nothing Then Return "title.2"
+            End If
+            If System.Text.RegularExpressions.Regex.IsMatch(trimmed, "^\d+[\.．、]") Then
+                If mapping.FindTag("title.3") IsNot Nothing Then Return "title.3"
+            End If
+            If trimmed.StartsWith("附注") OrElse
+               (trimmed.StartsWith("（") AndAlso (trimmed.Contains("联系人") OrElse trimmed.Contains("联系电话") OrElse trimmed.Contains("电话"))) Then
+                If mapping.FindTag("footer.note") IsNot Nothing Then Return "footer.note"
+            End If
         End If
 
         ' 摘要区域（文档开头附近的非标题段落）
@@ -999,9 +1027,21 @@ Public Class SmartFormattingOrchestrator
     Private Shared Function GetStandardTagForHeading(level As Integer, standard As FormattingStandard) As String
         If standard?.SemanticMapping Is Nothing Then Return $"heading.{level}"
 
+        If IsOfficialDocumentStandard(standard) Then
+            Dim officialTagId = $"title.{level}"
+            If standard.SemanticMapping.FindTag(officialTagId) IsNot Nothing Then
+                Return officialTagId
+            End If
+        End If
+
         Dim tagId = $"heading.{level}"
         If standard.SemanticMapping.FindTag(tagId) IsNot Nothing Then
             Return tagId
+        End If
+
+        Dim titleTagId = $"title.{level}"
+        If standard.SemanticMapping.FindTag(titleTagId) IsNot Nothing Then
+            Return titleTagId
         End If
 
         ' 逐级回退
@@ -1010,9 +1050,21 @@ Public Class SmartFormattingOrchestrator
             If standard.SemanticMapping.FindTag(fallbackId) IsNot Nothing Then
                 Return fallbackId
             End If
+            Dim fallbackTitleId = $"title.{fallback}"
+            If standard.SemanticMapping.FindTag(fallbackTitleId) IsNot Nothing Then
+                Return fallbackTitleId
+            End If
         Next
 
         Return "body.normal"
+    End Function
+
+    Private Shared Function IsOfficialDocumentStandard(standard As FormattingStandard) As Boolean
+        If standard Is Nothing Then Return False
+        Dim text = $"{standard.Id} {standard.Name} {standard.Description}".ToLowerInvariant()
+        If text.Contains("9704") OrElse text.Contains("公文") OrElse text.Contains("党政") Then Return True
+        Return standard.ApplicableDocumentTypes IsNot Nothing AndAlso
+               standard.ApplicableDocumentTypes.Contains(DocumentType.OfficialDocument.ToString())
     End Function
 
     ' ============================================================
@@ -1162,11 +1214,24 @@ Public Class SmartFormattingOrchestrator
             End If
             If tag.Paragraph.LineSpacing > 0 AndAlso
                Math.Abs(tag.Paragraph.LineSpacing - 1.5) > 0.01 Then
-                parts.Add($"行距{tag.Paragraph.LineSpacing}")
+                If IsOfficialDocumentLineSpacing(tag) Then
+                    parts.Add("固定值约28磅")
+                Else
+                    parts.Add($"行距{tag.Paragraph.LineSpacing}")
+                End If
             End If
         End If
 
         Return String.Join(", ", parts)
+    End Function
+
+    Private Shared Function IsOfficialDocumentLineSpacing(tag As SemanticTag) As Boolean
+        If tag Is Nothing OrElse tag.Font Is Nothing OrElse tag.Paragraph Is Nothing Then Return False
+        If Math.Abs(tag.Font.FontSize - 16) > 0.01 Then Return False
+        If Math.Abs(tag.Paragraph.LineSpacing - 1.75) > 0.01 Then Return False
+        Return String.Equals(tag.Font.FontNameCN, "仿宋_GB2312", StringComparison.OrdinalIgnoreCase) OrElse
+               String.Equals(tag.Font.FontNameCN, "黑体", StringComparison.OrdinalIgnoreCase) OrElse
+               String.Equals(tag.Font.FontNameCN, "楷体_GB2312", StringComparison.OrdinalIgnoreCase)
     End Function
 
     ''' <summary>格式化字体描述字符串</summary>

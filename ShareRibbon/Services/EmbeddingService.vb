@@ -79,6 +79,11 @@ Public Class EmbeddingService
         Return Nothing
     End Function
 
+    Public Shared Function GetConfiguredEmbeddingModelName() As String
+        Dim defaultModel = GetDefaultEmbeddingModel(ConfigSettings.ApiUrl)
+        Return If(String.IsNullOrWhiteSpace(ConfigSettings.EmbeddingModel), If(defaultModel, ""), ConfigSettings.EmbeddingModel)
+    End Function
+
     ''' <summary>
     ''' 调用 OpenAI Embedding API 生成单个文本的向量
     ''' </summary>
@@ -123,8 +128,7 @@ Public Class EmbeddingService
             End If
 
             ' 根据 API 提供商选择合适的 Embedding 模型
-            Dim defaultModel = GetDefaultEmbeddingModel(apiUrl)
-            Dim modelToUse = If(String.IsNullOrWhiteSpace(ConfigSettings.EmbeddingModel), defaultModel, ConfigSettings.EmbeddingModel)
+            Dim modelToUse = GetConfiguredEmbeddingModelName()
 
             Using client As New HttpClient()
                 client.Timeout = TimeSpan.FromSeconds(30)

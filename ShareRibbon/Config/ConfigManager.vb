@@ -40,6 +40,7 @@ Public Class ConfigManager
                             ConfigSettings.mcpable = item_m.mcpable
                             ConfigSettings.fimSupported = item_m.fimSupported
                             ConfigSettings.fimUrl = If(String.IsNullOrEmpty(item_m.fimUrl), item.url, item_m.fimUrl)
+                            ConfigSettings.ReasoningMode = item_m.reasoningMode
                         End If
                     End If
                 Next
@@ -71,6 +72,7 @@ Public Class ConfigManager
                         presetModel.translateSelected = userModel.translateSelected
                         presetModel.fimSupported = userModel.fimSupported
                         presetModel.fimUrl = userModel.fimUrl
+                        presetModel.reasoningMode = userModel.reasoningMode
                     Else
                         ' 用户添加的自定义模型，保留
                         preset.model.Add(userModel)
@@ -99,6 +101,10 @@ Public Class ConfigManager
                         presetModel.selected = userModel.selected
                         presetModel.mcpValidated = userModel.mcpValidated
                         presetModel.mcpable = userModel.mcpable
+                        presetModel.translateSelected = userModel.translateSelected
+                        presetModel.fimSupported = userModel.fimSupported
+                        presetModel.fimUrl = userModel.fimUrl
+                        presetModel.reasoningMode = userModel.reasoningMode
                     Else
                         preset.model.Add(userModel)
                     End If
@@ -185,6 +191,9 @@ Public Class ConfigManager
 
         ' 是否为推理模型
         Public Property isReasoningModel As Boolean = False
+
+        ' 推理开关: default=不传参数, enabled=显式开启, disabled=显式关闭
+        Public Property reasoningMode As String = "default"
 
         ' 显示名称(含[推理][MCP]标签)
         Public Property displayName As String = ""

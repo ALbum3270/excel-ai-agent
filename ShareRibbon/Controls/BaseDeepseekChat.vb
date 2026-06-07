@@ -63,7 +63,11 @@ Protected Overloads Async Function InitializeWebView2() As Task
                 ChatBrowser.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = True
                 ChatBrowser.CoreWebView2.Settings.IsWebMessageEnabled = True
                 ' 启用开发者工具以便调试可能的焦点问题
+#If DEBUG Then
                 ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = True
+#Else
+                ChatBrowser.CoreWebView2.Settings.AreDevToolsEnabled = False
+#End If
                 
                 ' 重要：在导航前注册所有事件处理器
                 'AddHandler ChatBrowser.CoreWebView2.NavigationStarting, AddressOf OnNavigationStarting
@@ -1161,7 +1165,16 @@ Protected Overloads Async Function InitializeWebView2() As Task
     ' 执行js脚本的异步方法
     Private Async Function ExecuteJavaScriptAsyncJS(js As String) As Task
         If ChatBrowser.InvokeRequired Then
-            ChatBrowser.Invoke(Sub() ChatBrowser.ExecuteScriptAsync(js))
+            Dim tcs As New TaskCompletionSource(Of Boolean)()
+            ChatBrowser.BeginInvoke(New Action(Async Sub()
+                                                   Try
+                                                       Await ChatBrowser.ExecuteScriptAsync(js)
+                                                       tcs.TrySetResult(True)
+                                                   Catch ex As Exception
+                                                       tcs.TrySetException(ex)
+                                                   End Try
+                                               End Sub))
+            Await tcs.Task
         Else
             Await ChatBrowser.ExecuteScriptAsync(js)
         End If

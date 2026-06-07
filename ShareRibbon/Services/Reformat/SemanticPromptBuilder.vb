@@ -92,12 +92,14 @@ Public Class SemanticPromptBuilder
             sb.AppendLine("发文机关标志(header.org) → 发文字号(header.refno) → 签发人(header.signer)")
             sb.AppendLine("→ 文件标题(title.main) → 主送机关(title.recipient) → 正文(body.normal)")
             sb.AppendLine("→ 附件说明(body.attachment) → 发文机关署名(footer.signature)")
-            sb.AppendLine("→ 成文日期(footer.date) → 抄送机关(footer.cc)")
+            sb.AppendLine("→ 成文日期(footer.date) → 附注(footer.note) → 抄送机关(footer.cc)")
             sb.AppendLine()
             sb.AppendLine("注意：")
-            sb.AppendLine("- 公文标题层级使用title.1/title.2/title.3，不要使用heading.*")
+            sb.AppendLine("- 文件标题使用title.main；正文内部的「一、」「（一）」「1.」分别使用title.1/title.2/title.3")
+            sb.AppendLine("- 公文不要使用heading.*；heading.*只用于论文、报告等通用章节标题")
             sb.AppendLine("- 即使Word样式名为「标题1」，只要文本内容符合公文结构特征，必须使用公文专用标签")
             sb.AppendLine("- 文末短段落（机构名、日期）应使用footer.signature/footer.date，不要标为body.normal")
+            sb.AppendLine("- 以「附注：」或圆括号联系人信息开头的段落使用footer.note；以「抄送：」开头的段落使用footer.cc")
             sb.AppendLine()
         End If
 
@@ -204,6 +206,7 @@ Public Class SemanticPromptBuilder
             sb.AppendLine("「附件：1. 工作方案」 → body.attachment（理由：附件说明）")
             sb.AppendLine("「XX市人民政府」 → footer.signature（理由：文末机构名称，落款）")
             sb.AppendLine("「2024年1月15日」 → footer.date（理由：文末日期格式）")
+            sb.AppendLine("「（联系人：张三，电话：12345678）」 → footer.note（理由：公文附注）")
             sb.AppendLine("「抄送：市委各部门」 → footer.cc（理由：以""抄送""开头）")
             Return sb.ToString()
         End If

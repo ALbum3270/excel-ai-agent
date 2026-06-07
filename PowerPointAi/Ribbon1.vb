@@ -180,7 +180,7 @@ Public Class Ribbon1
     End Sub
 
     ' 模板排版功能 - PowerPoint实现（使用JSON格式完整提取模板结构）
-    Protected Overrides Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
+    Protected Overrides Async Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
             ' 1. 打开文件对话框选择模板文件
             Using openDialog As New OpenFileDialog()
@@ -223,11 +223,9 @@ Public Class Ribbon1
                     Dim templateContent = templateJson.ToString(Formatting.Indented)
 
                     ' 调用JS进入模板渲染模式
-                    Task.Run(Async Function()
-                                 Await Task.Delay(500)
-                                 Dim jsCall = $"enterTemplateMode(`{JsUtil.EscapeForJs(templateContent)}`, `{JsUtil.EscapeForJs(templateName)}`);"
-                                 Await chatCtrl.ExecuteJavaScriptAsyncJS(jsCall)
-                             End Function)
+                    Await Task.Delay(500)
+                    Dim jsCall = $"enterTemplateMode(`{JsUtil.EscapeForJs(templateContent)}`, `{JsUtil.EscapeForJs(templateName)}`);"
+                    Await chatCtrl.ExecuteJavaScriptAsyncJS(jsCall)
 
                     MessageBox.Show("已进入模板渲染模式！" & vbCrLf & vbCrLf &
                                     "模板结构已解析完成（包含幻灯片、文本、样式、图片等信息）。" & vbCrLf &

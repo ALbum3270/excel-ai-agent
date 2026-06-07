@@ -8,6 +8,7 @@ Public Class ConfigSettings
     Public Shared Property ApiKey As String
     Public Shared Property ModelName As String
     Public Shared Property mcpable As Boolean
+    Public Shared Property ReasoningMode As String = "default"
 
     ' Embedding 模型配置
     Public Shared Property EmbeddingModel As String = ""

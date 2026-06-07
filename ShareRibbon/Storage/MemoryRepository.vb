@@ -83,6 +83,28 @@ Public Class MemoryWithScore
     Public Property Components As Dictionary(Of String, Double)
 End Class
 
+<SQLiteFunction(Name:="cosine_similarity_json", Arguments:=2, FuncType:=FunctionType.Scalar)>
+Public Class CosineSimilarityJsonFunction
+    Inherits SQLiteFunction
+
+    Public Overrides Function Invoke(args As Object()) As Object
+        Try
+            If args Is Nothing OrElse args.Length < 2 OrElse args(0) Is DBNull.Value OrElse args(1) Is DBNull.Value Then
+                Return 0.0R
+            End If
+
+            Dim storedVector = EmbeddingService.DeserializeVector(Convert.ToString(args(0)))
+            Dim queryVector = EmbeddingService.DeserializeVector(Convert.ToString(args(1)))
+            If storedVector Is Nothing OrElse queryVector Is Nothing Then Return 0.0R
+
+            Return CDbl(EmbeddingService.CosineSimilarity(queryVector, storedVector))
+        Catch ex As Exception
+            Debug.WriteLine($"[CosineSimilarityJsonFunction] 计算失败: {ex.Message}")
+            Return 0.0R
+        End Try
+    End Function
+End Class
+
 ''' <summary>
 ''' 会话摘要实体
 ''' </summary>
@@ -98,6 +120,41 @@ End Class
 ''' 记忆表 CRUD 访问
 ''' </summary>
 Public Class MemoryRepository
+    Private Shared _vectorFunctionsRegistered As Boolean = False
+    Private Shared ReadOnly _vectorFunctionLock As New Object()
+
+    Friend Shared Sub EnsureVectorFunctionsRegistered()
+        If _vectorFunctionsRegistered Then Return
+
+        SyncLock _vectorFunctionLock
+            If _vectorFunctionsRegistered Then Return
+            SQLiteFunction.RegisterFunction(GetType(CosineSimilarityJsonFunction))
+            _vectorFunctionsRegistered = True
+        End SyncLock
+    End Sub
+
+    Private Shared Function ReadAtomicMemory(rdr As SQLiteDataReader) As AtomicMemoryRecord
+        Return New AtomicMemoryRecord With {
+            .Id = rdr.GetInt64(0),
+            .Timestamp = rdr.GetInt64(1),
+            .Content = If(rdr.IsDBNull(2), "", rdr.GetString(2)),
+            .Tags = If(rdr.IsDBNull(3), "", rdr.GetString(3)),
+            .SessionId = If(rdr.IsDBNull(4), "", rdr.GetString(4)),
+            .CreateTime = If(rdr.IsDBNull(5), "", rdr.GetString(5)),
+            .Embedding = If(rdr.IsDBNull(6), Nothing, rdr.GetString(6)),
+            .MemoryType = If(rdr.IsDBNull(7), "short_term", rdr.GetString(7)),
+            .Importance = If(rdr.IsDBNull(8), 0.5, rdr.GetDouble(8)),
+            .AccessCount = If(rdr.IsDBNull(9), 0, rdr.GetInt32(9)),
+            .LastAccess = If(rdr.IsDBNull(10), "", rdr.GetString(10)),
+            .SourceType = If(rdr.IsDBNull(11), "general", rdr.GetString(11)),
+            .LinkedMemories = If(rdr.IsDBNull(12), "", rdr.GetString(12))
+        }
+    End Function
+
+    Private Shared Function GetEmbeddingDimension(embedding As String) As Integer
+        Dim vector = EmbeddingService.DeserializeVector(embedding)
+        Return If(vector Is Nothing, 0, vector.Length)
+    End Function
 
     ''' <summary>
     ''' 插入原子记忆。appType 为当前宿主（Excel/Word/PowerPoint），用于按应用筛选。
@@ -106,10 +163,11 @@ Public Class MemoryRepository
         OfficeAiDatabase.EnsureInitialized()
         Dim ts = CType((DateTime.UtcNow - New DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds, Long)
         Dim app = If(String.IsNullOrEmpty(appType), "", appType.Trim())
+        Dim embeddingDim = GetEmbeddingDimension(embedding)
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
             Using cmd As New SQLiteCommand(
-                "INSERT INTO atomic_memory (timestamp, content, tags, session_id, app_type, embedding, memory_type) VALUES (@ts, @content, @tags, @sid, @app, @emb, @mtype)", conn)
+                "INSERT INTO atomic_memory (timestamp, content, tags, session_id, app_type, embedding, memory_type, embedding_model, embedding_dim, embedding_updated_at) VALUES (@ts, @content, @tags, @sid, @app, @emb, @mtype, @emb_model, @emb_dim, @emb_updated)", conn)
                 cmd.Parameters.AddWithValue("@ts", ts)
                 cmd.Parameters.AddWithValue("@content", If(content, ""))
                 cmd.Parameters.AddWithValue("@tags", If(tags, ""))
@@ -117,6 +175,9 @@ Public Class MemoryRepository
                 cmd.Parameters.AddWithValue("@app", app)
                 cmd.Parameters.AddWithValue("@emb", If(embedding, DBNull.Value))
                 cmd.Parameters.AddWithValue("@mtype", If(String.IsNullOrEmpty(memoryType), "short_term", memoryType))
+                cmd.Parameters.AddWithValue("@emb_model", If(embeddingDim > 0, EmbeddingService.GetConfiguredEmbeddingModelName(), ""))
+                cmd.Parameters.AddWithValue("@emb_dim", embeddingDim)
+                cmd.Parameters.AddWithValue("@emb_updated", If(embeddingDim > 0, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), DBNull.Value))
                 cmd.ExecuteNonQuery()
             End Using
         End Using
@@ -172,7 +233,7 @@ Public Class MemoryRepository
             OfficeAiDatabase.EnsureInitialized()
             Dim app = If(String.IsNullOrEmpty(appType), "", appType.Trim())
             Dim hasApp = Not String.IsNullOrEmpty(app)
-            Dim sql = "SELECT COUNT(1) FROM atomic_memory WHERE memory_type = 'long_term' AND embedding IS NOT NULL AND embedding != ''"
+            Dim sql = "SELECT COUNT(1) FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term') AND embedding IS NOT NULL AND embedding != ''"
             If hasApp Then sql &= " AND (app_type = @app OR app_type IS NULL OR app_type = '')"
             Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
                 conn.Open()
@@ -212,8 +273,17 @@ Public Class MemoryRepository
         Dim hasApp = Not String.IsNullOrEmpty(app)
         Dim nowUnix = CType((DateTime.UtcNow - New DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds, Long)
 
+        If queryEmbedding IsNot Nothing AndAlso queryEmbedding.Length > 0 Then
+            Dim sqliteVectorResults = GetRelevantMemoriesBySqliteVector(queryEmbedding, topN, nowUnix, startTime, endTime, app)
+            If sqliteVectorResults.Count > 0 Then
+                Return sqliteVectorResults
+            End If
+
+            queryEmbedding = Nothing
+        End If
+
         Dim allMemories As New List(Of AtomicMemoryRecord)()
-        Dim sql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type = 'long_term'"
+        Dim sql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term')"
 
         If hasApp Then sql &= " AND (app_type = @app OR app_type IS NULL OR app_type = '')"
         If startTime.HasValue Then sql &= " AND timestamp >= @st"
@@ -294,7 +364,7 @@ Public Class MemoryRepository
         Debug.WriteLine($"[MemoryRepository] 退回到 LIKE 查询，query: {If(query?.Length > 50, query.Substring(0, 50) & "...", query)}")
 
         Dim fallbackList As New List(Of AtomicMemoryRecord)()
-        Dim fallbackSql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type = 'long_term'"
+        Dim fallbackSql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term')"
 
         If Not String.IsNullOrWhiteSpace(query) Then
             fallbackSql &= " AND (content LIKE @q OR tags LIKE @q)"
@@ -344,6 +414,65 @@ Public Class MemoryRepository
         Return fallbackList
     End Function
 
+    Private Shared Function GetRelevantMemoriesBySqliteVector(queryEmbedding As Single(), topN As Integer, nowUnix As Long, startTime As DateTime?, endTime As DateTime?, app As String) As List(Of AtomicMemoryRecord)
+        Dim results As New List(Of AtomicMemoryRecord)()
+        If queryEmbedding Is Nothing OrElse queryEmbedding.Length = 0 Then Return results
+
+        EnsureVectorFunctionsRegistered()
+
+        Dim queryEmbeddingJson = EmbeddingService.SerializeVector(queryEmbedding)
+        If String.IsNullOrWhiteSpace(queryEmbeddingJson) Then Return results
+
+        Dim hasApp = Not String.IsNullOrWhiteSpace(app)
+        Dim whereParts As New List(Of String) From {
+            "memory_type IN ('long_term', 'short_term')",
+            "embedding IS NOT NULL",
+            "embedding != ''"
+        }
+        If hasApp Then whereParts.Add("(app_type = @app OR app_type IS NULL OR app_type = '')")
+        If startTime.HasValue Then whereParts.Add("timestamp >= @st")
+        If endTime.HasValue Then whereParts.Add("timestamp <= @et")
+
+        Dim fields = "id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories"
+        Dim scoreExpr = "cosine_similarity_json(embedding, @queryEmbedding)"
+        Dim decayExpr = "(1.0 / (1.0 + ((CASE WHEN @nowUnix > timestamp THEN @nowUnix - timestamp ELSE 0 END) / 86400.0) * @decayRate))"
+        Dim importanceExpr = "(0.7 + COALESCE(importance, 0.5) * 0.3)"
+        Dim finalScoreExpr = $"({scoreExpr} * {decayExpr} * {importanceExpr})"
+        Dim sql = $"SELECT {fields}, similarity, final_score FROM (" &
+                  $"SELECT {fields}, {scoreExpr} AS similarity, {finalScoreExpr} AS final_score " &
+                  $"FROM atomic_memory WHERE {String.Join(" AND ", whereParts)}) " &
+                  "WHERE final_score >= @threshold ORDER BY final_score DESC LIMIT @limit"
+
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Using cmd As New SQLiteCommand(sql, conn)
+                cmd.Parameters.AddWithValue("@queryEmbedding", queryEmbeddingJson)
+                cmd.Parameters.AddWithValue("@nowUnix", nowUnix)
+                cmd.Parameters.AddWithValue("@decayRate", MemoryConfig.RagTimeDecayRate)
+                cmd.Parameters.AddWithValue("@threshold", MemoryConfig.RagSimilarityThreshold)
+                cmd.Parameters.AddWithValue("@limit", Math.Max(1, topN))
+                If hasApp Then cmd.Parameters.AddWithValue("@app", app)
+                If startTime.HasValue Then
+                    cmd.Parameters.AddWithValue("@st", CType((startTime.Value.ToUniversalTime() - New DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds, Long))
+                End If
+                If endTime.HasValue Then
+                    cmd.Parameters.AddWithValue("@et", CType((endTime.Value.ToUniversalTime() - New DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds, Long))
+                End If
+
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        Dim mem = ReadAtomicMemory(rdr)
+                        mem.SimilarityScore = If(rdr.IsDBNull(13), 0.0F, Convert.ToSingle(rdr.GetDouble(13)))
+                        results.Add(mem)
+                    End While
+                End Using
+            End Using
+        End Using
+
+        Debug.WriteLine($"[MemoryRepository] SQLite 向量检索完成，返回 {results.Count} 条")
+        Return results
+    End Function
+
     ''' <summary>
     ''' 获取用户画像
     ''' </summary>
@@ -351,10 +480,31 @@ Public Class MemoryRepository
         OfficeAiDatabase.EnsureInitialized()
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
-            Using cmd As New SQLiteCommand("SELECT content FROM user_profile ORDER BY id DESC LIMIT 1", conn)
-                Dim obj = cmd.ExecuteScalar()
-                Return If(obj Is Nothing OrElse obj Is DBNull.Value, "", obj.ToString())
+            If TableHasColumn(conn, "user_profile", "content") Then
+                Using cmd As New SQLiteCommand("SELECT content FROM user_profile ORDER BY id DESC LIMIT 1", conn)
+                    Dim obj = cmd.ExecuteScalar()
+                    Return If(obj Is Nothing OrElse obj Is DBNull.Value, "", obj.ToString())
+                End Using
+            End If
+
+            Dim lines As New List(Of String)()
+            Using cmd As New SQLiteCommand("SELECT key, value, category FROM user_profile ORDER BY last_updated DESC, id DESC LIMIT 20", conn)
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        Dim key = If(rdr.IsDBNull(0), "", rdr.GetString(0))
+                        Dim value = If(rdr.IsDBNull(1), "", rdr.GetString(1))
+                        Dim category = If(rdr.IsDBNull(2), "", rdr.GetString(2))
+                        If Not String.IsNullOrWhiteSpace(value) Then
+                            If String.Equals(key, "legacy_data", StringComparison.OrdinalIgnoreCase) Then
+                                lines.Add(value)
+                            Else
+                                lines.Add($"{If(String.IsNullOrWhiteSpace(category), "profile", category)}.{key}: {value}")
+                            End If
+                        End If
+                    End While
+                End Using
             End Using
+            Return String.Join(vbCrLf, lines)
         End Using
     End Function
 
@@ -365,6 +515,16 @@ Public Class MemoryRepository
         OfficeAiDatabase.EnsureInitialized()
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
+            If Not TableHasColumn(conn, "user_profile", "content") Then
+                Using cmd As New SQLiteCommand(
+                    "INSERT INTO user_profile (key, value, category, confidence) VALUES ('legacy_data', @c, 'summary', 0.8) " &
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, category = excluded.category, confidence = excluded.confidence, last_updated = datetime('now','localtime'), observation_count = observation_count + 1", conn)
+                    cmd.Parameters.AddWithValue("@c", If(content, ""))
+                    cmd.ExecuteNonQuery()
+                End Using
+                Return
+            End If
+
             ' 若存在则更新，否则插入
             Using check As New SQLiteCommand("SELECT COUNT(*) FROM user_profile", conn)
                 Dim cnt = Convert.ToInt32(check.ExecuteScalar())
@@ -382,6 +542,19 @@ Public Class MemoryRepository
             End Using
         End Using
     End Sub
+
+    Private Shared Function TableHasColumn(conn As SQLiteConnection, tableName As String, columnName As String) As Boolean
+        Using cmd As New SQLiteCommand($"PRAGMA table_info({tableName})", conn)
+            Using rdr = cmd.ExecuteReader()
+                While rdr.Read()
+                    If String.Equals(rdr("name").ToString(), columnName, StringComparison.OrdinalIgnoreCase) Then
+                        Return True
+                    End If
+                End While
+            End Using
+        End Using
+        Return False
+    End Function
 
     ''' <summary>
     ''' 获取近期会话摘要
@@ -435,10 +608,11 @@ Public Class MemoryRepository
         Dim ts = CType((DateTime.UtcNow - New DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds, Long)
         Dim app = If(String.IsNullOrEmpty(appType), "", appType.Trim())
         Dim newId As Long = 0
+        Dim embeddingDim = GetEmbeddingDimension(embedding)
         Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
             conn.Open()
             Using cmd As New SQLiteCommand(
-                "INSERT INTO atomic_memory (timestamp, content, tags, session_id, app_type, embedding, memory_type, importance, source_type) VALUES (@ts, @content, @tags, @sid, @app, @emb, @mtype, @imp, @stype); SELECT last_insert_rowid();", conn)
+                "INSERT INTO atomic_memory (timestamp, content, tags, session_id, app_type, embedding, memory_type, importance, source_type, embedding_model, embedding_dim, embedding_updated_at) VALUES (@ts, @content, @tags, @sid, @app, @emb, @mtype, @imp, @stype, @emb_model, @emb_dim, @emb_updated); SELECT last_insert_rowid();", conn)
                 cmd.Parameters.AddWithValue("@ts", ts)
                 cmd.Parameters.AddWithValue("@content", If(content, ""))
                 cmd.Parameters.AddWithValue("@tags", "")
@@ -448,6 +622,9 @@ Public Class MemoryRepository
                 cmd.Parameters.AddWithValue("@mtype", If(String.IsNullOrEmpty(memoryType), "long_term", memoryType))
                 cmd.Parameters.AddWithValue("@imp", importance)
                 cmd.Parameters.AddWithValue("@stype", If(String.IsNullOrEmpty(sourceType), "general", sourceType))
+                cmd.Parameters.AddWithValue("@emb_model", If(embeddingDim > 0, EmbeddingService.GetConfiguredEmbeddingModelName(), ""))
+                cmd.Parameters.AddWithValue("@emb_dim", embeddingDim)
+                cmd.Parameters.AddWithValue("@emb_updated", If(embeddingDim > 0, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), DBNull.Value))
                 Dim obj = cmd.ExecuteScalar()
                 If obj IsNot Nothing AndAlso Not IsDBNull(obj) Then
                     newId = Convert.ToInt64(obj)
@@ -495,7 +672,7 @@ Public Class MemoryRepository
             If memory IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(memory.Embedding) Then
                 Dim memEmbedding = EmbeddingService.DeserializeVector(memory.Embedding)
                 If memEmbedding IsNot Nothing Then
-                    Using cmd As New SQLiteCommand("SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE id != @id AND memory_type = 'long_term' AND embedding IS NOT NULL AND embedding != '' LIMIT 100", conn)
+                    Using cmd As New SQLiteCommand("SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE id != @id AND memory_type IN ('long_term', 'short_term') AND embedding IS NOT NULL AND embedding != '' LIMIT 100", conn)
                         cmd.Parameters.AddWithValue("@id", memoryId)
                         Using rdr = cmd.ExecuteReader()
                             While rdr.Read()

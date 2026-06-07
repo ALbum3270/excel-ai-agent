@@ -27,23 +27,38 @@ Public Class DeepseekControl
     End Sub
 
     Protected Overrides Sub SendChatMessage(message As String)
-        Throw New NotImplementedException()
+        Debug.WriteLine("DeepseekControl SendChatMessage: " & message)
     End Sub
 
     Protected Overrides Sub GetSelectionContent(target As Object)
-        Throw New NotImplementedException()
+        ' Deepseek 网页控件不维护本地引用卡片；发送时由 AppendCurrentSelectedContent 读取当前选区。
     End Sub
 
     Protected Overrides Function GetCurrentWorkingDirectory() As String
-        Throw New NotImplementedException()
+        Try
+            Dim p = Globals.ThisAddIn.Application.ActiveDocument.Path
+            If String.IsNullOrEmpty(p) Then Return String.Empty
+            Return p
+        Catch ex As Exception
+            Debug.WriteLine($"获取 Word 工作目录失败: {ex.Message}")
+            Return String.Empty
+        End Try
     End Function
 
     Protected Overrides Function AppendCurrentSelectedContent(message As String) As String
-        Throw New NotImplementedException()
+        Try
+            Dim sel = Globals.ThisAddIn.Application.Selection
+            Dim text As String = If(sel IsNot Nothing AndAlso sel.Range IsNot Nothing, sel.Range.Text, String.Empty)
+            If String.IsNullOrWhiteSpace(text) Then Return message
+            Return message & vbCrLf & vbCrLf & "--- 当前 Word 选区 ---" & vbCrLf & text
+        Catch ex As Exception
+            Debug.WriteLine($"附加 Word 选区失败: {ex.Message}")
+            Return message
+        End Try
     End Function
 
     Protected Overrides Function GetApplication() As ApplicationInfo
-        Throw New NotImplementedException()
+        Return New ApplicationInfo("Word", OfficeApplicationType.Word)
     End Function
 
     Protected Overrides Function GetVBProject() As VBProject

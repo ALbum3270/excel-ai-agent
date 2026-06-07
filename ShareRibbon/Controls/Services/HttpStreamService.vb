@@ -1135,6 +1135,7 @@ Public Class HttpStreamService
             requestObj("model") = ConfigSettings.ModelName
             requestObj("messages") = messagesArray
             requestObj("stream") = True
+            ReasoningRequestHelper.ApplyReasoningOptions(requestObj, ConfigSettings.ReasoningMode, ConfigSettings.ModelName, ConfigSettings.platform, ConfigSettings.ApiUrl)
 
             Dim toolsArray = BuildToolsArray()
             If toolsArray IsNot Nothing AndAlso toolsArray.Count > 0 Then
@@ -1286,9 +1287,13 @@ Public Class HttpStreamService
 
         If toolsArray IsNot Nothing AndAlso toolsArray.Count > 0 Then
             Dim toolsJson = toolsArray.ToString(Newtonsoft.Json.Formatting.None)
-            Return $"{{""model"": ""{ConfigSettings.ModelName}"", ""tools"": {toolsJson}, ""messages"": [{messagesJson}], ""stream"": true}}"
+            Dim requestObj = JObject.Parse($"{{""model"": ""{ConfigSettings.ModelName}"", ""tools"": {toolsJson}, ""messages"": [{messagesJson}], ""stream"": true}}")
+            ReasoningRequestHelper.ApplyReasoningOptions(requestObj, ConfigSettings.ReasoningMode, ConfigSettings.ModelName, ConfigSettings.platform, ConfigSettings.ApiUrl)
+            Return requestObj.ToString(Newtonsoft.Json.Formatting.None)
         Else
-            Return $"{{""model"": ""{ConfigSettings.ModelName}"", ""messages"": [{messagesJson}], ""stream"": true}}"
+            Dim requestObj = JObject.Parse($"{{""model"": ""{ConfigSettings.ModelName}"", ""messages"": [{messagesJson}], ""stream"": true}}")
+            ReasoningRequestHelper.ApplyReasoningOptions(requestObj, ConfigSettings.ReasoningMode, ConfigSettings.ModelName, ConfigSettings.platform, ConfigSettings.ApiUrl)
+            Return requestObj.ToString(Newtonsoft.Json.Formatting.None)
         End If
     End Function
 
