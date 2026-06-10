@@ -13,6 +13,7 @@ Namespace Agent
         Private ReadOnly _toolRegistry As ToolRegistry
         Private ReadOnly _memory As AgentMemory
         Private ReadOnly _promptManager As PromptManager
+        Private ReadOnly _undoManager As Core.UndoManager
 
         ' 循环限制
         Private Const MaxIterations As Integer = 15
@@ -31,6 +32,7 @@ Namespace Agent
             _toolRegistry = toolRegistry
             _memory = memory
             _promptManager = promptManager
+            _undoManager = New Core.UndoManager(10) ' 最多保存 10 个撤销点
         End Sub
 
         ''' <summary>
@@ -110,13 +112,95 @@ Namespace Agent
                         session.Status = AgentStatus.Executing
                     End If
 
-                    ' --- ACT ---
+                    ' --- ACT (增强版 - 多轮自修复 + 撤销点) ---
                     session.Status = AgentStatus.Executing
-                    Dim toolResult = Await _toolRegistry.ExecuteToolAsync(toolCall.ToolId, toolCall.Parameters)
+
+                    ' 创建撤销点（执行前保存状态）
+                    Dim undoPoint As Core.UndoManager.UndoPoint = Nothing
+                    If _undoManager IsNot Nothing Then
+                        undoPoint = _undoManager.CreateUndoPoint(
+                            If(session.AppType, "Unknown"),
+                            $"步骤 {stepIndex + 1}: {toolCall.ToolId}",
+                            planStep.Description)
+                        If undoPoint IsNot Nothing Then
+                            Debug.WriteLine($"[LoopEngine] 创建撤销点: {undoPoint.Name}")
+                        End If
+                    End If
+
+                    Const MaxFixAttempts As Integer = 3
+                    Dim fixAttempt As Integer = 0
+                    Dim toolResult As ToolResult = Nothing
+                    Dim originalToolCall = toolCall
+
+                    ' 多轮修复循环
+                    While fixAttempt < MaxFixAttempts
+                        ' 执行工具
+                        toolResult = Await _toolRegistry.ExecuteToolAsync(toolCall.ToolId, toolCall.Parameters)
+
+                        If toolResult.Success Then
+                            ' 成功，跳出循环
+                            Exit While
+                        End If
+
+                        ' 失败：尝试自动修复
+                        fixAttempt += 1
+                        If fixAttempt < MaxFixAttempts Then
+                            OnStatusChanged?.Invoke($"代码执行失败，AI 正在修复（尝试 {fixAttempt}/{MaxFixAttempts}）...")
+                            Debug.WriteLine($"[LoopEngine] 第 {fixAttempt} 次修复尝试，错误: {toolResult.Message}")
+
+                            ' 构建修复提示词
+                            Dim fixPrompt = $"上一次执行失败：
+
+错误信息: {toolResult.Message}
+
+原工具调用: {toolCall.ToolId}
+原参数: {Newtonsoft.Json.JsonConvert.SerializeObject(toolCall.Parameters)}
+
+请分析错误原因并返回修正后的工具调用。只返回 JSON，格式：
+```json
+{{
+  ""toolId"": ""..."",
+  ""parameters"": {{...}}
+}}
+```"
+
+                            Try
+                                ' 请求 AI 修复
+                                Dim fixedResponse = Await SendAIRequest(fixPrompt, systemPrompt, Nothing)
+                                Dim fixedJson = ExtractJson(fixedResponse)
+
+                                If Not String.IsNullOrEmpty(fixedJson) Then
+                                    Dim fixedObj = JObject.Parse(fixedJson)
+                                    Dim fixedToolCall As New ToolCall With {
+                                        .ToolId = If(fixedObj("toolId")?.ToString(), toolCall.ToolId),
+                                        .Parameters = fixedObj("parameters")
+                                    }
+
+                                    ' 使用修复后的工具调用
+                                    toolCall = fixedToolCall
+                                    Debug.WriteLine($"[LoopEngine] AI 已生成修复方案")
+                                Else
+                                    Debug.WriteLine($"[LoopEngine] 无法解析修复响应，放弃修复")
+                                    Exit While
+                                End If
+                            Catch ex As Exception
+                                Debug.WriteLine($"[LoopEngine] 修复过程异常: {ex.Message}")
+                                Exit While
+                            End Try
+                        End If
+                    End While
 
                     ' --- OBSERVE ---
                     session.Status = AgentStatus.Observing
                     Dim observation = FormatObservation(toolResult)
+
+                    ' 如果失败且已达最大修复次数，追加提示
+                    If Not toolResult.Success AndAlso fixAttempt >= MaxFixAttempts Then
+                        observation &= $" (AI 已尝试自动修复 {fixAttempt} 次，仍然失败)"
+                    ElseIf fixAttempt > 0 AndAlso toolResult.Success Then
+                        observation &= $" (AI 第 {fixAttempt} 次修复成功)"
+                    End If
+
                     _memory.SetWorking("lastObservation", observation)
 
                     ' 记录迭代
@@ -140,6 +224,13 @@ Namespace Agent
                         planStep.ErrorMessage = toolResult.Message
                         noProgressCount += 1
                         OnStepCompleted?.Invoke(stepIndex, False, toolResult.Message)
+
+                        ' 失败且多轮修复失败，提示可以撤销
+                        If fixAttempt >= MaxFixAttempts AndAlso undoPoint IsNot Nothing Then
+                            Dim undoHint = _undoManager.GetUndoHint(If(session.AppType, "Unknown"))
+                            Debug.WriteLine($"[LoopEngine] 执行失败，{undoHint}")
+                            ' 可以在这里通知用户撤销选项
+                        End If
 
                         ' --- REFLECT (连续失败) ---
                         If noProgressCount >= MaxNoProgress Then
@@ -391,6 +482,15 @@ complexity 规则：
             ' 无回调时默认批准
             Return True
         End Function
+
+        ''' <summary>
+        ''' 获取撤销管理器（供外部访问）
+        ''' </summary>
+        Public ReadOnly Property UndoManager As Core.UndoManager
+            Get
+                Return _undoManager
+            End Get
+        End Property
 
 #End Region
 

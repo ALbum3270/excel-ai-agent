@@ -325,6 +325,7 @@ Public MustInherit Class BaseChatControl
     End Sub
 
     Protected Async Function InitializeWebView2() As Task
+        ' 确保在 UI 线程上执行
         If ChatBrowser.InvokeRequired Then
             Await UiDispatcher.InvokeAsync(ChatBrowser,
                 Async Function()
@@ -335,7 +336,26 @@ Public MustInherit Class BaseChatControl
 
         Await _webViewInitSemaphore.WaitAsync()
         Try
-            If ChatBrowser.CoreWebView2 IsNot Nothing Then
+            ' 安全检查 CoreWebView2（必须在 UI 线程）
+            Dim isInitialized As Boolean = False
+            Try
+                isInitialized = (ChatBrowser.CoreWebView2 IsNot Nothing)
+            Catch ex As InvalidOperationException
+                ' CoreWebView2 只能在 UI 线程访问，如果出现此异常，重新调度到 UI 线程
+                Debug.WriteLine("[InitializeWebView2] 检测到线程问题，重新调度到 UI 线程")
+                _webViewInitSemaphore.Release()
+
+                ' 使用 Control.Invoke 强制在 UI 线程执行
+                If ChatBrowser.InvokeRequired Then
+                    ChatBrowser.Invoke(New Action(Async Sub()
+                        Await InitializeWebView2()
+                    End Sub))
+                    Return
+                End If
+                Throw
+            End Try
+
+            If isInitialized Then
                 Return
             End If
 
@@ -1544,18 +1564,18 @@ Public MustInherit Class BaseChatControl
                                  Return
                              End If
 
-                             ' 情况2：置信度太低（<0.4），让大模型来询问用户澄清
-                             If CurrentIntentResult.Confidence < 0.4 Then
-                                 Debug.WriteLine($"直接发送消息（置信度:{CurrentIntentResult.Confidence:F2}）")
-                                 SendChatMessageWithIntent(finalMessageToLLM, CurrentIntentResult)
+                             ' 情况2：启用了新架构 -> 所有任务都走 AgentKernel（优先级最高）
+                             If ConfigSettings.UseNewAgentKernel Then
+                                 Debug.WriteLine($"智能路由：使用 AgentKernel 处理任务 [{CurrentIntentResult.OfficeIntent}]，置信度: {CurrentIntentResult.Confidence:F2}")
+                                 ExecuteJavaScriptAsyncJS("showIdentifyingStatus()")
+                                 StartAgentPlanningFlow(finalMessageToLLM, CurrentIntentResult)
                                  Return
                              End If
 
-                             ' 情况3：复杂任务且启用了新架构 -> 自动走 AgentKernel（智能模式无需意图确认）
-                             If ConfigSettings.UseNewAgentKernel AndAlso isComplexTask Then
-                                 Debug.WriteLine($"智能路由：识别到复杂任务 [{CurrentIntentResult.OfficeIntent}]，自动启动 AgentKernel")
-                                 ExecuteJavaScriptAsyncJS("showIdentifyingStatus()")
-                                 StartAgentPlanningFlow(finalMessageToLLM, CurrentIntentResult)
+                             ' 情况3：旧架构 - 置信度太低（<0.4），让大模型来询问用户澄清
+                             If CurrentIntentResult.Confidence < 0.4 Then
+                                 Debug.WriteLine($"直接发送消息（置信度:{CurrentIntentResult.Confidence:F2}）")
+                                 SendChatMessageWithIntent(finalMessageToLLM, CurrentIntentResult)
                                  Return
                              End If
 
@@ -2900,7 +2920,8 @@ Public MustInherit Class BaseChatControl
         Try
             If _responseModeMap.ContainsKey(_finalUuid) Then
                 Dim mode = _responseModeMap(_finalUuid)
-                If mode = "reformat" OrElse mode = "proofread" OrElse mode = "semantic_reformat" Then
+                ' semantic_reformat 使用不同的验证逻辑，在 WordAi 的 ApplySemanticTaggingResult 中处理
+                If mode = "reformat" OrElse mode = "proofread" Then
                     Dim aiResponse = allPlainMarkdownBuffer.ToString()
                     If Not String.IsNullOrWhiteSpace(aiResponse) Then
                         Dim expectedFormat = If(mode = "proofread", InstructionFormat.ProofreadJson, InstructionFormat.DslJson)

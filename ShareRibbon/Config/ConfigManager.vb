@@ -27,6 +27,15 @@ Public Class ConfigManager
             MergeConfigurations(loadedData)
         End If
 
+        ' 检查是否需要迁移到加密存储
+        If SecureConfigIntegration.NeedsMigration() Then
+            System.Diagnostics.Debug.WriteLine("[ConfigManager] 检测到明文 API Key，开始迁移到加密存储")
+            SecureConfigIntegration.MigrateToSecureStorage()
+        End If
+
+        ' 从加密存储加载 API Key
+        SecureConfigIntegration.LoadSecureApiKeys(ConfigData)
+
         ' 初始化配置，将数据初始化到 ConfigSettings，方便全局调用
         For Each item In ConfigData
             If item.selected Then
@@ -127,6 +136,9 @@ Public Class ConfigManager
 
     ' 保存到文件中，默认存在用户的文档目录下
     Public Shared Sub SaveConfig()
+        ' 保存 API Key 到加密存储
+        SecureConfigIntegration.SaveSecureApiKeys(ConfigData)
+
         Dim json As String = Newtonsoft.Json.JsonConvert.SerializeObject(ConfigData, Newtonsoft.Json.Formatting.Indented)
         ' 如果configFilePath的目录不存在就创建
         Dim dir = Path.GetDirectoryName(configFilePath)

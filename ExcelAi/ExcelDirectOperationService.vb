@@ -165,6 +165,10 @@ Public Class ExcelDirectOperationService
     ''' 执行写入数据命令
     ''' </summary>
     Private Function ExecuteWriteData(params As JToken) As Boolean
+        Dim ws As Worksheet = Nothing
+        Dim range As Range = Nothing
+        Dim resizedRange As Range = Nothing
+
         Try
             ' 支持多种参数名：targetRange, startCell, range
             Dim targetRange = params("targetRange")?.ToString()
@@ -196,7 +200,6 @@ Public Class ExcelDirectOperationService
             End If
 
             ' 解析目标范围（可能包含工作表名）
-            Dim ws As Worksheet
             Dim cellAddress As String = targetRange
 
             If targetRange.Contains("!") Then
@@ -218,7 +221,7 @@ Public Class ExcelDirectOperationService
                 ws = _excelApp.ActiveSheet
             End If
 
-            Dim range As Range = ws.Range(cellAddress)
+            range = ws.Range(cellAddress)
 
             ' 支持单值或数组
             If data.Type = JTokenType.Array Then
@@ -234,7 +237,8 @@ Public Class ExcelDirectOperationService
                         Next
                     Next
 
-                    range.Resize(rows, cols).Value2 = values
+                    resizedRange = range.Resize(rows, cols)
+                    resizedRange.Value2 = values
                 End If
             Else
                 range.Value2 = data.ToString()
@@ -247,6 +251,11 @@ Public Class ExcelDirectOperationService
             Debug.WriteLine($"ExecuteWriteData 出错: {ex.Message}")
             ShareRibbon.GlobalStatusStrip.ShowWarning($"写入数据失败: {ex.Message}")
             Return False
+        Finally
+            ' 释放 COM 对象
+            ComObjectHelper.ReleaseComObject(resizedRange)
+            ComObjectHelper.ReleaseComObject(range)
+            ComObjectHelper.ReleaseComObject(ws)
         End Try
     End Function
 
@@ -254,6 +263,11 @@ Public Class ExcelDirectOperationService
     ''' 执行应用公式命令
     ''' </summary>
     Private Function ExecuteApplyFormula(params As JToken) As Boolean
+        Dim ws As Worksheet = Nothing
+        Dim range As Range = Nothing
+        Dim rows As Range = Nothing
+        Dim cell As Range = Nothing
+
         Try
             Dim targetRange = params("targetRange")?.ToString()
             Dim formula = params("formula")?.ToString()
@@ -264,7 +278,6 @@ Public Class ExcelDirectOperationService
             End If
 
             ' 解析目标范围（可能包含工作表名）
-            Dim ws As Worksheet
             Dim cellAddress As String = targetRange
 
             If targetRange.Contains("!") Then
@@ -285,7 +298,7 @@ Public Class ExcelDirectOperationService
                 ws = _excelApp.ActiveSheet
             End If
 
-            Dim range As Range = ws.Range(cellAddress)
+            range = ws.Range(cellAddress)
 
             ' 确保公式以=开头
             If Not formula.StartsWith("=") Then
@@ -294,8 +307,9 @@ Public Class ExcelDirectOperationService
 
             If fillDown AndAlso range.Rows.Count > 1 Then
                 ' 只设置第一个单元格，然后向下填充
-                range.Cells(1, 1).Formula = formula
-                range.Cells(1, 1).AutoFill(range, XlAutoFillType.xlFillDefault)
+                cell = range.Cells(1, 1)
+                cell.Formula = formula
+                cell.AutoFill(range, XlAutoFillType.xlFillDefault)
             Else
                 range.Formula = formula
             End If
@@ -307,6 +321,12 @@ Public Class ExcelDirectOperationService
             Debug.WriteLine($"ExecuteApplyFormula 出错: {ex.Message}")
             ShareRibbon.GlobalStatusStrip.ShowWarning($"应用公式失败: {ex.Message}")
             Return False
+        Finally
+            ' 释放 COM 对象
+            ComObjectHelper.ReleaseComObject(cell)
+            ComObjectHelper.ReleaseComObject(rows)
+            ComObjectHelper.ReleaseComObject(range)
+            ComObjectHelper.ReleaseComObject(ws)
         End Try
     End Function
 
@@ -375,23 +395,30 @@ Public Class ExcelDirectOperationService
     ''' 应用单个公式到范围
     ''' </summary>
     Private Function ApplySingleFormula(ws As Worksheet, targetRange As String, formula As String, fillDown As Boolean) As Boolean
+        Dim usedRange As Range = Nothing
+        Dim rows As Range = Nothing
+        Dim range As Range = Nothing
+        Dim cell As Range = Nothing
+
         Try
             ' 处理动态范围如 "C1:C" + last_row
             If targetRange.Contains("+") OrElse targetRange.Contains("last_row") Then
-                Dim usedRange = ws.UsedRange
-                Dim lastRow = usedRange.Row + usedRange.Rows.Count - 1
+                usedRange = ws.UsedRange
+                rows = usedRange.Rows
+                Dim lastRow = usedRange.Row + rows.Count - 1
                 targetRange = $"C1:C{lastRow}"
             End If
 
-            Dim range As Range = ws.Range(targetRange)
+            range = ws.Range(targetRange)
 
             If Not formula.StartsWith("=") Then
                 formula = "=" & formula
             End If
 
             If fillDown AndAlso range.Rows.Count > 1 Then
-                range.Cells(1, 1).Formula = formula
-                range.Cells(1, 1).AutoFill(range, XlAutoFillType.xlFillDefault)
+                cell = range.Cells(1, 1)
+                cell.Formula = formula
+                cell.AutoFill(range, XlAutoFillType.xlFillDefault)
             Else
                 range.Formula = formula
             End If
@@ -401,6 +428,12 @@ Public Class ExcelDirectOperationService
         Catch ex As Exception
             Debug.WriteLine($"ApplySingleFormula 出错: {ex.Message}")
             Return False
+        Finally
+            ' 释放 COM 对象
+            ComObjectHelper.ReleaseComObject(cell)
+            ComObjectHelper.ReleaseComObject(range)
+            ComObjectHelper.ReleaseComObject(rows)
+            ComObjectHelper.ReleaseComObject(usedRange)
         End Try
     End Function
 

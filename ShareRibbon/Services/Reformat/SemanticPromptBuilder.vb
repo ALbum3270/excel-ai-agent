@@ -2,12 +2,20 @@
 ' 统一构建语义标注提示词
 
 Imports System.Text
+Imports ShareRibbon.Services.Reformat
 
 ''' <summary>
 ''' 语义提示词构建器 - 为AI构建语义标注的系统提示词
 ''' 模板排版和规范排版共用同一构建逻辑
 ''' </summary>
 Public Class SemanticPromptBuilder
+
+    ' 单例场景管理器
+    Private Shared _scenarioManager As ScenarioManager
+
+    Shared Sub New()
+        _scenarioManager = New ScenarioManager()
+    End Sub
 
     ''' <summary>
     ''' 构建语义标注提示词（带样式上下文）
@@ -84,29 +92,43 @@ Public Class SemanticPromptBuilder
         sb.AppendLine("5. 不确定时使用最通用的body.normal标签")
         sb.AppendLine()
 
-        ' ===== 公文特殊规则 =====
-        If Not String.IsNullOrEmpty(documentTypeContext) AndAlso
-           (documentTypeContext.Contains("公文") OrElse documentTypeContext.Contains("GB/T 9704")) Then
-            sb.AppendLine("【公文结构识别】")
-            sb.AppendLine("公文文档有固定的结构顺序，请按此顺序识别：")
-            sb.AppendLine("发文机关标志(header.org) → 发文字号(header.refno) → 签发人(header.signer)")
-            sb.AppendLine("→ 文件标题(title.main) → 主送机关(title.recipient) → 正文(body.normal)")
-            sb.AppendLine("→ 附件说明(body.attachment) → 发文机关署名(footer.signature)")
-            sb.AppendLine("→ 成文日期(footer.date) → 附注(footer.note) → 抄送机关(footer.cc)")
-            sb.AppendLine()
-            sb.AppendLine("注意：")
-            sb.AppendLine("- 文件标题使用title.main；正文内部的「一、」「（一）」「1.」分别使用title.1/title.2/title.3")
-            sb.AppendLine("- 公文不要使用heading.*；heading.*只用于论文、报告等通用章节标题")
-            sb.AppendLine("- 即使Word样式名为「标题1」，只要文本内容符合公文结构特征，必须使用公文专用标签")
-            sb.AppendLine("- 文末短段落（机构名、日期）应使用footer.signature/footer.date，不要标为body.normal")
-            sb.AppendLine("- 以「附注：」或圆括号联系人信息开头的段落使用footer.note；以「抄送：」开头的段落使用footer.cc")
-            sb.AppendLine()
+        ' ===== 场景化结构识别（从 JSON 加载） =====
+        Dim scenario As FormattingScenario = Nothing
+        If Not String.IsNullOrEmpty(documentTypeContext) Then
+            scenario = _scenarioManager.MatchScenario(documentTypeContext)
+        End If
+
+        If scenario IsNot Nothing Then
+            ' 使用场景的识别模式（详细）
+            Dim patternsText = ScenarioManager.BuildIdentificationPatternsText(scenario)
+            If Not String.IsNullOrEmpty(patternsText) Then
+                sb.Append(patternsText)
+            End If
+
+            ' 使用场景的结构指导
+            Dim guidanceText = ScenarioManager.BuildStructureGuidanceText(scenario)
+            If Not String.IsNullOrEmpty(guidanceText) Then
+                sb.Append(guidanceText)
+            End If
         End If
 
         ' ===== 7. 标注示例（按文档类型） =====
         sb.AppendLine("【标注示例】")
-        Dim examples As String = GetExamplesByDocumentType(documentTypeContext, mapping)
-        sb.Append(examples)
+        If scenario IsNot Nothing Then
+            ' 使用场景的示例
+            Dim examplesText = ScenarioManager.BuildExamplesText(scenario)
+            If Not String.IsNullOrEmpty(examplesText) Then
+                sb.Append(examplesText)
+            Else
+                ' 回退到旧方法
+                Dim examples As String = GetExamplesByDocumentType(documentTypeContext, mapping)
+                sb.Append(examples)
+            End If
+        Else
+            ' 无场景，使用旧方法
+            Dim examples As String = GetExamplesByDocumentType(documentTypeContext, mapping)
+            sb.Append(examples)
+        End If
         sb.AppendLine()
 
         ' ===== 8. 严格要求 =====

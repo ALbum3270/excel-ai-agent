@@ -3,6 +3,8 @@ Imports System.Drawing
 Imports System.IO
 Imports System.Linq
 Imports System.Net
+Imports ExcelAi.Extensions
+Imports ShareRibbon.Extensions
 Imports System.Net.Http
 Imports System.Net.Http.Headers
 Imports System.Net.Mime
@@ -1117,7 +1119,46 @@ Public Class ChatControl
 
 
     Protected Overrides Sub CheckAndCompleteProcessingHook(_finalUuid As String, allPlainMarkdownBuffer As StringBuilder)
+        ' 在 AI 操作完成时创建撤销点 - 使用 ErrorHandler 包装
+        ErrorHandlerExtension.SafeExecute(
+            Sub()
+                UndoManagerExtension.CreateAIOperationUndoPoint(
+                    "Excel",
+                    Globals.ThisAddIn.Application,
+                    "AI操作",
+                    "AI 生成内容")
+            End Sub,
+            "ExcelAi.ChatControl",
+            "创建撤销点")
 
+        ' 尝试检测并应用公式 - 使用 ErrorHandler 包装
+        ErrorHandlerExtension.SafeExecute(
+            Sub()
+                If allPlainMarkdownBuffer IsNot Nothing AndAlso allPlainMarkdownBuffer.Length > 0 Then
+                    Dim aiResponse As String = allPlainMarkdownBuffer.ToString()
+
+                    ' 检测并应用公式
+                    If FormulaHandlerExtension.DetectFormula(aiResponse) Then
+                        System.Diagnostics.Debug.WriteLine("[ChatControl] 检测到公式，尝试应用")
+
+                        ' 在应用公式前创建更具体的撤销点
+                        UndoManagerExtension.CreateAIOperationUndoPoint(
+                            "Excel",
+                            Globals.ThisAddIn.Application,
+                            "AI公式应用",
+                            "应用AI生成的Excel公式")
+
+                        FormulaHandlerExtension.TryApplyFormula(aiResponse, Globals.ThisAddIn.Application)
+
+                        ' 显示撤销提示
+                        Dim hint = UndoManagerExtension.GetUndoHint("Excel")
+                        System.Diagnostics.Debug.WriteLine("[ChatControl] 撤销提示: " & hint)
+                    End If
+                End If
+            End Sub,
+            "ExcelAi.ChatControl",
+            "公式应用",
+            "应用公式时出错，请检查公式格式。")
     End Sub
 
     ''' <summary>

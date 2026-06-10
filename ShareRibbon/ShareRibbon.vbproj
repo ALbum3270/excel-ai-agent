@@ -168,6 +168,7 @@
     <Reference Include="System.Security.AccessControl, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <HintPath>..\packages\System.Security.AccessControl.5.0.0\lib\net461\System.Security.AccessControl.dll</HintPath>
     </Reference>
+    <Reference Include="System.Security" />
     <Reference Include="System.Security.Principal.Windows, Version=5.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <HintPath>..\packages\System.Security.Principal.Windows.5.0.0\lib\net461\System.Security.Principal.Windows.dll</HintPath>
     </Reference>
@@ -208,11 +209,20 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ApplicationInfo.vb" />
+    <Compile Include="Core\UndoManager.vb" />
+    <Compile Include="Extensions\UndoManagerExtension.vb" />
+    <Compile Include="Extensions\ErrorHandlerExtension.vb" />
+    <Compile Include="Extensions\StreamingResponseHandlerExtension.vb" />
+    <Compile Include="Security\SecureConfigManager.vb" />
+    <Compile Include="Common\ComObjectHelper.vb" />
+    <Compile Include="Common\ErrorHandler.vb" />
+    <Compile Include="Common\PerformanceMonitor.vb" />
     <Compile Include="Common\LLMUtil.vb" />
     <Compile Include="Common\JsUtil.vb" />
     <Compile Include="Config\ConfigApiForm.vb">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Config\SecureConfigIntegration.vb" />
     <Compile Include="Config\ConfigManager.vb" />
     <Compile Include="Config\MemoryConfig.vb" />
     <Compile Include="Storage\OfficeAiDatabase.vb" />
@@ -258,6 +268,7 @@
     <Compile Include="Services\Reformat\SemanticRenderingEngine.vb" />
     <Compile Include="Services\Reformat\FormatMirrorService.vb" />
     <Compile Include="Services\Reformat\SemanticPromptBuilder.vb" />
+    <Compile Include="Services\Reformat\ScenarioManager.vb" />
     <Compile Include="Services\Reformat\TaggingValidator.vb" />
     <Compile Include="Services\Reformat\RefinementPromptBuilder.vb" />
     <Compile Include="Services\Reformat\StyleGuideConverter.vb" />
@@ -303,6 +314,11 @@
     <Compile Include="Agent\SkillRegistry.vb" />
     <Compile Include="Agent\ToolRegistry.vb" />
     <Compile Include="Agent\PromptManager.vb" />
+    <Compile Include="Agent\StreamingResponseHandler.vb" />
+    <Compile Include="Agent\Context\IContextProvider.vb" />
+    <Compile Include="Agent\Context\OfficeContext.vb" />
+    <Compile Include="Agent\Context\ExcelContextProvider.vb" />
+    <Compile Include="Agent\Execution\SafetyChecker.vb" />
     <Compile Include="Config\WebView2Loader.vb" />
     <Compile Include="Config\WebView2EnvironmentCache.vb" />
     <Compile Include="Config\SqliteAssemblyResolver.vb" />
@@ -600,6 +616,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Storage\Migrations\*.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Prompts\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Prompts\Scenarios\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
