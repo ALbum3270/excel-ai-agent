@@ -18,6 +18,8 @@ Imports Microsoft.Vbe.Interop
 Imports Microsoft.Web.WebView2.WinForms
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
+Imports PowerPointAi.Extensions
+Imports ShareRibbon.Extensions
 Imports ShareRibbon
 Public Class ChatControl
     Inherits BaseChatControl
@@ -1191,6 +1193,43 @@ Public Class ChatControl
 
 
     Protected Overrides Sub CheckAndCompleteProcessingHook(_finalUuid As String, allPlainMarkdownBuffer As StringBuilder)
+        ' 在 AI 操作完成时创建撤销点 - 使用 ErrorHandler 包装
+        ErrorHandlerExtension.SafeExecute(
+            Sub()
+                UndoManagerExtension.CreateAIOperationUndoPoint(
+                    "PowerPoint",
+                    Globals.ThisAddIn.Application,
+                    "AI操作",
+                    "AI 生成内容")
+            End Sub,
+            "PowerPointAi.ChatControl",
+            "创建撤销点")
+
+        ' 尝试检测并生成幻灯片 - 使用 ErrorHandler 包装
+        ErrorHandlerExtension.SafeExecute(
+            Sub()
+                If allPlainMarkdownBuffer IsNot Nothing AndAlso allPlainMarkdownBuffer.Length > 0 Then
+                    Dim aiResponse As String = allPlainMarkdownBuffer.ToString()
+
+                    ' 检测并生成幻灯片
+                    If PptGenerationHandlerExtension.DetectSlideOutline(aiResponse) Then
+                        System.Diagnostics.Debug.WriteLine("[ChatControl] 检测到幻灯片大纲")
+
+                        ' 在生成幻灯片前创建撤销点
+                        UndoManagerExtension.CreateAIOperationUndoPoint(
+                            "PowerPoint",
+                            Globals.ThisAddIn.Application,
+                            "AI幻灯片生成",
+                            "生成AI幻灯片")
+
+                        PptGenerationHandlerExtension.TryGenerateSlides(aiResponse, Globals.ThisAddIn.Application)
+                    End If
+                End If
+            End Sub,
+            "PowerPointAi.ChatControl",
+            "幻灯片生成",
+            "生成幻灯片时出错，请检查大纲格式。")
+
         ' 调用基类处理续写模式
         MyBase.CheckAndCompleteProcessingHook(_finalUuid, allPlainMarkdownBuffer)
     End Sub

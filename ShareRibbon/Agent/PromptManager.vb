@@ -33,16 +33,18 @@ Namespace Agent
         End Sub
 
         ''' <summary>
-        ''' 构建系统提示词（5 层架构）
+        ''' 构建系统提示词（6 层架构）
         ''' Layer 1: System Base
         ''' Layer 2: App Context
-        ''' Layer 3: Tool Schema
-        ''' Layer 4: Memory Context
-        ''' Layer 5: User Request
+        ''' Layer 3: Office Context (NEW - 上下文自动感知)
+        ''' Layer 4: Tool Schema
+        ''' Layer 5: Memory Context
+        ''' Layer 6: User Request
         ''' </summary>
         Public Function BuildSystemPrompt(appType As String,
                                           tools As List(Of ToolDescriptor),
-                                          Optional memory As AgentMemory = Nothing) As String
+                                          Optional memory As AgentMemory = Nothing,
+                                          Optional officeContextText As String = Nothing) As String
             Dim sb As New StringBuilder()
 
             ' Layer 1: System Base
@@ -78,7 +80,13 @@ Namespace Agent
                 End If
             End If
 
-            ' Layer 3: Tool Schema
+            ' Layer 3: Office Context (NEW - 上下文自动感知)
+            If Not String.IsNullOrWhiteSpace(officeContextText) Then
+                sb.AppendLine()
+                sb.AppendLine(officeContextText)
+            End If
+
+            ' Layer 4: Tool Schema
             sb.AppendLine()
             sb.AppendLine("【已注册工具】")
             For Each tool In tools.OrderBy(Function(t) t.Category).ThenBy(Function(t) t.Id)

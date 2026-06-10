@@ -57,7 +57,7 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <!-- Markdig.dll 通过 PostBuild 复制，避�?VSTO 清单签名验证失败 (MSB3178) -->
+    <!-- Markdig.dll 通过 PostBuild 复制，避�?VSTO 清单签名验证失败 (MSB3178) -->
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ShareRibbon\ShareRibbon.vbproj">
@@ -254,6 +254,9 @@
     <Compile Include="ChatControl.vb">
       <SubType>UserControl</SubType>
     </Compile>
+    <Compile Include="Context\PowerPointContextProvider.vb" />
+    <Compile Include="Handlers\PptGenerationHandler.vb" />
+    <Compile Include="Extensions\PptGenerationHandlerExtension.vb" />
     <Compile Include="DeepseekControl.vb">
       <SubType>UserControl</SubType>
     </Compile>
@@ -347,7 +350,7 @@
   <!-- Include the build rules for a Visual Basic project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
   <!-- Include additional build rules for an Office application add-in. -->
-  <!-- 使用 VisualStudioVersion 变量替代硬编码版本号，兼�?VS 2022/2025/2026 -->
+  <!-- 使用 VisualStudioVersion 变量替代硬编码版本号，兼�?VS 2022/2025/2026 -->
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets" Condition="Exists('$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets')" />
   <!-- This section defines VSTO properties that describe the host-changeable project properties. -->
   <ProjectExtensions>
@@ -363,7 +366,7 @@
   <Import Project="..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets" Condition="Exists('..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets')" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
-      <ErrorText>这台计算机上缺少此项目引用的 NuGet 程序包。使用“NuGet 程序包还原”可下载这些程序包。有关更多信息，请参�?http://go.microsoft.com/fwlink/?LinkID=322105。缺少的文件�?{0}�?</ErrorText>
+      <ErrorText>这台计算机上缺少此项目引用的 NuGet 程序包。使用“NuGet 程序包还原”可下载这些程序包。有关更多信息，请参�?http://go.microsoft.com/fwlink/?LinkID=322105。缺少的文件�?{0}�?</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets'))" />
   </Target>

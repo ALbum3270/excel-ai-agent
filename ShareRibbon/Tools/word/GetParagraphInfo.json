@@ -1,0 +1,25 @@
+{
+  "id": "GetParagraphInfo",
+  "name": "获取段落详情",
+  "description": "获取指定段落的完整信息（内容、字号、字体、样式、对齐方式等），用于确认格式",
+  "appType": "word",
+  "category": "查询",
+  "riskLevel": "safe",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "paragraphIndex",
+      "type": "number",
+      "required": true,
+      "description": "段落索引（从1开始）"
+    }
+  ],
+  "examples": [
+    {
+      "description": "查看第1段的格式",
+      "params": {
+        "paragraphIndex": 1
+      }
+    }
+  ]
+}

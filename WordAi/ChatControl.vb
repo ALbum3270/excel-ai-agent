@@ -18,6 +18,7 @@ Imports System.Windows.Forms
 Imports System.Windows.Forms.ListBox
 Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Tab
 Imports Markdig
+Imports ShareRibbon.Extensions
 Imports Microsoft.Vbe.Interop
 Imports Microsoft.Web.WebView2.WinForms
 Imports Newtonsoft.Json
@@ -1162,7 +1163,20 @@ Public Class ChatControl
         ' 订阅Word的SelectionChange 事件
         ' 帮我补全word选择的内容事件
         AddHandler Globals.ThisAddIn.Application.WindowSelectionChange, AddressOf GetSelectionContent
+
+        ' 初始化智能格式化服务
+        Try
+            _smartFormatter = New Services.SmartFormatter(Globals.ThisAddIn.Application)
+            _paragraphService = New Services.ParagraphService(Globals.ThisAddIn.Application)
+        Catch ex As Exception
+            Debug.WriteLine($"初始化服务失败: {ex.Message}")
+        End Try
     End Sub
+
+    ' 智能格式化服务实例
+    Private _smartFormatter As Services.SmartFormatter
+    ' 段落服务实例
+    Private _paragraphService As Services.ParagraphService
 
     '获取选中的内容
     Protected Overrides Sub GetSelectionContent(target As Object)
@@ -3352,6 +3366,14 @@ Public Class ChatControl
                     Return ExecuteGenerateTOC(params, doc)
                 Case "beautifydocument"
                     Return ExecuteBeautifyDocument(params, doc)
+                Case "findandformat"
+                    Return ExecuteFindAndFormat(params)
+                Case "listparagraphs"
+                    Return ExecuteListParagraphs(params)
+                Case "getparagraphinfo"
+                    Return ExecuteGetParagraphInfo(params)
+                Case "setparagraphformat"
+                    Return ExecuteSetParagraphFormat(params)
                 Case Else
                     Debug.WriteLine($"不支持的Word命令: {command}")
                     Return False
@@ -3617,6 +3639,137 @@ Public Class ChatControl
 
         Catch ex As Exception
             Debug.WriteLine($"ExecuteBeautifyDocument 出错: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 查找并格式化 - 自然语言定位 + 自动操作
+    ''' </summary>
+    Private Function ExecuteFindAndFormat(params As JToken) As Boolean
+        Try
+            If _smartFormatter Is Nothing Then
+                Debug.WriteLine("[ExecuteFindAndFormat] SmartFormatter 未初始化")
+                Return False
+            End If
+
+            Dim query As String = params("query")?.ToString()
+            Dim action As String = params("action")?.ToString()
+
+            If String.IsNullOrEmpty(query) OrElse String.IsNullOrEmpty(action) Then
+                Debug.WriteLine("[ExecuteFindAndFormat] query 或 action 参数为空")
+                Return False
+            End If
+
+            Debug.WriteLine($"[ExecuteFindAndFormat] 查询: {query}, 操作: {action}")
+
+            ' 调用智能格式化服务
+            Dim success As Boolean = _smartFormatter.FormatByQuery(query, action)
+
+            If success Then
+                ShareRibbon.GlobalStatusStrip.ShowInfo($"已完成: {query} → {action}")
+            Else
+                ShareRibbon.GlobalStatusStrip.ShowWarning($"操作失败: {query} → {action}")
+            End If
+
+            Return success
+
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteFindAndFormat 出错: {ex.Message}")
+            ShareRibbon.GlobalStatusStrip.ShowWarning($"执行失败: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 列出段落 - Harness 架构原子工具
+    ''' </summary>
+    Private Function ExecuteListParagraphs(params As JToken) As Boolean
+        Try
+            If _paragraphService Is Nothing Then
+                Debug.WriteLine("[ExecuteListParagraphs] ParagraphService 未初始化")
+                Return False
+            End If
+
+            Dim maxCount As Integer = If(params("maxCount")?.Value(Of Integer)(), 50)
+            Dim result As JArray = _paragraphService.ListParagraphs(maxCount)
+
+            ' 将结果显示给用户（通过状态栏或返回到 AI）
+            ShareRibbon.GlobalStatusStrip.ShowInfo($"找到 {result.Count} 个段落")
+            Debug.WriteLine($"[ExecuteListParagraphs] 返回: {result.ToString()}")
+
+            ' TODO: 将结果返回给 AI（需要修改 ToolResult 支持结构化数据）
+            Return True
+
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteListParagraphs 出错: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 获取段落详情 - Harness 架构原子工具
+    ''' </summary>
+    Private Function ExecuteGetParagraphInfo(params As JToken) As Boolean
+        Try
+            If _paragraphService Is Nothing Then
+                Debug.WriteLine("[ExecuteGetParagraphInfo] ParagraphService 未初始化")
+                Return False
+            End If
+
+            Dim paragraphIndex As Integer = params("paragraphIndex")?.Value(Of Integer)()
+            If paragraphIndex < 1 Then
+                Debug.WriteLine("[ExecuteGetParagraphInfo] 无效的段落索引")
+                Return False
+            End If
+
+            Dim result As JObject = _paragraphService.GetParagraphInfo(paragraphIndex)
+            If result Is Nothing Then
+                ShareRibbon.GlobalStatusStrip.ShowWarning($"无法获取段落 {paragraphIndex} 信息")
+                Return False
+            End If
+
+            ShareRibbon.GlobalStatusStrip.ShowInfo($"段落 {paragraphIndex}: {result("style")} {result("fontSize")}pt")
+            Debug.WriteLine($"[ExecuteGetParagraphInfo] 返回: {result.ToString()}")
+
+            ' TODO: 将结果返回给 AI
+            Return True
+
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteGetParagraphInfo 出错: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 设置段落格式 - Harness 架构原子工具
+    ''' </summary>
+    Private Function ExecuteSetParagraphFormat(params As JToken) As Boolean
+        Try
+            If _paragraphService Is Nothing Then
+                Debug.WriteLine("[ExecuteSetParagraphFormat] ParagraphService 未初始化")
+                Return False
+            End If
+
+            Dim paragraphIndex As Integer = params("paragraphIndex")?.Value(Of Integer)()
+            If paragraphIndex < 1 Then
+                Debug.WriteLine("[ExecuteSetParagraphFormat] 无效的段落索引")
+                Return False
+            End If
+
+            Dim success As Boolean = _paragraphService.SetParagraphFormat(paragraphIndex, CType(params, JObject))
+
+            If success Then
+                ShareRibbon.GlobalStatusStrip.ShowInfo($"段落 {paragraphIndex} 格式已更新")
+            Else
+                ShareRibbon.GlobalStatusStrip.ShowWarning($"段落 {paragraphIndex} 格式更新失败")
+            End If
+
+            Return success
+
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteSetParagraphFormat 出错: {ex.Message}")
+            ShareRibbon.GlobalStatusStrip.ShowWarning($"执行失败: {ex.Message}")
             Return False
         End Try
     End Function

@@ -1,35 +1,70 @@
 {
   "id": "SetParagraphFormat",
   "name": "设置段落格式",
-  "description": "设置段落对齐、缩进、间距等",
+  "description": "设置指定段落的格式（字号、字体、加粗、斜体、颜色、对齐等）",
   "appType": "word",
-  "category": "段落和样式",
+  "category": "操作",
   "riskLevel": "safe",
   "isVbaFallback": false,
   "parameters": [
     {
+      "name": "paragraphIndex",
+      "type": "number",
+      "required": true,
+      "description": "段落索引（从1开始）"
+    },
+    {
+      "name": "fontSize",
+      "type": "number",
+      "required": false,
+      "description": "字号（pt）"
+    },
+    {
+      "name": "fontName",
+      "type": "string",
+      "required": false,
+      "description": "字体名称"
+    },
+    {
+      "name": "bold",
+      "type": "boolean",
+      "required": false,
+      "description": "是否加粗"
+    },
+    {
+      "name": "italic",
+      "type": "boolean",
+      "required": false,
+      "description": "是否斜体"
+    },
+    {
+      "name": "color",
+      "type": "string",
+      "required": false,
+      "description": "颜色（red/blue/black等）"
+    },
+    {
       "name": "alignment",
       "type": "string",
       "required": false,
-      "description": "对齐方式：left/center/right/justify"
+      "description": "对齐方式（left/center/right）"
+    }
+  ],
+  "examples": [
+    {
+      "description": "把第1段字号改为28pt",
+      "params": {
+        "paragraphIndex": 1,
+        "fontSize": 28
+      }
     },
     {
-      "name": "firstLineIndent",
-      "type": "number",
-      "required": false,
-      "description": "首行缩进"
-    },
-    {
-      "name": "beforeSpacing",
-      "type": "number",
-      "required": false,
-      "description": "段前间距"
-    },
-    {
-      "name": "afterSpacing",
-      "type": "number",
-      "required": false,
-      "description": "段后间距"
+      "description": "把第3段加粗并居中",
+      "params": {
+        "paragraphIndex": 3,
+        "bold": true,
+        "alignment": "center"
+      }
     }
   ]
 }

@@ -1,7 +1,9 @@
 Imports System.Collections.Concurrent
 Imports System.Diagnostics
 Imports System.IO
+Imports System.Threading
 Imports System.Threading.Tasks
+Imports System.Windows.Forms
 Imports Microsoft.Web.WebView2.Core
 
 Public NotInheritable Class WebView2EnvironmentCache
@@ -22,11 +24,47 @@ Public NotInheritable Class WebView2EnvironmentCache
             key,
             Function(cacheKey)
                 Return New Lazy(Of Task(Of CoreWebView2Environment))(
-                    Function() CoreWebView2Environment.CreateAsync(Nothing, userDataFolder, options))
+                    Function()
+                        ' 确保在 STA 线程上创建 WebView2 环境
+                        If SynchronizationContext.Current Is Nothing OrElse
+                           Thread.CurrentThread.GetApartmentState() <> ApartmentState.STA Then
+                            ' 当前不在 UI 线程，切换到 UI 线程
+                            Dim tcs As New TaskCompletionSource(Of CoreWebView2Environment)()
+
+                            ' 使用 Control.Invoke 确保在 UI 线程上创建
+                            Dim dummyControl As Control = Nothing
+                            Try
+                                ' 查找任何现有的窗体或控件
+                                If Application.OpenForms.Count > 0 Then
+                                    dummyControl = Application.OpenForms(0)
+                                End If
+                            Catch
+                                ' 忽略异常
+                            End Try
+
+                            If dummyControl IsNot Nothing AndAlso dummyControl.IsHandleCreated Then
+                                dummyControl.BeginInvoke(
+                                    Async Sub()
+                                        Try
+                                            Dim env = Await CoreWebView2Environment.CreateAsync(Nothing, userDataFolder, options)
+                                            tcs.SetResult(env)
+                                        Catch ex As Exception
+                                            tcs.SetException(ex)
+                                        End Try
+                                    End Sub)
+                                Return tcs.Task
+                            End If
+                        End If
+
+                        ' 已经在 STA 线程，直接创建
+                        Return CoreWebView2Environment.CreateAsync(Nothing, userDataFolder, options)
+                    End Function)
             End Function).Value
     End Function
 
     Public Shared Async Function PrewarmDefaultAsync() As Task
+        ' ⚠️ 此方法已废弃，不应在后台线程调用
+        ' WebView2 Environment 必须在 UI 线程创建
         Try
             Dim defaultFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

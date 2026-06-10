@@ -108,24 +108,40 @@ Namespace Agent
         End Function
 
         ''' <summary>
-        ''' 执行 Agent 任务 - 统一入口
+        ''' 执行 Agent 任务 - 统一入口（增强版 - 支持上下文自动注入）
         ''' </summary>
+        ''' <param name="userRequest">用户请求</param>
+        ''' <param name="appType">应用类型（Excel/Word/PowerPoint）</param>
+        ''' <param name="currentContent">当前文档内容</param>
+        ''' <param name="officeContext">Office 上下文（可选，未传入时自动采集）</param>
         Public Async Function ExecuteAsync(userRequest As String,
                                             appType As String,
-                                            currentContent As String) As Task(Of AgentResult)
+                                            currentContent As String,
+                                            Optional officeContext As Context.OfficeContext = Nothing) As Task(Of AgentResult)
             ' 创建会话
             _session = New AgentSession(userRequest, appType, currentContent)
             _memory.ClearWorking()
             _memory.AddSessionMessage("user", userRequest)
 
+            ' 采集 Office 上下文（如果未传入）
+            If officeContext Is Nothing Then
+                ' 创建空上下文（TODO: 后续由调用方传入具体的 ContextProvider）
+                officeContext = New Context.OfficeContext With {.AppType = appType}
+            End If
+
+            ' 将上下文保存到记忆中（供多轮对话使用）
+            _memory.SetWorking("lastOfficeContext", officeContext)
+
             ' 绑定执行回调
             _toolRegistry.ExecuteCode = ExecuteCode
 
-            ' 构建系统提示词
+            ' 构建系统提示词（注入上下文）
+            Dim contextText = officeContext.ToPromptText()
             Dim systemPrompt = _promptManager.BuildSystemPrompt(
                 appType,
                 _toolRegistry.GetAvailableTools(appType),
-                _memory
+                _memory,
+                contextText  ' ← 新增：上下文文本
             )
 
             ' 匹配技能

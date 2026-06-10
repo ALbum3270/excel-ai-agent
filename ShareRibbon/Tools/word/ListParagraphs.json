@@ -1,0 +1,29 @@
+{
+  "id": "ListParagraphs",
+  "name": "列出段落",
+  "description": "列出文档中所有段落的摘要信息（索引、样式、前30字符），用于探索文档结构",
+  "appType": "word",
+  "category": "查询",
+  "riskLevel": "safe",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "maxCount",
+      "type": "number",
+      "required": false,
+      "description": "最多返回多少个段落，默认50"
+    }
+  ],
+  "examples": [
+    {
+      "description": "列出所有段落",
+      "params": {}
+    },
+    {
+      "description": "只看前10段",
+      "params": {
+        "maxCount": 10
+      }
+    }
+  ]
+}

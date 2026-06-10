@@ -2077,13 +2077,13 @@ function showReformatResult(result) {
                     排版完成：处理 ${result.appliedCount || 0} 个段落${result.skippedCount > 0 ? `，跳过 ${result.skippedCount} 个特殊元素` : ''}
                 </div>
                 ${tagStats ? `<div style="font-size: 11px; color: #718096; margin-bottom: 8px; word-break: break-all;">${tagStats}</div>` : ''}
+                <div style="font-size: 11px; color: #718096; margin-bottom: 8px;">
+                    💡 如需调整格式，请直接输入需求（如"标题加大"、"正文对齐"等）
+                </div>
                 <div style="display: flex; gap: 8px;">
                     ${hasChanges ? `<button onclick="undoReformat()" style="padding: 5px 14px; font-size: 12px; border: 1px solid #e53e3e; color: #e53e3e; background: white; border-radius: 4px; cursor: pointer;">
                         撤销排版
                     </button>` : ''}
-                    <button onclick="reenterReformatMode()" style="padding: 5px 14px; font-size: 12px; border: 1px solid #667eea; color: #667eea; background: white; border-radius: 4px; cursor: pointer;">
-                        继续排版
-                    </button>
                     <button onclick="acceptReformat(this)" style="padding: 5px 14px; font-size: 12px; border: 1px solid #38a169; color: white; background: #38a169; border-radius: 4px; cursor: pointer;">
                         确认
                     </button>
@@ -2137,23 +2137,3 @@ function acceptReformat(btn) {
     }
 }
 
-/**
- * 重新进入排版模板选择模式（从结果卡片触发）
- */
-function reenterReformatMode() {
-    try {
-        // 移除结果卡片
-        const cards = document.querySelectorAll('.reformat-result-card');
-        cards.forEach(c => c.remove());
-
-        // 隐藏排版模式指示器
-        hideReformatModeIndicator();
-
-        // 重新进入模板选择模式
-        if (typeof enterReformatTemplateMode === 'function') {
-            enterReformatTemplateMode();
-        }
-    } catch (err) {
-        console.error('reenterReformatMode error:', err);
-    }
-}

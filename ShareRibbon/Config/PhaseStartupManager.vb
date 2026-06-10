@@ -113,15 +113,11 @@ Public Class PhaseStartupManager
                                                 End Try
                                             End Sub)
 
-                     Dim wv2EnvTask = Task.Run(Async Function()
-                                                   Try
-                                                       Await WebView2EnvironmentCache.PrewarmDefaultAsync()
-                                                   Catch ex As Exception
-                                                       Debug.WriteLine($"[Startup] Phase2 WebView2Environment failed: {ex.Message}")
-                                                   End Try
-                                               End Function)
+                     ' ❌ 移除 WebView2Environment 预热
+                     ' WebView2Environment 必须在 UI 线程（STA）上创建，不能在后台 MTA 线程预热
+                     ' 详见：https://docs.microsoft.com/en-us/microsoft-edge/webview2/concepts/threading-model
 
-                     Task.WaitAll(wv2Task, sqliteTask, resTask, wv2EnvTask)
+                     Task.WaitAll(wv2Task, sqliteTask, resTask)
                      sw.Stop()
                      _backgroundPhaseComplete = True
                      Debug.WriteLine($"[Startup] Phase2-Background 完成: {sw.ElapsedMilliseconds}ms")

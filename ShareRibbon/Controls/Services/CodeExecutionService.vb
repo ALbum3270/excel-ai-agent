@@ -237,10 +237,33 @@ Public Class CodeExecutionService
 #Region "VBA 代码执行"
 
         ''' <summary>
-        ''' 执行 VBA 代码
+        ''' 执行 VBA 代码（增强版 - 集成安全检查）
         ''' </summary>
         Public Function ExecuteVBACode(vbaCode As String, preview As Boolean) As Boolean
             Try
+                ' 新增：安全检查
+                Dim safety = Agent.Execution.SafetyChecker.Check(vbaCode)
+                If Not safety.IsSafe Then
+                    MessageBox.Show($"安全拦截: {safety.Reason}{vbCrLf}{vbCrLf}该代码包含危险操作，禁止执行。",
+                                    "安全拦截",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Warning)
+                    Debug.WriteLine($"[CodeExecutionService] 安全检查拦截: {safety.Reason}")
+                    Return False
+                End If
+
+                If safety.NeedsConfirm Then
+                    Dim result = MessageBox.Show(
+                        $"{safety.Reason}{vbCrLf}{vbCrLf}是否继续执行？",
+                        "需要确认",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question)
+                    If result <> DialogResult.Yes Then
+                        Debug.WriteLine("[CodeExecutionService] 用户取消了需确认的操作")
+                        Return False
+                    End If
+                End If
+
                 If preview Then
                     If Not _runCodePreview(vbaCode, preview) Then
                         Return True
