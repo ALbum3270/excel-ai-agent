@@ -1438,6 +1438,18 @@ Public Class ChatControl
     End Function
 
     ''' <summary>
+    ''' 捕获 Agent 启动用 PowerPoint 上下文快照
+    ''' </summary>
+    Protected Overrides Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
+        Try
+            Return New Agent.Context.PowerPointContextProvider(Globals.ThisAddIn.Application).Capture()
+        Catch ex As Exception
+            Debug.WriteLine($"CaptureOfficeContext 出错: {ex.Message}")
+            Return New Agent.Context.OfficeContext With {.AppType = appType}
+        End Try
+    End Function
+
+    ''' <summary>
     ''' 重写保存设置方法，同步更新PPT补全管理器状态
     ''' </summary>
     Protected Overrides Sub HandleSaveSettings(jsonDoc As JObject)
