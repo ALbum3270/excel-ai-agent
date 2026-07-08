@@ -16,6 +16,8 @@ Namespace Agent
         Public Property AppType As String              ' "excel" / "word" / "powerpoint" / "common"
         Public Property Category As String             ' "基础操作" / "数据操作" / "高级功能"
         Public Property RiskLevel As String = "safe"   ' "safe" / "medium" / "risky"
+        Public Property AvailabilityStatus As String = "available" ' "available" / "unavailable" / "error"
+        Public Property LastError As String = ""
         Public Property IsVbaFallback As Boolean = False
         Public Property Parameters As New List(Of ToolParam)()
     End Class
@@ -98,6 +100,62 @@ Namespace Agent
 
         Public Sub New(Optional mcpClient As StreamJsonRpcMCPClient = Nothing)
             _mcpClient = mcpClient
+            RegisterBuiltInTools()
+        End Sub
+
+        Private Sub RegisterBuiltInTools()
+            RegisterTool(New ToolDescriptor With {
+                .Id = "memory.search",
+                .Name = "检索长期记忆",
+                .Description = "按关键词检索当前宿主可用的长期记忆。仅在 memory.enable_agentic_search 开启时注入给 Agent。",
+                .AppType = "common",
+                .Category = "记忆工具",
+                .RiskLevel = "safe",
+                .Parameters = New List(Of ToolParam) From {
+                    New ToolParam With {.Name = "keyword", .Type = "string", .Required = True, .Description = "要检索的关键词或自然语言问题"},
+                    New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
+                    New ToolParam With {.Name = "topN", .Type = "integer", .Required = False, .Description = "最多返回条数，默认使用 MemoryConfig.RagTopN"}
+                }
+            })
+
+            RegisterTool(New ToolDescriptor With {
+                .Id = "memory.list_recent",
+                .Name = "查看近期长期记忆",
+                .Description = "列出近期长期记忆，供 Agent 解释当前可用记忆上下文。",
+                .AppType = "common",
+                .Category = "记忆工具",
+                .RiskLevel = "safe",
+                .Parameters = New List(Of ToolParam) From {
+                    New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
+                    New ToolParam With {.Name = "limit", .Type = "integer", .Required = False, .Description = "最多返回条数，默认 10"}
+                }
+            })
+
+            RegisterTool(New ToolDescriptor With {
+                .Id = "memory.promote",
+                .Name = "晋升长期记忆",
+                .Description = "将指定记忆晋升为长期记忆，用于保留用户偏好、事实和可复用工作经验。",
+                .AppType = "common",
+                .Category = "记忆工具",
+                .RiskLevel = "medium",
+                .Parameters = New List(Of ToolParam) From {
+                    New ToolParam With {.Name = "memoryId", .Type = "integer", .Required = True, .Description = "要晋升的 atomic_memory id"}
+                }
+            })
+
+            RegisterTool(New ToolDescriptor With {
+                .Id = "memory.promote_session",
+                .Name = "晋升当前会话高价值记忆",
+                .Description = "将指定会话中高重要性的短期记忆批量晋升为长期记忆。",
+                .AppType = "common",
+                .Category = "记忆工具",
+                .RiskLevel = "medium",
+                .Parameters = New List(Of ToolParam) From {
+                    New ToolParam With {.Name = "sessionId", .Type = "string", .Required = True, .Description = "会话 ID"},
+                    New ToolParam With {.Name = "threshold", .Type = "integer", .Required = False, .Description = "重要性阈值，默认 0.65"},
+                    New ToolParam With {.Name = "limit", .Type = "integer", .Required = False, .Description = "最多晋升条数，默认 20"}
+                }
+            })
         End Sub
 
         ''' <summary>
@@ -173,6 +231,10 @@ Namespace Agent
         ''' </summary>
         Public Function GetAvailableTools(appType As String) As List(Of ToolDescriptor)
             Dim result = _tools.Values.Where(Function(t)
+                If t.Id.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) AndAlso Not MemoryConfig.EnableAgenticSearch Then
+                    Return False
+                End If
+
                 Return String.Equals(t.AppType, appType, StringComparison.OrdinalIgnoreCase) OrElse
                        String.Equals(t.AppType, "common", StringComparison.OrdinalIgnoreCase)
             End Function).ToList()
@@ -207,7 +269,10 @@ Namespace Agent
             For Each group In grouped
                 sb.AppendLine($"=== {group.Key} ({group.Count()}个) ===")
                 For Each tool In group.OrderBy(Function(t) t.Id)
-                    sb.AppendLine($"{tool.Id} - {tool.Name}: {tool.Description}")
+                sb.AppendLine($"{tool.Id} - {tool.Name}: {tool.Description}")
+                    If Not String.IsNullOrWhiteSpace(tool.AvailabilityStatus) AndAlso Not String.Equals(tool.AvailabilityStatus, "available", StringComparison.OrdinalIgnoreCase) Then
+                        sb.AppendLine($"  - 状态: {tool.AvailabilityStatus}{If(String.IsNullOrWhiteSpace(tool.LastError), "", "，错误: " & tool.LastError)}")
+                    End If
                     For Each param In tool.Parameters
                         Dim reqMark = If(param.Required, "必需", "可选")
                         Dim defaultHint = If(param.DefaultValue IsNot Nothing, $", 默认: {param.DefaultValue}", "")
@@ -267,7 +332,9 @@ Namespace Agent
                 .Description = If(mcpTool.Description, $"MCP 工具: {mcpTool.Name}"),
                 .AppType = "common",
                 .Category = "MCP 工具",
-                .RiskLevel = "medium"
+                .RiskLevel = "medium",
+                .AvailabilityStatus = "available",
+                .LastError = ""
             }
 
             ' 解析 InputSchema 中的参数
@@ -330,10 +397,18 @@ Namespace Agent
                 Return ToolResult.Failed(toolId, $"未找到工具: {toolId}")
             End If
 
+            If toolId.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) Then
+                Dim memoryResult = Await ExecuteMemoryToolAsync(toolId, params)
+                sw.Stop()
+                memoryResult.ElapsedMs = sw.ElapsedMilliseconds
+                Return memoryResult
+            End If
+
             ' Skill 脚本工具调用（以 skill_script. 开头）
             If toolId.StartsWith("skill_script.") Then
                 Dim scriptResult = Await ExecuteSkillScriptAsync(toolId, params)
                 sw.Stop()
+                scriptResult.ElapsedMs = sw.ElapsedMilliseconds
                 Return scriptResult
             End If
 
@@ -341,7 +416,15 @@ Namespace Agent
             If toolId.StartsWith("mcp.") Then
                 If _mcpClient Is Nothing OrElse Not _mcpClient.IsInitialized Then
                     sw.Stop()
-                    Return ToolResult.Failed(toolId, "MCP 客户端未初始化")
+                    Dim failureMessage = "MCP 客户端未初始化"
+                    MarkToolHealth(tool, "unavailable", failureMessage)
+                    Return ToolResult.Failed(toolId, failureMessage,
+                        New With {
+                            .mcpToolName = toolId.Substring(4),
+                            .mcpStatus = "unavailable",
+                            .failureReason = failureMessage,
+                            .elapsedMs = sw.ElapsedMilliseconds
+                        })
                 End If
 
                 Try
@@ -350,7 +433,15 @@ Namespace Agent
                     sw.Stop()
 
                     If mcpResult.IsError Then
-                        Return ToolResult.Failed(toolId, If(mcpResult.ErrorMessage, "MCP 工具执行失败"))
+                        Dim failureMessage = If(mcpResult.ErrorMessage, "MCP 工具执行失败")
+                        MarkToolHealth(tool, "error", failureMessage)
+                        Return ToolResult.Failed(toolId, failureMessage,
+                            New With {
+                                .mcpToolName = actualToolName,
+                                .mcpStatus = "error",
+                                .failureReason = failureMessage,
+                                .elapsedMs = sw.ElapsedMilliseconds
+                            })
                     End If
 
                     Dim outputText As String = ""
@@ -364,11 +455,25 @@ Namespace Agent
                         outputText = sb.ToString().Trim()
                     End If
 
+                    MarkToolHealth(tool, "available", "")
                     Return ToolResult.Succeed(toolId, If(String.IsNullOrEmpty(outputText), "执行成功", outputText),
-                                               New With {.elapsedMs = sw.ElapsedMilliseconds})
+                                               New With {
+                                                   .elapsedMs = sw.ElapsedMilliseconds,
+                                                   .mcpToolName = actualToolName,
+                                                   .mcpStatus = "available",
+                                                   .contentCount = If(mcpResult.Content Is Nothing, 0, mcpResult.Content.Count)
+                                               })
                 Catch ex As Exception
                     sw.Stop()
-                    Return ToolResult.Failed(toolId, $"MCP 调用异常: {ex.Message}")
+                    Dim failureMessage = $"MCP 调用异常: {ex.Message}"
+                    MarkToolHealth(tool, "error", failureMessage)
+                    Return ToolResult.Failed(toolId, failureMessage,
+                        New With {
+                            .mcpToolName = toolId.Substring(4),
+                            .mcpStatus = "error",
+                            .failureReason = failureMessage,
+                            .elapsedMs = sw.ElapsedMilliseconds
+                        })
                 End Try
             End If
 
@@ -406,29 +511,159 @@ Namespace Agent
             Return ToolResult.Failed(toolId, "未知的工具类型")
         End Function
 
+        Private Async Function ExecuteMemoryToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)
+            Await Task.Yield()
+
+            If Not MemoryConfig.EnableAgenticSearch Then
+                Return ToolResult.Failed(toolId, "memory.enable_agentic_search 未开启，Agent 不能主动检索或修改记忆")
+            End If
+
+            Select Case toolId.ToLowerInvariant()
+                Case "memory.search"
+                    Dim keyword = GetStringParam(params, "keyword")
+                    If String.IsNullOrWhiteSpace(keyword) Then
+                        Return ToolResult.Failed(toolId, "缺少 keyword 参数")
+                    End If
+
+                    Dim appType = GetStringParam(params, "appType")
+                    Dim topN = GetIntegerParam(params, "topN", MemoryConfig.RagTopN)
+                    Dim searchResults = MemoryService.SearchMemories(keyword, Nothing, Nothing, appType)
+                    Dim memories = searchResults.Take(Math.Max(1, topN)).
+                        Select(Function(m) ToMemoryToolPayload(m)).ToList()
+                    Return ToolResult.Succeed(toolId, $"找到 {memories.Count} 条长期记忆", memories)
+
+                Case "memory.list_recent"
+                    Dim appType = GetStringParam(params, "appType")
+                    Dim limit = GetIntegerParam(params, "limit", 10)
+                    Dim recentMemories = MemoryRepository.ListAtomicMemories(Math.Max(1, limit * 3), 0, appType)
+                    Dim memories = recentMemories.
+                        Where(Function(m) String.Equals(m.MemoryType, "long_term", StringComparison.OrdinalIgnoreCase)).
+                        Take(Math.Max(1, limit)).
+                        Select(Function(m) ToMemoryToolPayload(m)).ToList()
+                    Return ToolResult.Succeed(toolId, $"返回 {memories.Count} 条近期长期记忆", memories)
+
+                Case "memory.promote"
+                    Dim memoryId = GetLongParam(params, "memoryId", 0)
+                    If memoryId <= 0 Then
+                        Return ToolResult.Failed(toolId, "缺少有效的 memoryId 参数")
+                    End If
+
+                    Dim changed = MemoryService.PromoteMemoryToLongTerm(memoryId)
+                    Return ToolResult.Succeed(toolId, If(changed, $"已晋升记忆 {memoryId}", $"记忆 {memoryId} 已是长期记忆或不存在"),
+                                               New With {.memoryId = memoryId, .changed = changed})
+
+                Case "memory.promote_session"
+                    Dim sessionId = GetStringParam(params, "sessionId")
+                    If String.IsNullOrWhiteSpace(sessionId) Then
+                        Return ToolResult.Failed(toolId, "缺少 sessionId 参数")
+                    End If
+
+                    Dim threshold = GetDoubleParam(params, "threshold", 0.65R)
+                    Dim limit = GetIntegerParam(params, "limit", 20)
+                    Dim promoted = MemoryService.PromoteImportantShortTermMemories(sessionId, threshold, limit)
+                    Return ToolResult.Succeed(toolId, $"已晋升 {promoted} 条会话记忆",
+                                               New With {.sessionId = sessionId, .promoted = promoted, .threshold = threshold, .limit = limit})
+            End Select
+
+            Return ToolResult.Failed(toolId, $"未知的记忆工具: {toolId}")
+        End Function
+
+        Private Function ToMemoryToolPayload(memory As AtomicMemoryRecord) As Object
+            Return New With {
+                .id = memory.Id,
+                .content = memory.Content,
+                .memoryType = memory.MemoryType,
+                .importance = memory.Importance,
+                .sourceType = memory.SourceType,
+                .sessionId = memory.SessionId,
+                .createdAt = memory.CreateTime,
+                .similarity = memory.SimilarityScore,
+                .accessCount = memory.AccessCount
+            }
+        End Function
+
+        Private Sub MarkToolHealth(tool As ToolDescriptor, status As String, errorMessage As String)
+            If tool Is Nothing Then Return
+            tool.AvailabilityStatus = If(String.IsNullOrWhiteSpace(status), "available", status)
+            tool.LastError = If(errorMessage, "")
+        End Sub
+
+        Private Function GetStringParam(params As JObject, name As String, Optional defaultValue As String = "") As String
+            If params Is Nothing OrElse params(name) Is Nothing Then Return defaultValue
+            Return params(name).ToString()
+        End Function
+
+        Private Function GetIntegerParam(params As JObject, name As String, defaultValue As Integer) As Integer
+            If params Is Nothing OrElse params(name) Is Nothing Then Return defaultValue
+            Dim value As Integer
+            If Integer.TryParse(params(name).ToString(), value) Then Return value
+            Return defaultValue
+        End Function
+
+        Private Function GetLongParam(params As JObject, name As String, defaultValue As Long) As Long
+            If params Is Nothing OrElse params(name) Is Nothing Then Return defaultValue
+            Dim value As Long
+            If Long.TryParse(params(name).ToString(), value) Then Return value
+            Return defaultValue
+        End Function
+
+        Private Function GetDoubleParam(params As JObject, name As String, defaultValue As Double) As Double
+            If params Is Nothing OrElse params(name) Is Nothing Then Return defaultValue
+            Dim value As Double
+            If Double.TryParse(params(name).ToString(), value) Then Return value
+            Return defaultValue
+        End Function
+
         ''' <summary>
         ''' 执行 Skill 脚本工具
         ''' </summary>
         Private Async Function ExecuteSkillScriptAsync(toolId As String, params As JObject) As Task(Of ToolResult)
             ' toolId 格式: skill_script.{skillName}.{scriptFileName}
-            Dim parts = toolId.Split("."c)
-            If parts.Length < 4 Then
+            Const prefix As String = "skill_script."
+            If Not toolId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) OrElse toolId.Length <= prefix.Length Then
                 Return ToolResult.Failed(toolId, $"无效的 Skill 脚本工具 ID: {toolId}")
             End If
 
-            Dim skillName = parts(1)
-            Dim scriptFileName = String.Join(".", parts.Skip(2))
-
             ' 查找 Skill 和脚本
             Dim allSkills = SkillsDirectoryService.GetAllSkills()
-            Dim skill = allSkills.FirstOrDefault(Function(s) s.Name.Equals(skillName, StringComparison.OrdinalIgnoreCase))
+            Dim skillName As String = ""
+            Dim scriptFileName As String = ""
+            Dim skill As SkillFileDefinition = Nothing
+
+            Dim remainder = toolId.Substring(prefix.Length)
+            For Each candidate In allSkills
+                If candidate Is Nothing OrElse String.IsNullOrWhiteSpace(candidate.Name) Then Continue For
+                Dim candidatePrefix = candidate.Name & "."
+                If remainder.StartsWith(candidatePrefix, StringComparison.OrdinalIgnoreCase) Then
+                    skill = candidate
+                    skillName = candidate.Name
+                    scriptFileName = remainder.Substring(candidatePrefix.Length)
+                    Exit For
+                End If
+            Next
+
             If skill Is Nothing Then
-                Return ToolResult.Failed(toolId, $"未找到 Skill: {skillName}")
+                Dim parts = remainder.Split("."c)
+                If parts.Length >= 2 Then
+                    skillName = parts(0)
+                    scriptFileName = String.Join(".", parts.Skip(1))
+                    skill = allSkills.FirstOrDefault(Function(s) s.Name.Equals(skillName, StringComparison.OrdinalIgnoreCase))
+                End If
+            End If
+
+            If skill Is Nothing Then
+                Dim failed = ToolResult.Failed(toolId, $"未找到 Skill: {If(String.IsNullOrWhiteSpace(skillName), remainder, skillName)}",
+                    New With {.skillName = skillName, .scriptFileName = scriptFileName, .failureReason = "skill_not_found"})
+                SkillsService.RecordSkillExecution(If(String.IsNullOrWhiteSpace(skillName), remainder, skillName), False, failed.Message, "Skill 脚本工具解析")
+                Return failed
             End If
 
             Dim script = skill.Scripts.FirstOrDefault(Function(s) s.FileName.Equals(scriptFileName, StringComparison.OrdinalIgnoreCase))
             If script Is Nothing Then
-                Return ToolResult.Failed(toolId, $"未找到脚本: {scriptFileName} (在 Skill {skillName} 中)")
+                Dim failed = ToolResult.Failed(toolId, $"未找到脚本: {scriptFileName} (在 Skill {skillName} 中)",
+                    New With {.skillName = skillName, .scriptFileName = scriptFileName, .failureReason = "script_not_found"})
+                SkillsService.RecordSkillExecution(skillName, False, failed.Message, $"执行脚本 {scriptFileName}")
+                Return failed
             End If
 
             ' 解析参数
@@ -446,6 +681,7 @@ Namespace Agent
                 If result.Success Then
                     Dim output = result.StdOut
                     If String.IsNullOrEmpty(output) Then output = "脚本执行成功（无输出）"
+                    SkillsService.RecordSkillExecution(skillName, True, "", $"执行脚本 {scriptFileName}")
                     Return ToolResult.Succeed(toolId, output,
                         New With {
                             .elapsedMs = result.ElapsedMs,
@@ -454,17 +690,29 @@ Namespace Agent
                             .scriptFileName = scriptFileName
                         })
                 Else
+                    Dim failureMessage = $"脚本执行失败 (退出码: {result.ExitCode})" &
+                        If(Not String.IsNullOrEmpty(result.ErrorMessage), $": {result.ErrorMessage}", "")
+                    SkillsService.RecordSkillExecution(skillName, False, failureMessage, $"执行脚本 {scriptFileName}")
                     Return ToolResult.Failed(toolId,
-                        $"脚本执行失败 (退出码: {result.ExitCode})" &
-                        If(Not String.IsNullOrEmpty(result.ErrorMessage), $": {result.ErrorMessage}", ""),
+                        failureMessage,
                         New With {
                             .elapsedMs = result.ElapsedMs,
                             .exitCode = result.ExitCode,
-                            .stdErr = result.StdErr
+                            .stdErr = result.StdErr,
+                            .skillName = skillName,
+                            .scriptFileName = scriptFileName,
+                            .failureReason = failureMessage
                         })
                 End If
             Catch ex As Exception
-                Return ToolResult.Failed(toolId, $"脚本执行异常: {ex.Message}")
+                Dim failureMessage = $"脚本执行异常: {ex.Message}"
+                SkillsService.RecordSkillExecution(skillName, False, failureMessage, $"执行脚本 {scriptFileName}")
+                Return ToolResult.Failed(toolId, failureMessage,
+                    New With {
+                        .skillName = skillName,
+                        .scriptFileName = scriptFileName,
+                        .failureReason = failureMessage
+                    })
             End Try
         End Function
 
@@ -482,6 +730,7 @@ Namespace Agent
         ''' </summary>
         Public Sub Clear()
             _tools.Clear()
+            RegisterBuiltInTools()
         End Sub
     End Class
 

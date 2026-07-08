@@ -220,8 +220,11 @@ Public Class UnifiedMemoryService
     ''' </summary>
     Public Shared Sub MigrateShortTermToLongTerm(sessionId As String)
         Try
+            Dim promoted = MemoryRepository.PromoteImportantShortTermMemories(sessionId, threshold:=0.65, limit:=20)
+            promoted += MemoryRepository.PromoteAccessedShortTermMemories(sessionId, accessThreshold:=2, limit:=20)
+            Dim conflicts = MemoryRepository.RecordPotentialConflictsForSession(sessionId)
             MemoryRepository.ExpireLowImportanceMemories(sessionId, threshold:=0.3)
-            Debug.WriteLine($"[UnifiedMemoryService] 已清理会话 {sessionId} 的低重要性记忆")
+            Debug.WriteLine($"[UnifiedMemoryService] 已晋升 {promoted} 条高价值记忆，记录 {conflicts} 条潜在冲突，并清理会话 {sessionId} 的低重要性记忆")
         Catch ex As Exception
             Debug.WriteLine($"[UnifiedMemoryService] 迁移记忆失败: {ex.Message}")
         End Try

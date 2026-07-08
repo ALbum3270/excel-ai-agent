@@ -130,16 +130,8 @@ Public Class MemoryService
                          Dim candidate = uPart & " | " & aPart
                          If String.IsNullOrWhiteSpace(candidate) OrElse candidate.Length < 10 Then Return
 
-                         ' 简单去重：若已有相似 content（LIKE）则跳过
-                         Dim existing = MemoryRepository.GetRelevantMemories(candidate.Substring(0, Math.Min(20, candidate.Length)), 3)
-                         For Each ex In existing
-                             Dim exC = If(ex.Content, "")
-                             Dim subC = If(candidate.Length > 30, candidate.Substring(0, 30), candidate)
-                             Dim subEx = If(exC.Length > 30, exC.Substring(0, 30), exC)
-                             If (exC.Length > 0 AndAlso exC.Contains(subC)) OrElse (subEx.Length > 0 AndAlso candidate.Contains(subEx)) Then
-                                 Return
-                             End If
-                         Next
+                         Dim prefix = candidate.Substring(0, Math.Min(50, candidate.Length))
+                         If MemoryRepository.ExistsMemoryWithPrefix(sessionId, prefix, "short_term") Then Return
 
                          ' 异步生成向量嵌入
                          Dim embeddingJson As String = Nothing
@@ -185,16 +177,8 @@ Public Class MemoryService
             Dim candidate = uPart & " [文件内容] " & fPart
             If String.IsNullOrWhiteSpace(candidate) OrElse candidate.Length < 10 Then Return
 
-            ' 简单去重
-            Dim existing = MemoryRepository.GetRelevantMemories(candidate.Substring(0, Math.Min(20, candidate.Length)), 3)
-            For Each ex In existing
-                Dim exC = If(ex.Content, "")
-                Dim subC = If(candidate.Length > 30, candidate.Substring(0, 30), candidate)
-                Dim subEx = If(exC.Length > 30, exC.Substring(0, 30), exC)
-                If (exC.Length > 0 AndAlso exC.Contains(subC)) OrElse (subEx.Length > 0 AndAlso candidate.Contains(subEx)) Then
-                    Return
-                End If
-            Next
+            Dim prefix = candidate.Substring(0, Math.Min(50, candidate.Length))
+            If MemoryRepository.ExistsMemoryWithPrefix(sessionId, prefix, "short_term") Then Return
 
             Dim importance = UnifiedMemoryService.CalculateImportance(candidate, "knowledge", Nothing)
             Dim memoryId = MemoryRepository.InsertMemory(candidate, Nothing, sessionId, appType, "short_term", importance, "file_content")
@@ -230,6 +214,30 @@ Public Class MemoryService
         Return MemoryRepository.GetRelevantMemories(keyword, MemoryConfig.RagTopN, queryEmbedding, startTime, endTime, appType)
     End Function
 
+    Public Shared Function PromoteMemoryToLongTerm(memoryId As Long) As Boolean
+        Return MemoryRepository.PromoteMemoryToLongTerm(memoryId)
+    End Function
+
+    Public Shared Function PromoteImportantShortTermMemories(sessionId As String, Optional threshold As Double = 0.65, Optional limit As Integer = 20) As Integer
+        Return MemoryRepository.PromoteImportantShortTermMemories(sessionId, threshold, limit)
+    End Function
+
+    Public Shared Sub ConsolidateSessionMemoriesAsync(sessionId As String)
+        If String.IsNullOrWhiteSpace(sessionId) Then Return
+
+        Task.Run(Sub()
+                     Try
+                         Dim promotedByImportance = MemoryRepository.PromoteImportantShortTermMemories(sessionId, 0.65, 20)
+                         Dim promotedByAccess = MemoryRepository.PromoteAccessedShortTermMemories(sessionId, 2, 20)
+                         Dim conflicts = MemoryRepository.RecordPotentialConflictsForSession(sessionId)
+                         MemoryRepository.ExpireLowImportanceMemories(sessionId, 0.15)
+                         Debug.WriteLine($"[MemoryService] 会话记忆整理完成: importance={promotedByImportance}, access={promotedByAccess}, conflicts={conflicts}, session={sessionId}")
+                     Catch ex As Exception
+                         Debug.WriteLine($"[MemoryService] 会话记忆整理失败: {ex.Message}")
+                     End Try
+                 End Sub)
+    End Sub
+
     ''' <summary>
     ''' 保存一轮对话（user + assistant）为两条独立的原子记忆，含 embedding 和改进的去重。
     ''' </summary>
@@ -261,6 +269,8 @@ Public Class MemoryService
                                  Debug.WriteLine($"[MemoryService] 保存 assistant 记忆，长度: {aStore.Length}, 重要性: {aImportance:F2}")
                              End If
                          End If
+
+                         ConsolidateSessionMemoriesAsync(sessionId)
                      Catch ex As Exception
                          Debug.WriteLine($"SaveConversationTurnAsync 失败: {ex.Message}")
                      End Try
@@ -270,13 +280,7 @@ Public Class MemoryService
     Private Shared Function IsDuplicate(sessionId As String, content As String) As Boolean
         Try
             Dim prefix = If(content.Length > 50, content.Substring(0, 50), content)
-            Dim existing = MemoryRepository.GetRelevantMemories(prefix, 3)
-            For Each ex In existing
-                If ex.SessionId = sessionId AndAlso Not String.IsNullOrWhiteSpace(ex.Content) Then
-                    Dim exPrefix = If(ex.Content.Length > 50, ex.Content.Substring(0, 50), ex.Content)
-                    If exPrefix = prefix Then Return True
-                End If
-            Next
+            Return MemoryRepository.ExistsMemoryWithPrefix(sessionId, prefix, "short_term")
         Catch
         End Try
         Return False

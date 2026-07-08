@@ -24,6 +24,7 @@ Namespace Agent
         Public Property OnStatusChanged As Action(Of String)
         Public Property OnIterationUpdate As Action(Of ReActIteration)
         Public Property OnStepCompleted As Action(Of Integer, Boolean, String)
+        Public Property OnExecutionExplained As Action(Of ExecutionExplanation)
         Public Property OnRequestApproval As Func(Of String, Task(Of Boolean))
         Public Property OnPlanGenerated As Action(Of ExecutionPlan)
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
@@ -59,20 +60,8 @@ Namespace Agent
                 ' 通知计划已生成
                 OnPlanGenerated?.Invoke(session.Plan)
 
-                ' 简单任务自动执行
-                If session.Spec.IsSimple Then
-                    OnStatusChanged?.Invoke($"规划完成（共 {session.Plan.Steps.Count} 步），自动执行中...")
-                    session.Status = AgentStatus.Executing
-                Else
-                    ' 等待用户确认
-                    session.Status = AgentStatus.WaitingApproval
-                    OnStatusChanged?.Invoke($"规划完成，共 {session.Plan.Steps.Count} 个步骤，等待确认")
-                    Dim approved = Await WaitForApprovalAsync($"是否执行计划？共 {session.Plan.Steps.Count} 步")
-                    If Not approved Then
-                        Return AgentResult.Failed(session.Id, "用户取消了执行")
-                    End If
-                    session.Status = AgentStatus.Executing
-                End If
+                session.Status = AgentStatus.Executing
+                OnStatusChanged?.Invoke($"规划完成（共 {session.Plan.Steps.Count} 步），进入自治执行...")
 
                 ' Phase 3: ReAct Loop
                 Dim stepIndex As Integer = 0
@@ -98,18 +87,11 @@ Namespace Agent
                         Continue While
                     End If
 
-                    ' --- CHECK APPROVAL (risky tools) ---
+                    ' --- RISK NOTICE (autonomous mode) ---
                     Dim tool = _toolRegistry.GetTool(toolCall.ToolId)
                     If tool IsNot Nothing AndAlso tool.RiskLevel = "risky" Then
-                        session.Status = AgentStatus.WaitingApproval
-                        Dim approved = Await WaitForApprovalAsync($"步骤 {stepIndex + 1} 包含高风险操作 [{toolCall.ToolId}]，是否继续？")
-                        If Not approved Then
-                            planStep.Status = StepStatus.Skipped
-                            stepIndex += 1
-                            session.Status = AgentStatus.Executing
-                            Continue While
-                        End If
-                        session.Status = AgentStatus.Executing
+                        Debug.WriteLine($"[LoopEngine] 自治模式执行高风险工具: {toolCall.ToolId}")
+                        OnStatusChanged?.Invoke($"步骤 {stepIndex + 1} 使用高风险工具 {toolCall.ToolId}，已记录风险并继续执行")
                     End If
 
                     ' --- ACT (增强版 - 多轮自修复 + 撤销点) ---
@@ -131,6 +113,7 @@ Namespace Agent
                     Dim fixAttempt As Integer = 0
                     Dim toolResult As ToolResult = Nothing
                     Dim originalToolCall = toolCall
+                    Dim stepStartedAt = DateTime.Now
 
                     ' 多轮修复循环
                     While fixAttempt < MaxFixAttempts
@@ -202,16 +185,21 @@ Namespace Agent
                     End If
 
                     _memory.SetWorking("lastObservation", observation)
+                    Dim stepFinishedAt = DateTime.Now
+                    Dim explanation = BuildExecutionExplanation(stepIndex, planStep, toolCall, toolResult, fixAttempt, undoPoint, observation, stepStartedAt, stepFinishedAt)
+                    planStep.LastExplanation = explanation
 
                     ' 记录迭代
                     Dim iteration = New ReActIteration With {
                         .Index = session.CurrentIteration,
                         .Thought = thought,
                         .Action = toolCall,
-                        .Observation = observation
+                        .Observation = observation,
+                        .Explanation = explanation
                     }
                     session.Iterations.Add(iteration)
                     session.CurrentIteration += 1
+                    OnExecutionExplained?.Invoke(explanation)
                     OnIterationUpdate?.Invoke(iteration)
 
                     ' 更新步骤状态
@@ -271,6 +259,88 @@ Namespace Agent
         End Function
 
 #Region "Private Methods"
+
+        Private Function BuildExecutionExplanation(stepIndex As Integer,
+                                                   planStep As PlanStep,
+                                                   toolCall As ToolCall,
+                                                   toolResult As ToolResult,
+                                                   fixAttempts As Integer,
+                                                   undoPoint As Core.UndoManager.UndoPoint,
+                                                   observation As String,
+                                                   startedAt As DateTime,
+                                                   finishedAt As DateTime) As ExecutionExplanation
+            Dim tool = If(toolCall Is Nothing, Nothing, _toolRegistry.GetTool(toolCall.ToolId))
+            Dim toolId = If(toolCall?.ToolId, "")
+            Dim toolName = If(tool?.Name, toolId)
+            Dim category = If(tool?.Category, "")
+            Dim risk = If(tool?.RiskLevel, "unknown")
+            Dim paramsJson = If(toolCall?.Parameters Is Nothing, "{}", toolCall.Parameters.ToString(Formatting.None))
+            Dim success = toolResult IsNot Nothing AndAlso toolResult.Success
+            Dim message = If(toolResult?.Message, "")
+            Dim skillName = ExtractResultDataValue(toolResult, "skillName")
+            Dim scriptFileName = ExtractResultDataValue(toolResult, "scriptFileName")
+            Dim mcpToolName = ExtractResultDataValue(toolResult, "mcpToolName")
+            Dim mcpStatus = ExtractResultDataValue(toolResult, "mcpStatus")
+            Dim failureReason = If(success, "", ExtractResultDataValue(toolResult, "failureReason"))
+            If String.IsNullOrWhiteSpace(failureReason) AndAlso Not success Then failureReason = message
+            Dim verb = If(success, "已完成", "未完成")
+            Dim fixText = If(fixAttempts > 0, $"，期间自动修复 {fixAttempts} 次", "")
+            Dim skillText = If(String.IsNullOrWhiteSpace(skillName), "", $"，Skill: {skillName}")
+            Dim scriptText = If(String.IsNullOrWhiteSpace(scriptFileName), "", $"，脚本: {scriptFileName}")
+            Dim mcpText = If(String.IsNullOrWhiteSpace(mcpToolName), "", $"，MCP: {mcpToolName}")
+            Dim elapsedMs = CLng(Math.Max(0, (finishedAt - startedAt).TotalMilliseconds))
+            If toolResult IsNot Nothing AndAlso toolResult.ElapsedMs > 0 Then elapsedMs = toolResult.ElapsedMs
+            Dim undoHint = If(undoPoint Is Nothing, "", _undoManager.GetUndoHint(If(undoPoint.AppType, "")))
+            Dim undoPointName = If(undoPoint?.Name, "")
+            Dim canUndo = undoPoint IsNot Nothing AndAlso undoPoint.CanUndo
+            Dim beforeSummary = $"准备执行步骤 {stepIndex + 1}: {If(planStep?.Description, "")}；工具: {toolId}；参数: {paramsJson}"
+            Dim afterSummary = If(observation, message)
+            Dim repairSummary = If(fixAttempts > 0,
+                                   If(success, $"AI 自动修复 {fixAttempts} 次后成功", $"AI 自动修复 {fixAttempts} 次后仍失败"),
+                                   "")
+            Dim text = $"步骤 {stepIndex + 1} {verb}：调用 {toolName}（{toolId}）{skillText}{scriptText}{mcpText}{fixText}。{message}"
+
+            Return New ExecutionExplanation With {
+                .StepIndex = stepIndex,
+                .StepDescription = If(planStep?.Description, ""),
+                .ToolId = toolId,
+                .ToolName = toolName,
+                .ToolCategory = category,
+                .RiskLevel = risk,
+                .ParametersJson = paramsJson,
+                .StartedAt = startedAt,
+                .FinishedAt = finishedAt,
+                .ElapsedMs = elapsedMs,
+                .BeforeSummary = beforeSummary,
+                .AfterSummary = afterSummary,
+                .Success = success,
+                .Message = message,
+                .SkillName = skillName,
+                .ScriptFileName = scriptFileName,
+                .McpToolName = mcpToolName,
+                .McpStatus = mcpStatus,
+                .FailureReason = failureReason,
+                .UndoPointName = undoPointName,
+                .UndoHint = undoHint,
+                .CanUndo = canUndo,
+                .AutoRepairSummary = repairSummary,
+                .FixAttempts = fixAttempts,
+                .ExplanationText = text
+            }
+        End Function
+
+        Private Function ExtractResultDataValue(toolResult As ToolResult, key As String) As String
+            If toolResult Is Nothing OrElse toolResult.Data Is Nothing OrElse String.IsNullOrWhiteSpace(key) Then Return ""
+
+            Try
+                Dim obj = JObject.FromObject(toolResult.Data)
+                Dim token = obj.SelectToken(key)
+                If token Is Nothing Then Return ""
+                Return token.ToString()
+            Catch
+                Return ""
+            End Try
+        End Function
 
         ''' <summary>
         ''' 生成任务 Spec

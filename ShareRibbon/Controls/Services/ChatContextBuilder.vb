@@ -7,6 +7,14 @@ Imports System.Collections.Generic
 ''' Chat 上下文构建器：按 roadmap 2.5 分层组装消息
 ''' </summary>
 Public Class ChatContextBuilder
+    <ThreadStatic>
+    Private Shared _lastTrace As ChatContextTrace
+
+    Public Shared ReadOnly Property LastTrace As ChatContextTrace
+        Get
+            Return _lastTrace
+        End Get
+    End Property
 
     ''' <summary>
     ''' 构建分层消息列表，各层之间以结构化标题隔开，便于 AI 理解上下文来源。
@@ -37,6 +45,11 @@ Public Class ChatContextBuilder
         Dim scenarioNorm = If(String.IsNullOrEmpty(scenario), "common", scenario.ToLowerInvariant())
         Dim appNorm = If(String.IsNullOrEmpty(appType), "Excel", appType)
         Dim vars = If(variableValues, New Dictionary(Of String, String)())
+        Dim trace As New ChatContextTrace With {
+            .Query = currentQuery,
+            .AppType = appNorm
+        }
+        _lastTrace = trace
 
         ' 所有 system 层收集到 sysParts，最终合并为单一 system 消息，节之间用 --- 分隔
         Dim sysParts As New List(Of String)()
@@ -73,8 +86,11 @@ Public Class ChatContextBuilder
                     End If
                     AppendSkillScriptInfo(skillParts, indexedSkill)
                     skillParts.Add($"> 当前推荐: {indexedSkill.Name}")
-                    SkillsService.RecordSkillUsage(indexedSkill.Name)
-                    AgentMemoryRepository.RecordSkillRegistryUsage(indexedSkill.Name)
+                    trace.Skills.Add(New ChatContextSkillTrace With {
+                        .Name = indexedSkill.Name,
+                        .Source = "index",
+                        .Reason = "基于当前查询召回"
+                    })
                     Debug.WriteLine($"[ChatContextBuilder] 索引召回Skill: {indexedSkill.Name}")
                 Next
             Else
@@ -106,10 +122,13 @@ Public Class ChatContextBuilder
                             metaHints.Add($"匹配关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
                         End If
                         skillParts.Add("> " & String.Join(" | ", metaHints))
+                        trace.Skills.Add(New ChatContextSkillTrace With {
+                            .Name = topSkillDetail.Name,
+                            .Source = "keyword",
+                            .Reason = If(topSkill.MatchedKeywords.Count > 0, String.Join(", ", topSkill.MatchedKeywords), "基于当前查询匹配")
+                        })
 
                         Debug.WriteLine($"[ChatContextBuilder] 匹配到Skill: {topSkillDetail.Name}, 分数: {topSkill.MatchScore:F1}, 关键词: {String.Join(", ", topSkill.MatchedKeywords)}")
-                        SkillsService.RecordSkillUsage(topSkillDetail.Name)
-                        AgentMemoryRepository.RecordSkillRegistryUsage(topSkillDetail.Name)
                     End If
                 Else
                     Debug.WriteLine($"[ChatContextBuilder] 未匹配到Skills，提供 {skillsCatalog.Count} 个Skill目录")
@@ -128,6 +147,7 @@ Public Class ChatContextBuilder
             Dim userProfile = MemoryService.GetUserProfile()
             If Not String.IsNullOrWhiteSpace(userProfile) Then
                 Debug.WriteLine("[ChatContextBuilder] 找到用户画像")
+                trace.UserProfileInjected = True
                 memParts.Add("#### 用户画像" & vbCrLf & userProfile.Trim())
             End If
 
@@ -140,6 +160,14 @@ Public Class ChatContextBuilder
                 For Each m In structuredMemories
                     Dim label = If(String.IsNullOrWhiteSpace(m.MemoryType), "memory", m.MemoryType)
                     memLines.Add($"- [{label}] {m.Content}")
+                    trace.Memories.Add(New ChatContextMemoryTrace With {
+                        .Id = m.MemoryId,
+                        .Source = "structured",
+                        .MemoryType = label,
+                        .Content = m.Content,
+                        .Score = m.Score,
+                        .Importance = m.Importance
+                    })
                 Next
                 memParts.Add(String.Join(vbCrLf, memLines))
             Else
@@ -151,6 +179,14 @@ Public Class ChatContextBuilder
                     memLines.Add("#### 相关记忆")
                     For Each m In memories
                         memLines.Add("- " & m.Content)
+                        trace.Memories.Add(New ChatContextMemoryTrace With {
+                            .Id = m.Id.ToString(),
+                            .Source = "atomic",
+                            .MemoryType = If(String.IsNullOrWhiteSpace(m.MemoryType), "long_term", m.MemoryType),
+                            .Content = m.Content,
+                            .Score = m.SimilarityScore,
+                            .Importance = m.Importance
+                        })
                     Next
                     memParts.Add(String.Join(vbCrLf, memLines))
                 Else
@@ -166,6 +202,11 @@ Public Class ChatContextBuilder
                 sumLines.Add("#### 近期会话")
                 For Each s In summaries
                     sumLines.Add($"- {s.Title}: {s.Snippet}")
+                    trace.RecentSessions.Add(New ChatContextSessionTrace With {
+                        .SessionId = s.SessionId,
+                        .Title = s.Title,
+                        .Snippet = s.Snippet
+                    })
                 Next
                 memParts.Add(String.Join(vbCrLf, sumLines))
             End If

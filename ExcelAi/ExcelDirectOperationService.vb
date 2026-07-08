@@ -1878,25 +1878,170 @@ Public Class ExcelDirectOperationService
     ''' 创建透视表
     ''' </summary>
     Private Function CreatePivotTable(source As Range, targetRange As String, params As JToken) As Boolean
-        ' 透视表创建比较复杂，这里提供基本实现框架
-        ShareRibbon.GlobalStatusStrip.ShowWarning("透视表功能正在开发中，请使用VBA代码")
-        Return False
+        Dim pivotParams As New JObject()
+        pivotParams("sourceRange") = source.Address(False, False)
+        pivotParams("targetCell") = If(String.IsNullOrWhiteSpace(targetRange), "A3", targetRange)
+
+        If params IsNot Nothing Then
+            For Each prop In params.Children(Of JProperty)()
+                pivotParams(prop.Name) = prop.Value.DeepClone()
+            Next
+        End If
+
+        Return ExecuteCreatePivotTable(pivotParams)
     End Function
 
     ''' <summary>
     ''' 分组汇总分析
     ''' </summary>
     Private Function GroupByAnalysis(source As Range, targetRange As String, params As JToken) As Boolean
-        ShareRibbon.GlobalStatusStrip.ShowWarning("分组汇总功能正在开发中，请使用VBA代码")
-        Return False
+        Try
+            If params Is Nothing Then params = New JObject()
+            Dim groupField = If(params("groupBy")?.ToString(), params("groupField")?.ToString())
+            Dim valueField = params("valueField")?.ToString()
+            Dim aggregate = If(params("aggregate")?.ToString(), "sum").ToLowerInvariant()
+
+            Dim groupCol = ResolveHeaderColumn(source, groupField, 1)
+            Dim valueCol = ResolveHeaderColumn(source, valueField, Math.Min(2, source.Columns.Count))
+            If groupCol <= 0 Then Return False
+
+            Dim sums As New Dictionary(Of String, Double)(StringComparer.OrdinalIgnoreCase)
+            Dim counts As New Dictionary(Of String, Integer)(StringComparer.OrdinalIgnoreCase)
+
+            For row = 2 To source.Rows.Count
+                Dim keyObj = source.Cells(row, groupCol).Value
+                Dim key = If(keyObj Is Nothing OrElse String.IsNullOrWhiteSpace(keyObj.ToString()), "(空)", keyObj.ToString())
+                Dim numericValue As Double = 0
+                Dim rawValue = source.Cells(row, valueCol).Value
+                If rawValue IsNot Nothing Then Double.TryParse(rawValue.ToString(), numericValue)
+
+                If Not sums.ContainsKey(key) Then
+                    sums(key) = 0
+                    counts(key) = 0
+                End If
+                sums(key) += numericValue
+                counts(key) += 1
+            Next
+
+            Dim target = ResolveAnalysisTarget(source, targetRange, "分组汇总")
+            target.Value = "分组汇总"
+            target.Font.Bold = True
+            target.Offset(1, 0).Value = GetHeaderName(source, groupCol, "分组")
+            target.Offset(1, 1).Value = aggregate
+            target.Offset(1, 2).Value = "数量"
+
+            Dim outputRow = 2
+            For Each key In sums.Keys
+                target.Offset(outputRow, 0).Value = key
+                Select Case aggregate
+                    Case "count"
+                        target.Offset(outputRow, 1).Value = counts(key)
+                    Case "avg", "average"
+                        target.Offset(outputRow, 1).Value = If(counts(key) = 0, 0, sums(key) / counts(key))
+                    Case Else
+                        target.Offset(outputRow, 1).Value = sums(key)
+                End Select
+                target.Offset(outputRow, 2).Value = counts(key)
+                outputRow += 1
+            Next
+
+            target.CurrentRegion.Columns.AutoFit()
+            ShareRibbon.GlobalStatusStrip.ShowInfo("分组汇总已生成")
+            Return True
+        Catch ex As Exception
+            Debug.WriteLine($"GroupByAnalysis 出错: {ex.Message}")
+            ShareRibbon.GlobalStatusStrip.ShowWarning($"分组汇总失败: {ex.Message}")
+            Return False
+        End Try
     End Function
 
     ''' <summary>
     ''' 排名分析
     ''' </summary>
     Private Function RankingAnalysis(source As Range, targetRange As String, params As JToken) As Boolean
-        ShareRibbon.GlobalStatusStrip.ShowWarning("排名分析功能正在开发中，请使用VBA代码")
-        Return False
+        Try
+            If params Is Nothing Then params = New JObject()
+            Dim labelField = params("labelField")?.ToString()
+            Dim valueField = If(params("rankBy")?.ToString(), params("valueField")?.ToString())
+            Dim descending As Boolean = True
+            If params("descending") IsNot Nothing Then Boolean.TryParse(params("descending").ToString(), descending)
+
+            Dim topN As Integer = Math.Max(1, source.Rows.Count - 1)
+            If params("topN") IsNot Nothing Then Integer.TryParse(params("topN").ToString(), topN)
+
+            Dim labelCol = ResolveHeaderColumn(source, labelField, 1)
+            Dim valueCol = ResolveHeaderColumn(source, valueField, Math.Min(2, source.Columns.Count))
+            If labelCol <= 0 OrElse valueCol <= 0 Then Return False
+
+            Dim items As New List(Of Tuple(Of String, Double))()
+            For row = 2 To source.Rows.Count
+                Dim labelObj = source.Cells(row, labelCol).Value
+                Dim label = If(labelObj Is Nothing OrElse String.IsNullOrWhiteSpace(labelObj.ToString()), $"第{row}行", labelObj.ToString())
+                Dim numericValue As Double = 0
+                Dim rawValue = source.Cells(row, valueCol).Value
+                If rawValue IsNot Nothing AndAlso Double.TryParse(rawValue.ToString(), numericValue) Then
+                    items.Add(Tuple.Create(label, numericValue))
+                End If
+            Next
+
+            items.Sort(Function(left, right)
+                           If descending Then
+                               Return right.Item2.CompareTo(left.Item2)
+                           End If
+                           Return left.Item2.CompareTo(right.Item2)
+                       End Function)
+
+            Dim target = ResolveAnalysisTarget(source, targetRange, "排名分析")
+            target.Value = "排名分析"
+            target.Font.Bold = True
+            target.Offset(1, 0).Value = "排名"
+            target.Offset(1, 1).Value = GetHeaderName(source, labelCol, "对象")
+            target.Offset(1, 2).Value = GetHeaderName(source, valueCol, "数值")
+
+            Dim maxRows = Math.Min(topN, items.Count)
+            For i = 0 To maxRows - 1
+                target.Offset(i + 2, 0).Value = i + 1
+                target.Offset(i + 2, 1).Value = items(i).Item1
+                target.Offset(i + 2, 2).Value = items(i).Item2
+            Next
+
+            target.CurrentRegion.Columns.AutoFit()
+            ShareRibbon.GlobalStatusStrip.ShowInfo($"排名分析已生成: {maxRows} 条")
+            Return True
+        Catch ex As Exception
+            Debug.WriteLine($"RankingAnalysis 出错: {ex.Message}")
+            ShareRibbon.GlobalStatusStrip.ShowWarning($"排名分析失败: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    Private Function ResolveAnalysisTarget(source As Range, targetRange As String, title As String) As Range
+        Dim ws As Worksheet = source.Worksheet
+        If Not String.IsNullOrWhiteSpace(targetRange) Then Return ws.Range(targetRange)
+        Return source.Offset(0, source.Columns.Count + 2)
+    End Function
+
+    Private Function ResolveHeaderColumn(source As Range, fieldName As String, defaultColumn As Integer) As Integer
+        If Not String.IsNullOrWhiteSpace(fieldName) Then
+            For col = 1 To source.Columns.Count
+                Dim header = source.Cells(1, col).Value
+                If header IsNot Nothing AndAlso String.Equals(header.ToString().Trim(), fieldName.Trim(), StringComparison.OrdinalIgnoreCase) Then
+                    Return col
+                End If
+            Next
+        End If
+
+        If defaultColumn >= 1 AndAlso defaultColumn <= source.Columns.Count Then Return defaultColumn
+        Return 0
+    End Function
+
+    Private Function GetHeaderName(source As Range, columnIndex As Integer, fallback As String) As String
+        Try
+            Dim header = source.Cells(1, columnIndex).Value
+            If header IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(header.ToString()) Then Return header.ToString()
+        Catch
+        End Try
+        Return fallback
     End Function
 
     ''' <summary>

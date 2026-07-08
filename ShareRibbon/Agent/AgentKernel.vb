@@ -1,4 +1,5 @@
 Imports System.IO
+Imports System.Linq
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
 
@@ -41,6 +42,7 @@ Namespace Agent
         Public Event OnStatusChanged(status As String)
         Public Event OnIterationUpdate(iteration As ReActIteration)
         Public Event OnStepCompleted(stepIndex As Integer, success As Boolean, message As String)
+        Public Event OnExecutionExplained(explanation As ExecutionExplanation)
         Public Event OnRequestApproval(message As String, callback As Action(Of Boolean))
         Public Event OnPlanGenerated(plan As ExecutionPlan)
         Public Event OnCompleted(result As AgentResult)
@@ -84,6 +86,22 @@ Namespace Agent
             _loopEngine.OnPlanGenerated = Sub(plan)
                                               RaiseEvent OnPlanGenerated(plan)
                                           End Sub
+
+            _loopEngine.OnStatusChanged = Sub(status)
+                                              RaiseEvent OnStatusChanged(status)
+                                          End Sub
+
+            _loopEngine.OnIterationUpdate = Sub(iteration)
+                                                RaiseEvent OnIterationUpdate(iteration)
+                                            End Sub
+
+            _loopEngine.OnStepCompleted = Sub(stepIndex, success, message)
+                                              RaiseEvent OnStepCompleted(stepIndex, success, message)
+                                          End Sub
+
+            _loopEngine.OnExecutionExplained = Sub(explanation)
+                                                   RaiseEvent OnExecutionExplained(explanation)
+                                               End Sub
 
             _loopEngine.OnRequestApproval = Async Function(msg)
                                                 Dim tcs As New TaskCompletionSource(Of Boolean)()
@@ -144,11 +162,9 @@ Namespace Agent
                 contextText  ' ← 新增：上下文文本
             )
 
-            ' 匹配技能
-            Dim matchedSkill = _skillRegistry.MatchSkill(userRequest)
-            If matchedSkill IsNot Nothing Then
-                _session.Skill = matchedSkill
-            End If
+            ' 自动选择 Skill：优先使用 filesystem Skill 索引，旧 JSON SkillRegistry 作为兜底。
+            Dim matchedSkill = SelectSkillForRequest(userRequest, appType)
+            If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
 
             ' 执行 ReAct Loop
             Dim result = Await _loopEngine.RunAsync(_session, systemPrompt, matchedSkill)
@@ -210,7 +226,61 @@ Namespace Agent
             If Directory.Exists(ToolsDirectory) Then
                 _toolRegistry.LoadFromDirectory(ToolsDirectory)
             End If
+            _toolRegistry.LoadSkillScriptsAsTools()
         End Sub
+
+        Private Function SelectSkillForRequest(userRequest As String, appType As String) As AgentSkill
+            Try
+                Dim selected = SkillsIndexService.SelectSkillDefinitions(userRequest, Nothing, appType, 1)
+                If selected IsNot Nothing AndAlso selected.Count > 0 Then
+                    Dim detail = SkillsDirectoryService.LoadSkillDetail(selected(0))
+                    If detail Is Nothing Then detail = selected(0)
+                    _session.SelectedSkill = detail
+                    Dim skill = ConvertFileSkillToAgentSkill(detail)
+                    Debug.WriteLine($"[AgentKernel] 通过 SkillsIndexService 自动选择 Skill: {skill.Name}")
+                    Return skill
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"[AgentKernel] filesystem Skill 自动选择失败: {ex.Message}")
+            End Try
+
+            Dim fallback = _skillRegistry.MatchSkill(userRequest)
+            If fallback IsNot Nothing Then
+                Debug.WriteLine($"[AgentKernel] 使用旧 SkillRegistry 兜底 Skill: {fallback.Name}")
+            End If
+            Return fallback
+        End Function
+
+        Private Function ConvertFileSkillToAgentSkill(skill As SkillFileDefinition) As AgentSkill
+            Dim agentSkill As New AgentSkill With {
+                .Id = $"filesystem.{skill.Name}",
+                .Name = skill.Name,
+                .Description = If(skill.Description, ""),
+                .PromptTemplate = SkillsService.BuildSkillDetailMessage(skill),
+                .MaxSteps = 8,
+                .AutoApprove = True
+            }
+
+            If skill.Tags IsNot Nothing Then
+                For Each tag In skill.Tags
+                    If Not String.IsNullOrWhiteSpace(tag) Then agentSkill.TriggerPatterns.Add(tag)
+                Next
+            End If
+
+            If skill.AllowedTools IsNot Nothing Then
+                For Each toolId In skill.AllowedTools
+                    If Not String.IsNullOrWhiteSpace(toolId) Then agentSkill.RequiredTools.Add(toolId.Trim())
+                Next
+            End If
+
+            If skill.Scripts IsNot Nothing Then
+                For Each script In skill.Scripts
+                    agentSkill.RequiredTools.Add($"skill_script.{skill.Name}.{script.FileName}")
+                Next
+            End If
+
+            Return agentSkill
+        End Function
 
     End Class
 

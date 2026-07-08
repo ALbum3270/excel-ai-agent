@@ -1460,252 +1460,6 @@ input:checked + .mcp-toggle-slider:before {
     to { transform: rotate(360deg); }
 }
 
-/* ====== 意图预览卡片样式 ====== */
-.intent-preview-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    margin: 8px 6px;
-    padding: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    animation: intentSlideIn 0.2s ease-out;
-    max-width: 100%;
-    overflow: hidden;
-}
-
-/* 紧凑模式 */
-.intent-preview-card.intent-preview-compact {
-    padding: 8px 10px;
-    margin: 6px 4px;
-}
-
-.intent-preview-card.intent-preview-compact .intent-preview-description {
-    font-size: 13px;
-    padding: 6px 10px;
-    margin-bottom: 8px;
-}
-
-.intent-preview-card.intent-preview-compact .execution-step {
-    padding: 4px 6px;
-    margin-bottom: 4px;
-}
-
-.intent-preview-card.intent-preview-compact .step-number {
-    width: 18px;
-    height: 18px;
-    font-size: 10px;
-    margin-right: 6px;
-}
-
-.intent-preview-card.intent-preview-compact .step-description {
-    font-size: 12px;
-}
-
-.intent-more-steps {
-    font-size: 11px;
-    color: #888;
-    text-align: center;
-    padding: 4px;
-}
-
-/* 关闭按钮 */
-.intent-close-btn {
-    position: absolute;
-    right: 8px;
-    top: 8px;
-    width: 20px;
-    height: 20px;
-    border: none;
-    background: #f0f0f0;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-    color: #666;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-}
-
-.intent-close-btn:hover {
-    background: #e0e0e0;
-    color: #333;
-}
-
-@keyframes intentSlideIn {
-    from {
-        opacity: 0;
-        transform: translateY(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.intent-preview-header {
-    display: flex;
-    align-items: center;
-    margin-bottom: 6px;
-    position: relative;
-}
-
-.intent-preview-icon {
-    font-size: 16px;
-    margin-right: 6px;
-}
-
-.intent-preview-icon.spinning {
-    animation: intentSpin 1s linear infinite;
-}
-
-@keyframes intentSpin {
-    to { transform: rotate(360deg); }
-}
-
-.intent-preview-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #4a6fa5;
-}
-
-.intent-preview-description {
-    font-size: 14px;
-    color: #333;
-    padding: 8px 10px;
-    background: #f0f7ff;
-    border-radius: 6px;
-    margin-bottom: 10px;
-    border-left: 3px solid #4a6fa5;
-}
-
-.intent-preview-plan {
-    margin-bottom: 10px;
-}
-
-.intent-plan-title {
-    font-size: 12px;
-    font-weight: 500;
-    color: #666;
-    margin-bottom: 6px;
-}
-
-.execution-step {
-    display: flex;
-    align-items: center;
-    padding: 6px 8px;
-    background: #fff;
-    border: 1px solid #eee;
-    border-radius: 4px;
-    margin-bottom: 4px;
-    transition: background-color 0.2s;
-}
-
-.execution-step:hover {
-    background: #f8f9fa;
-}
-
-.execution-step .step-number {
-    width: 18px;
-    height: 18px;
-    background: #4a6fa5;
-    color: white;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 600;
-    margin-right: 8px;
-    flex-shrink: 0;
-}
-
-.execution-step .step-icon {
-    font-size: 14px;
-    margin-right: 6px;
-    flex-shrink: 0;
-}
-
-.execution-step .step-description {
-    flex: 1;
-    font-size: 12px;
-    color: #444;
-}
-
-.execution-step .step-modify {
-    font-size: 11px;
-    color: #666;
-    background: #e8f5e9;
-    padding: 1px 6px;
-    border-radius: 3px;
-    margin-left: 6px;
-}
-
-.intent-preview-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 6px;
-    padding-top: 8px;
-    border-top: 1px solid #eee;
-}
-
-.intent-btn {
-    padding: 5px 10px;
-    border: none;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    transition: all 0.2s;
-    z-index: 10;
-    position: relative;
-}
-
-.intent-btn span {
-    font-size: 12px;
-}
-
-.intent-btn-confirm {
-    background: #4a6fa5;
-    color: white;
-}
-
-.intent-btn-confirm:hover {
-    background: #3d5a7c;
-}
-
-.intent-btn-edit {
-    background: #ff9800;
-    color: white;
-}
-
-.intent-btn-edit:hover {
-    background: #f57c00;
-}
-
-.intent-btn-cancel {
-    background: #f5f5f5;
-    color: #666;
-}
-
-.intent-btn-cancel:hover {
-    background: #e0e0e0;
-}
-
-/* 意图预览处理中状态 */
-.intent-preview-card.processing {
-    opacity: 0.85;
-}
-
-.intent-preview-card.processing .intent-preview-actions {
-    pointer-events: none;
-    opacity: 0.5;
-}
-
 /* ====== 执行计划展示样式（代码块替换） ====== */
 .execution-plan-container {
     background: #fff;
@@ -1876,6 +1630,41 @@ input:checked + .mcp-toggle-slider:before {
     border-left: 3px solid #4a6fa5;
 }
 .context-hint-item { white-space: nowrap; }
+.context-trace {
+    flex-basis: 100%;
+    color: #374151;
+}
+.context-trace summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin-top: 2px;
+}
+.context-trace ul {
+    margin: 6px 0 0 18px;
+    padding: 0;
+}
+.context-trace li {
+    margin: 5px 0;
+    line-height: 1.45;
+}
+.context-trace pre {
+    max-height: 140px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 4px 0 0;
+    padding: 6px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+}
+.context-plan-steps {
+    margin: 4px 0 0 18px;
+    padding: 0;
+}
+.context-plan-steps li {
+    margin: 3px 0;
+}
 
 /* ====== 文件附件按钮样式 ====== */
 #attach-file-btn {
@@ -1913,13 +1702,6 @@ input:checked + .mcp-toggle-slider:before {
 }
 
 /* ====== 执行步骤图标颜色 ====== */
-.execution-step .step-icon.icon-search { color: #1976d2; }
-.execution-step .step-icon.icon-data { color: #7b1fa2; }
-.execution-step .step-icon.icon-formula { color: #388e3c; }
-.execution-step .step-icon.icon-chart { color: #f57c00; }
-.execution-step .step-icon.icon-format { color: #c2185b; }
-.execution-step .step-icon.icon-clean { color: #00796b; }
-
 /* ====== 执行计划动画 ====== */
 .execution-plan-container .plan-step {
     animation: stepFadeIn 0.3s ease-out forwards;
@@ -1943,17 +1725,6 @@ input:checked + .mcp-toggle-slider:before {
         opacity: 1;
         transform: translateX(0);
     }
-}
-
-/* ====== 意图预览卡片状态样式 ====== */
-.intent-preview-card.success {
-    border-color: #4caf50;
-    background: linear-gradient(135deg, #f1f8e9 0%, #e8f5e9 100%);
-}
-
-.intent-preview-card.error {
-    border-color: #f44336;
-    background: linear-gradient(135deg, #ffebee 0%, #fce4ec 100%);
 }
 
 /* ====== 执行按钮状态 ====== */
@@ -4946,6 +4717,45 @@ input:checked + .mcp-toggle-slider:before {
     border-radius: 4px;
     font-family: 'Courier New', monospace;
     font-size: 11px;
+}
+
+.iteration-explanation {
+    margin-top: 6px;
+}
+
+.step-explanation {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    color: #374151;
+    font-size: 12px;
+}
+
+.step-explanation summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.step-explanation-meta {
+    display: grid;
+    gap: 6px;
+    margin-top: 8px;
+    line-height: 1.45;
+}
+
+.step-explanation-meta pre {
+    max-height: 180px;
+    overflow: auto;
+    margin: 2px 0 0 0;
+    padding: 8px;
+    background: #111827;
+    color: #f9fafb;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .agent-approval-request {

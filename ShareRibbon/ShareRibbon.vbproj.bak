@@ -476,7 +476,6 @@
     <None Include="Resources\js\mcp-manager.js" />
     <None Include="Resources\js\revision-manager.js" />
     <None Include="Resources\js\history-manager.js" />
-    <None Include="Resources\js\intent-preview.js" />
     <None Include="Resources\js\ralph-loop.js" />
     <None Include="Resources\js\ralph-agent.js" />
     <None Include="Resources\js\agent-protocol.js" />

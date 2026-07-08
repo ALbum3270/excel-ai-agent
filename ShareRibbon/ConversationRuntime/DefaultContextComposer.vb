@@ -14,10 +14,12 @@ Public Class DefaultContextComposer
         Dim ragCount As Integer = 0
         Dim usedContextBuilder As Boolean = False
         Dim messages As JArray = Nothing
+        Dim trace As ChatContextTrace = Nothing
 
         If context.AddHistory AndAlso context.UseContextBuilder Then
             Try
                 messages = BuildLayeredMessages(context, ragCount)
+                trace = ChatContextBuilder.LastTrace
                 usedContextBuilder = True
             Catch ex As Exception
                 Debug.WriteLine("DefaultContextComposer fallback: " & ex.Message)
@@ -33,7 +35,8 @@ Public Class DefaultContextComposer
         Return New ChatContextCompositionResult With {
             .Messages = messages,
             .RagCount = ragCount,
-            .UsedContextBuilder = usedContextBuilder
+            .UsedContextBuilder = usedContextBuilder,
+            .Trace = trace
         }
     End Function
 

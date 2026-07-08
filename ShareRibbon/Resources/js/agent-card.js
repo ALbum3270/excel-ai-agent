@@ -250,6 +250,8 @@ function buildIterationHtml(iteration) {
     const thought = escapeHtml(iteration.thought || '');
     const action = escapeHtml(iteration.action || '');
     const observation = escapeHtml(iteration.observation || '');
+    const explanation = iteration.explanation || null;
+    const explanationText = explanation ? escapeHtml(explanation.ExplanationText || explanation.explanationText || '') : '';
 
     return `
         <div class="react-iteration">
@@ -267,8 +269,76 @@ function buildIterationHtml(iteration) {
                 <span class="iteration-label">👁 观察</span>
                 <div class="iteration-content">${observation}</div>
             </div>` : ''}
+            ${explanationText ? `
+            <div class="iteration-explanation">
+                <span class="iteration-label">执行解释</span>
+                <div class="iteration-content">${explanationText}</div>
+            </div>` : ''}
         </div>
     `;
+}
+
+/**
+ * 显示单步执行解释
+ * @param {string} sessionId - 会话 ID
+ * @param {Object} explanation - ExecutionExplanation
+ */
+function showAgentExecutionExplanation(sessionId, explanation) {
+    try {
+        if (!explanation) return;
+        const stepIndex = explanation.StepIndex ?? explanation.stepIndex;
+        const text = explanation.ExplanationText || explanation.explanationText || explanation.Message || explanation.message || '';
+        if (stepIndex === undefined || !text) return;
+
+        const detailEl = document.getElementById(`step-detail-${sessionId}-${stepIndex}`);
+        if (!detailEl) return;
+
+        const explanationEl = document.createElement('details');
+        explanationEl.className = 'step-explanation';
+        explanationEl.open = false;
+
+        const toolId = explanation.ToolId || explanation.toolId || '';
+        const category = explanation.ToolCategory || explanation.toolCategory || '';
+        const skillName = explanation.SkillName || explanation.skillName || '';
+        const scriptFileName = explanation.ScriptFileName || explanation.scriptFileName || '';
+        const mcpToolName = explanation.McpToolName || explanation.mcpToolName || '';
+        const mcpStatus = explanation.McpStatus || explanation.mcpStatus || '';
+        const failureReason = explanation.FailureReason || explanation.failureReason || '';
+        const risk = explanation.RiskLevel || explanation.riskLevel || '';
+        const paramsJson = explanation.ParametersJson || explanation.parametersJson || '';
+        const fixed = explanation.FixAttempts || explanation.fixAttempts || 0;
+        const elapsedMs = explanation.ElapsedMs ?? explanation.elapsedMs ?? 0;
+        const beforeSummary = explanation.BeforeSummary || explanation.beforeSummary || '';
+        const afterSummary = explanation.AfterSummary || explanation.afterSummary || '';
+        const undoPointName = explanation.UndoPointName || explanation.undoPointName || '';
+        const undoHint = explanation.UndoHint || explanation.undoHint || '';
+        const canUndo = explanation.CanUndo ?? explanation.canUndo;
+        const autoRepairSummary = explanation.AutoRepairSummary || explanation.autoRepairSummary || '';
+
+        explanationEl.innerHTML = `
+            <summary>${escapeHtml(text)}</summary>
+            <div class="step-explanation-meta">
+                ${toolId ? `<div><strong>工具</strong> <code>${escapeHtml(toolId)}</code></div>` : ''}
+                ${category ? `<div><strong>类别</strong> ${escapeHtml(category)}</div>` : ''}
+                ${elapsedMs ? `<div><strong>耗时</strong> ${Number(elapsedMs).toLocaleString()} ms</div>` : ''}
+                ${skillName ? `<div><strong>Skill</strong> ${escapeHtml(skillName)}</div>` : ''}
+                ${scriptFileName ? `<div><strong>脚本</strong> <code>${escapeHtml(scriptFileName)}</code></div>` : ''}
+                ${mcpToolName ? `<div><strong>MCP</strong> <code>${escapeHtml(mcpToolName)}</code>${mcpStatus ? ' ' + escapeHtml(mcpStatus) : ''}</div>` : ''}
+                ${risk ? `<div><strong>风险</strong> ${escapeHtml(risk)}</div>` : ''}
+                ${beforeSummary ? `<div><strong>执行前</strong> ${escapeHtml(beforeSummary)}</div>` : ''}
+                ${afterSummary ? `<div><strong>执行后</strong> ${escapeHtml(afterSummary)}</div>` : ''}
+                ${fixed ? `<div><strong>自动修复</strong> ${fixed} 次</div>` : ''}
+                ${autoRepairSummary ? `<div><strong>修复结果</strong> ${escapeHtml(autoRepairSummary)}</div>` : ''}
+                ${undoPointName ? `<div><strong>撤销点</strong> ${escapeHtml(undoPointName)}${canUndo === false ? ' <span>(需手动撤销)</span>' : ''}</div>` : ''}
+                ${undoHint ? `<div><strong>撤销提示</strong> ${escapeHtml(undoHint)}</div>` : ''}
+                ${failureReason ? `<div><strong>失败原因</strong> ${escapeHtml(failureReason)}</div>` : ''}
+                ${paramsJson ? `<pre>${escapeHtml(paramsJson)}</pre>` : ''}
+            </div>
+        `;
+        detailEl.appendChild(explanationEl);
+    } catch (err) {
+        console.error('showAgentExecutionExplanation error:', err);
+    }
 }
 
 /**
@@ -445,6 +515,7 @@ window.agentCardState = window.agentCardState;
 window.showAgentPlanCard = showAgentPlanCard;
 window.updateAgentStep = updateAgentStep;
 window.updateAgentIteration = updateAgentIteration;
+window.showAgentExecutionExplanation = showAgentExecutionExplanation;
 window.showAgentApproval = showAgentApproval;
 window.confirmAgentExecution = confirmAgentExecution;
 window.agentApprove = agentApprove;

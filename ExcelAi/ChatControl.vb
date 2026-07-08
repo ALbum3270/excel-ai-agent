@@ -1238,6 +1238,18 @@ Public Class ChatControl
     End Function
 
     ''' <summary>
+    ''' 捕获 Agent 启动用 Excel 上下文快照
+    ''' </summary>
+    Protected Overrides Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
+        Try
+            Return New Context.ExcelContextProvider(Globals.ThisAddIn.Application).GetContext()
+        Catch ex As Exception
+            Debug.WriteLine($"CaptureOfficeContext 出错: {ex.Message}")
+            Return New Agent.Context.OfficeContext With {.AppType = appType}
+        End Try
+    End Function
+
+    ''' <summary>
     ''' 获取当前 Office 应用程序名称
     ''' </summary>
     Protected Overrides Function GetOfficeApplicationName() As String

@@ -32,7 +32,8 @@ Public Class DefaultConversationRuntime
         Return New ChatRequestBuildResult With {
             .RequestBody = requestObj.ToString(Formatting.None),
             .RagCount = composition.RagCount,
-            .UsedContextBuilder = composition.UsedContextBuilder
+            .UsedContextBuilder = composition.UsedContextBuilder,
+            .Trace = composition.Trace
         }
     End Function
 End Class

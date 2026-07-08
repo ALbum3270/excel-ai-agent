@@ -12,6 +12,7 @@ Namespace Agent
         Public Property AppType As String
         Public Property CurrentContent As String
         Public Property Skill As AgentSkill
+        Public Property SelectedSkill As SkillFileDefinition
         Public Property Spec As AgentTaskSpec
 
         ' ReAct 循环记录
@@ -42,6 +43,7 @@ Namespace Agent
         Public Property Thought As String
         Public Property Action As ToolCall
         Public Property Observation As String
+        Public Property Explanation As ExecutionExplanation
         Public Property Timestamp As DateTime = DateTime.Now
     End Class
 
@@ -65,6 +67,35 @@ Namespace Agent
         Public Property Language As String = "json"
         Public Property Status As StepStatus = StepStatus.Pending
         Public Property ErrorMessage As String
+        Public Property LastExplanation As ExecutionExplanation
+    End Class
+
+    Public Class ExecutionExplanation
+        Public Property StepIndex As Integer
+        Public Property StepDescription As String
+        Public Property ToolId As String
+        Public Property ToolName As String
+        Public Property ToolCategory As String
+        Public Property RiskLevel As String
+        Public Property ParametersJson As String
+        Public Property StartedAt As DateTime
+        Public Property FinishedAt As DateTime
+        Public Property ElapsedMs As Long
+        Public Property BeforeSummary As String
+        Public Property AfterSummary As String
+        Public Property Success As Boolean
+        Public Property Message As String
+        Public Property SkillName As String
+        Public Property ScriptFileName As String
+        Public Property McpToolName As String
+        Public Property McpStatus As String
+        Public Property FailureReason As String
+        Public Property UndoPointName As String
+        Public Property UndoHint As String
+        Public Property CanUndo As Boolean
+        Public Property AutoRepairSummary As String
+        Public Property FixAttempts As Integer
+        Public Property ExplanationText As String
     End Class
 
     ''' <summary>
@@ -129,8 +160,11 @@ Namespace Agent
     ''' </summary>
     Public Class AgentTaskSpec
         Public Property Goal As String = ""
+        Public Property TargetObject As String = ""
         Public Property Constraints As New List(Of String)()
         Public Property SuccessCriteria As New List(Of String)()
+        Public Property RequiredTools As New List(Of String)()
+        Public Property RiskLevel As String = "safe"
         Public Property Complexity As String = "medium"
 
         Public ReadOnly Property IsSimple As Boolean

@@ -1442,7 +1442,7 @@ Public Class ChatControl
     ''' </summary>
     Protected Overrides Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
         Try
-            Return New Agent.Context.PowerPointContextProvider(Globals.ThisAddIn.Application).Capture()
+            Return New Context.PowerPointContextProvider(Globals.ThisAddIn.Application).GetContext()
         Catch ex As Exception
             Debug.WriteLine($"CaptureOfficeContext 出错: {ex.Message}")
             Return New Agent.Context.OfficeContext With {.AppType = appType}

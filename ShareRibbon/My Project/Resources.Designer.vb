@@ -337,41 +337,6 @@ Namespace My.Resources
         End Property
         
         '''<summary>
-        '''  查找类似 /**
-        ''' * intent-preview.js - 意图预览组件
-        ''' * 显示&quot;我理解您想要...&quot;的预览卡片，用户确认后再发送
-        ''' */
-        '''
-        '''// 意图预览状态
-        '''window.intentPreviewState = {
-        '''    active: false,
-        '''    currentIntent: null,
-        '''    pendingMessage: null,
-        '''    autoConfirm: false  // Agent模式下自动确认
-        '''};
-        '''
-        '''// 图标映射
-        '''const stepIcons = {
-        '''    &apos;search&apos;: &apos;🔍&apos;,
-        '''    &apos;data&apos;: &apos;📊&apos;,
-        '''    &apos;formula&apos;: &apos;🧮&apos;,
-        '''    &apos;chart&apos;: &apos;📈&apos;,
-        '''    &apos;format&apos;: &apos;🎨&apos;,
-        '''    &apos;clean&apos;: &apos;🧹&apos;,
-        '''    &apos;default&apos;: &apos;⚡&apos;
-        '''};
-        '''
-        '''/**
-        ''' * 显示意图预览卡片
-        ''' * @param {Object} intentData - 意图数据 { description, plan, originalInput, autoC [字符串的其余部分被截断]&quot;; 的本地化字符串。
-        '''</summary>
-        Public ReadOnly Property intent_preview() As String
-            Get
-                Return ResourceManager.GetString("intent_preview", resourceCulture)
-            End Get
-        End Property
-        
-        '''<summary>
         '''  查找 System.Drawing.Bitmap 类型的本地化资源。
         '''</summary>
         Public ReadOnly Property magic() As System.Drawing.Bitmap

@@ -2,6 +2,7 @@
 ' 记忆相关表的 CRUD 访问
 
 Imports System.Data.SQLite
+Imports System.Linq
 
 ''' <summary>
 ''' 原子记忆实体
@@ -123,6 +124,14 @@ Public Class MemoryRepository
     Private Shared _vectorFunctionsRegistered As Boolean = False
     Private Shared ReadOnly _vectorFunctionLock As New Object()
 
+    Private Class ConflictCandidate
+        Public Property Id As Long
+        Public Property Content As String
+        Public Property AppType As String
+        Public Property SourceType As String
+        Public Property Timestamp As Long
+    End Class
+
     Friend Shared Sub EnsureVectorFunctionsRegistered()
         If _vectorFunctionsRegistered Then Return
 
@@ -233,7 +242,7 @@ Public Class MemoryRepository
             OfficeAiDatabase.EnsureInitialized()
             Dim app = If(String.IsNullOrEmpty(appType), "", appType.Trim())
             Dim hasApp = Not String.IsNullOrEmpty(app)
-            Dim sql = "SELECT COUNT(1) FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term') AND embedding IS NOT NULL AND embedding != ''"
+            Dim sql = "SELECT COUNT(1) FROM atomic_memory WHERE memory_type = 'long_term' AND embedding IS NOT NULL AND embedding != ''"
             If hasApp Then sql &= " AND (app_type = @app OR app_type IS NULL OR app_type = '')"
             Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
                 conn.Open()
@@ -283,7 +292,7 @@ Public Class MemoryRepository
         End If
 
         Dim allMemories As New List(Of AtomicMemoryRecord)()
-        Dim sql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term')"
+        Dim sql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type = 'long_term'"
 
         If hasApp Then sql &= " AND (app_type = @app OR app_type IS NULL OR app_type = '')"
         If startTime.HasValue Then sql &= " AND timestamp >= @st"
@@ -364,7 +373,7 @@ Public Class MemoryRepository
         Debug.WriteLine($"[MemoryRepository] 退回到 LIKE 查询，query: {If(query?.Length > 50, query.Substring(0, 50) & "...", query)}")
 
         Dim fallbackList As New List(Of AtomicMemoryRecord)()
-        Dim fallbackSql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type IN ('long_term', 'short_term')"
+        Dim fallbackSql = "SELECT id, timestamp, content, tags, session_id, create_time, embedding, memory_type, importance, access_count, last_access, source_type, linked_memories FROM atomic_memory WHERE memory_type = 'long_term'"
 
         If Not String.IsNullOrWhiteSpace(query) Then
             fallbackSql &= " AND (content LIKE @q OR tags LIKE @q)"
@@ -425,7 +434,7 @@ Public Class MemoryRepository
 
         Dim hasApp = Not String.IsNullOrWhiteSpace(app)
         Dim whereParts As New List(Of String) From {
-            "memory_type IN ('long_term', 'short_term')",
+            "memory_type = 'long_term'",
             "embedding IS NOT NULL",
             "embedding != ''"
         }
@@ -650,6 +659,90 @@ Public Class MemoryRepository
     End Sub
 
     ''' <summary>
+    ''' 检查指定会话内是否已有相同前缀的记忆，供短期对话写入去重使用。
+    ''' </summary>
+    Public Shared Function ExistsMemoryWithPrefix(sessionId As String, prefix As String, Optional memoryType As String = Nothing) As Boolean
+        If String.IsNullOrWhiteSpace(prefix) Then Return False
+        OfficeAiDatabase.EnsureInitialized()
+
+        Dim sql = "SELECT COUNT(1) FROM atomic_memory WHERE session_id = @sid AND content LIKE @prefix"
+        If Not String.IsNullOrWhiteSpace(memoryType) Then
+            sql &= " AND memory_type = @mtype"
+        End If
+
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Using cmd As New SQLiteCommand(sql, conn)
+                cmd.Parameters.AddWithValue("@sid", If(sessionId, ""))
+                cmd.Parameters.AddWithValue("@prefix", prefix & "%")
+                If Not String.IsNullOrWhiteSpace(memoryType) Then
+                    cmd.Parameters.AddWithValue("@mtype", memoryType)
+                End If
+                Return Convert.ToInt32(cmd.ExecuteScalar()) > 0
+            End Using
+        End Using
+    End Function
+
+    ''' <summary>
+    ''' 将单条记忆晋升为长期记忆，供用户收藏或 Agent 主动整理时调用。
+    ''' </summary>
+    Public Shared Function PromoteMemoryToLongTerm(memoryId As Long) As Boolean
+        OfficeAiDatabase.EnsureInitialized()
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Using cmd As New SQLiteCommand(
+                "UPDATE atomic_memory SET memory_type = 'long_term', importance = CASE WHEN importance < 0.65 THEN 0.65 ELSE importance END WHERE id = @id AND memory_type <> 'long_term'", conn)
+                cmd.Parameters.AddWithValue("@id", memoryId)
+                Return cmd.ExecuteNonQuery() > 0
+            End Using
+        End Using
+    End Function
+
+    ''' <summary>
+    ''' 将当前会话中高重要性的短期记忆晋升为长期记忆。
+    ''' </summary>
+    Public Shared Function PromoteImportantShortTermMemories(sessionId As String, threshold As Double, Optional limit As Integer = 20) As Integer
+        If String.IsNullOrWhiteSpace(sessionId) Then Return 0
+        OfficeAiDatabase.EnsureInitialized()
+
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Using cmd As New SQLiteCommand(
+                "UPDATE atomic_memory SET memory_type = 'long_term' " &
+                "WHERE id IN (" &
+                "SELECT id FROM atomic_memory WHERE session_id = @sid AND memory_type = 'short_term' AND importance >= @t " &
+                "ORDER BY importance DESC, timestamp DESC LIMIT @limit)", conn)
+                cmd.Parameters.AddWithValue("@sid", sessionId)
+                cmd.Parameters.AddWithValue("@t", threshold)
+                cmd.Parameters.AddWithValue("@limit", Math.Max(1, limit))
+                Return cmd.ExecuteNonQuery()
+            End Using
+        End Using
+    End Function
+
+    ''' <summary>
+    ''' 将当前会话中被多次访问的短期记忆晋升为长期记忆。
+    ''' </summary>
+    Public Shared Function PromoteAccessedShortTermMemories(sessionId As String, accessThreshold As Integer, Optional limit As Integer = 20) As Integer
+        If String.IsNullOrWhiteSpace(sessionId) Then Return 0
+        OfficeAiDatabase.EnsureInitialized()
+
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Using cmd As New SQLiteCommand(
+                "UPDATE atomic_memory SET memory_type = 'long_term', importance = CASE WHEN importance < 0.6 THEN 0.6 ELSE importance END " &
+                "WHERE id IN (" &
+                "SELECT id FROM atomic_memory WHERE session_id = @sid AND memory_type = 'short_term' AND access_count >= @access " &
+                "ORDER BY access_count DESC, timestamp DESC LIMIT @limit)", conn)
+                cmd.Parameters.AddWithValue("@sid", sessionId)
+                cmd.Parameters.AddWithValue("@access", Math.Max(1, accessThreshold))
+                cmd.Parameters.AddWithValue("@limit", Math.Max(1, limit))
+                Return cmd.ExecuteNonQuery()
+            End Using
+        End Using
+    End Function
+
+    ''' <summary>
     ''' 获取相似记忆（用于建立关联）
     ''' </summary>
     Public Shared Function GetSimilarMemories(memoryId As Long, Optional topK As Integer = 5) As List(Of AtomicMemoryRecord)
@@ -723,6 +816,81 @@ Public Class MemoryRepository
             End Using
         End Using
     End Sub
+
+    ''' <summary>
+    ''' 为当前会话刚沉淀出的长期记忆记录潜在冲突关系，保留新旧版本与时间。
+    ''' </summary>
+    Public Shared Function RecordPotentialConflictsForSession(sessionId As String) As Integer
+        If String.IsNullOrWhiteSpace(sessionId) Then Return 0
+        OfficeAiDatabase.EnsureInitialized()
+
+        Dim count As Integer = 0
+        Dim relations As New List(Of Tuple(Of Long, Long))()
+        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
+            conn.Open()
+            Dim candidates As New List(Of ConflictCandidate)()
+            Using cmd As New SQLiteCommand(
+                "SELECT id, content, app_type, source_type, timestamp FROM atomic_memory " &
+                "WHERE session_id = @sid AND memory_type = 'long_term' ORDER BY timestamp DESC LIMIT 20", conn)
+                cmd.Parameters.AddWithValue("@sid", sessionId)
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        candidates.Add(New ConflictCandidate With {
+                            .Id = rdr.GetInt64(0),
+                            .Content = If(rdr.IsDBNull(1), "", rdr.GetString(1)),
+                            .AppType = If(rdr.IsDBNull(2), "", rdr.GetString(2)),
+                            .SourceType = If(rdr.IsDBNull(3), "", rdr.GetString(3)),
+                            .Timestamp = If(rdr.IsDBNull(4), 0, rdr.GetInt64(4))
+                        })
+                    End While
+                End Using
+            End Using
+            For Each candidate In candidates
+                Using cmd As New SQLiteCommand(
+                    "SELECT id, content FROM atomic_memory " &
+                    "WHERE id <> @id AND memory_type = 'long_term' AND timestamp <= @ts " &
+                    "AND (app_type = @app OR app_type IS NULL OR app_type = '') " &
+                    "AND (source_type = @stype OR source_type IS NULL OR source_type = '') " &
+                    "ORDER BY timestamp DESC LIMIT 20", conn)
+                    cmd.Parameters.AddWithValue("@id", candidate.Id)
+                    cmd.Parameters.AddWithValue("@ts", candidate.Timestamp)
+                    cmd.Parameters.AddWithValue("@app", If(candidate.AppType, ""))
+                    cmd.Parameters.AddWithValue("@stype", If(candidate.SourceType, ""))
+                    Using rdr = cmd.ExecuteReader()
+                        While rdr.Read()
+                            Dim oldId = rdr.GetInt64(0)
+                            Dim oldContent = If(rdr.IsDBNull(1), "", rdr.GetString(1))
+                            If LooksPotentiallyConflicting(candidate.Content, oldContent) Then
+                                relations.Add(Tuple.Create(candidate.Id, oldId))
+                            End If
+                        End While
+                    End Using
+                End Using
+            Next
+        End Using
+
+        For Each relation In relations
+            AddMemoryRelation(relation.Item1, relation.Item2, "potential_conflict", 0.5)
+            count += 1
+        Next
+
+        Return count
+    End Function
+
+    Private Shared Function LooksPotentiallyConflicting(newContent As String, oldContent As String) As Boolean
+        Dim a = If(newContent, "").Trim()
+        Dim b = If(oldContent, "").Trim()
+        If a.Length < 8 OrElse b.Length < 8 Then Return False
+
+        Dim markers = {"不要", "不再", "改为", "改成", "以后", "默认", "偏好", "喜欢", "优先", "避免", "always", "never", "prefer", "instead", "default"}
+        Dim hasMarker = markers.Any(Function(m) a.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+                                               b.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0)
+        If Not hasMarker Then Return False
+
+        Dim aHead = If(a.Length > 24, a.Substring(0, 24), a)
+        Dim bHead = If(b.Length > 24, b.Substring(0, 24), b)
+        Return Not String.Equals(aHead, bHead, StringComparison.OrdinalIgnoreCase)
+    End Function
 
     ''' <summary>
     ''' 过期低重要性的记忆

@@ -196,9 +196,6 @@
   <data name="autocomplete" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\autocomplete.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>
-  <data name="intent_preview" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\js\intent-preview.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
-  </data>
   <data name="ralph_loop" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\ralph-loop.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>

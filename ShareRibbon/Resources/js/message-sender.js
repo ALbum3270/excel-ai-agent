@@ -615,25 +615,110 @@ window.initDragDrop = initDragDrop;
 // ========== 阶段三：RAG / 意图在 Chat 中的体现 ==========
 
 /**
- * 在聊天区域显示上下文提示：RAG 检索条数、识别到的意图（由 VB 在发请求前调用）
- * @param {Object} options - { ragCount?: number, intent?: string }
+ * 在聊天区域显示上下文提示：RAG 检索条数、识别到的意图、实际注入的上下文 Trace（由 VB 在发请求前调用）
+ * @param {Object} options - { ragCount?: number, intent?: string, trace?: Object }
  */
 function showContextHints(options) {
     try {
-        if (!options || (options.ragCount === undefined && !options.intent)) return;
+        if (!options || (options.ragCount === undefined && !options.intent && !options.trace)) return;
         const ragCount = options.ragCount || 0;
         const intent = options.intent || '';
+        const trace = options.trace || null;
         const parts = [];
         if (ragCount > 0) parts.push('已根据当前问题检索 ' + ragCount + ' 条相关记忆');
         if (intent) parts.push('识别意图：' + intent);
-        if (parts.length === 0) return;
+        if (trace && trace.UserProfileInjected) parts.push('已注入用户画像');
+        if (parts.length === 0 && !trace) return;
 
         const container = document.getElementById('chat-container');
         if (!container) return;
 
         const hintEl = document.createElement('div');
         hintEl.className = 'context-hints';
-        hintEl.innerHTML = parts.map(p => '<span class="context-hint-item">' + escapeHtml(p) + '</span>').join('');
+        let html = parts.map(p => '<span class="context-hint-item">' + escapeHtml(p) + '</span>').join('');
+
+        const memories = trace && Array.isArray(trace.Memories) ? trace.Memories : [];
+        const sessions = trace && Array.isArray(trace.RecentSessions) ? trace.RecentSessions : [];
+        const skills = trace && Array.isArray(trace.Skills) ? trace.Skills : [];
+        const tools = trace && Array.isArray(trace.Tools) ? trace.Tools : [];
+        const officeContext = trace ? (trace.OfficeContext || trace.officeContext || '') : '';
+        const executionPlan = trace ? (trace.ExecutionPlan || trace.executionPlan || null) : null;
+        const taskSpec = trace ? (trace.TaskSpec || trace.taskSpec || null) : null;
+        if (officeContext || taskSpec || executionPlan || memories.length > 0 || sessions.length > 0 || skills.length > 0 || tools.length > 0) {
+            const rows = [];
+            if (taskSpec) {
+                const goal = taskSpec.Goal || taskSpec.goal || '';
+                const target = taskSpec.TargetObject || taskSpec.targetObject || '';
+                const complexity = taskSpec.Complexity || taskSpec.complexity || '';
+                const risk = taskSpec.RiskLevel || taskSpec.riskLevel || '';
+                const criteria = Array.isArray(taskSpec.SuccessCriteria) ? taskSpec.SuccessCriteria : (Array.isArray(taskSpec.successCriteria) ? taskSpec.successCriteria : []);
+                rows.push('<li><strong>任务规格</strong>' +
+                    (goal ? '<div>目标：' + escapeHtml(goal) + '</div>' : '') +
+                    (target ? '<div>对象：' + escapeHtml(target) + '</div>' : '') +
+                    ((complexity || risk) ? '<div>复杂度/风险：' + escapeHtml([complexity, risk].filter(Boolean).join(' / ')) + '</div>' : '') +
+                    (criteria.length ? '<ul class="context-plan-steps">' + criteria.slice(0, 4).map(c => '<li>' + escapeHtml(c) + '</li>').join('') + '</ul>' : '') +
+                    '</li>');
+            }
+            if (executionPlan) {
+                const summary = executionPlan.Summary || executionPlan.summary || '';
+                const understanding = executionPlan.Understanding || executionPlan.understanding || '';
+                const steps = Array.isArray(executionPlan.Steps) ? executionPlan.Steps : (Array.isArray(executionPlan.steps) ? executionPlan.steps : []);
+                const stepItems = steps.slice(0, 8).map(step => {
+                    const num = step.StepNumber || step.stepNumber || '';
+                    const desc = step.Description || step.description || '';
+                    return '<li>' + escapeHtml((num ? num + '. ' : '') + desc) + '</li>';
+                }).join('');
+                rows.push('<li><strong>执行计划</strong>' +
+                    (summary ? '<div>' + escapeHtml(summary) + '</div>' : '') +
+                    (understanding ? '<div>' + escapeHtml(understanding) + '</div>' : '') +
+                    (stepItems ? '<ol class="context-plan-steps">' + stepItems + '</ol>' : '') +
+                    '</li>');
+            }
+            if (officeContext) {
+                const compactOffice = officeContext.length > 600 ? officeContext.substring(0, 600) + '...' : officeContext;
+                rows.push('<li><strong>Office 上下文</strong><pre>' + escapeHtml(compactOffice) + '</pre></li>');
+            }
+            skills.slice(0, 5).forEach(s => {
+                const name = s.Name || s.name || '';
+                const source = s.Source || s.source || 'skill';
+                const reason = s.Reason || s.reason || '';
+                if (name) {
+                    rows.push('<li><strong>Skill/' + escapeHtml(source) + '</strong> ' + escapeHtml(name + (reason ? ' - ' + reason : '')) + '</li>');
+                }
+            });
+            memories.slice(0, 5).forEach(m => {
+                const source = m.Source || 'memory';
+                const type = m.MemoryType || '';
+                const id = m.Id ? '#' + m.Id : '';
+                const content = (m.Content || '').trim();
+                if (content) {
+                    rows.push('<li><strong>' + escapeHtml(source + (type ? '/' + type : '') + id) + '</strong> ' + escapeHtml(content) + '</li>');
+                }
+            });
+            sessions.slice(0, 3).forEach(s => {
+                const title = s.Title || '近期会话';
+                const snippet = s.Snippet || '';
+                rows.push('<li><strong>' + escapeHtml(title) + '</strong> ' + escapeHtml(snippet) + '</li>');
+            });
+            tools.slice(0, 8).forEach(t => {
+                const id = t.Id || t.id || '';
+                const name = t.Name || t.name || id;
+                const category = t.Category || t.category || '';
+                const risk = t.RiskLevel || t.riskLevel || '';
+                const status = t.AvailabilityStatus || t.availabilityStatus || '';
+                const lastError = t.LastError || t.lastError || '';
+                if (id || name) {
+                    const statusText = status && status !== 'available' ? ' <span>(' + escapeHtml(status) + ')</span>' : '';
+                    const errorText = lastError ? '<div>' + escapeHtml(lastError) + '</div>' : '';
+                    rows.push('<li><strong>Tool/' + escapeHtml(category || 'common') + '</strong> <code>' + escapeHtml(id) + '</code> ' + escapeHtml(name) + (risk ? ' <span>(' + escapeHtml(risk) + ')</span>' : '') + statusText + errorText + '</li>');
+                }
+            });
+            if (rows.length > 0) {
+                html += '<details class="context-trace"><summary>查看本轮上下文</summary><ul>' + rows.join('') + '</ul></details>';
+            }
+        }
+
+        hintEl.innerHTML = html;
         container.appendChild(hintEl);
         hintEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {

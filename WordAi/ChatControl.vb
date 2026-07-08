@@ -4002,6 +4002,18 @@ Public Class ChatControl
         If InvokeRequired Then Me.Invoke(act) Else act()
     End Sub
 
+    ''' <summary>
+    ''' 捕获 Agent 启动用 Word 上下文快照
+    ''' </summary>
+    Protected Overrides Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
+        Try
+            Return New Context.WordContextProvider(Globals.ThisAddIn.Application).GetContext()
+        Catch ex As Exception
+            Debug.WriteLine($"CaptureOfficeContext 出错: {ex.Message}")
+            Return New Agent.Context.OfficeContext With {.AppType = appType}
+        End Try
+    End Function
+
 #End Region
 
 End Class

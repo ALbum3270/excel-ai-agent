@@ -80,6 +80,7 @@ Public Class AgentKernelService
         AddHandler _agentKernel.OnStatusChanged, AddressOf OnKernelStatusChanged
         AddHandler _agentKernel.OnIterationUpdate, AddressOf OnKernelIterationUpdate
         AddHandler _agentKernel.OnStepCompleted, AddressOf OnKernelStepCompleted
+        AddHandler _agentKernel.OnExecutionExplained, AddressOf OnKernelExecutionExplained
         AddHandler _agentKernel.OnRequestApproval, AddressOf OnKernelRequestApproval
         AddHandler _agentKernel.OnPlanGenerated, AddressOf OnKernelPlanGenerated
         AddHandler _agentKernel.OnCompleted, AddressOf OnKernelCompleted
@@ -94,7 +95,8 @@ Public Class AgentKernelService
     ''' 启动统一 Agent 任务（替代 StartAgent 和 StartLoop）
     ''' </summary>
     Public Async Function StartAgentAsync(userRequest As String, appType As String, currentContent As String,
-                                           historyMessages As List(Of Tuple(Of String, String))) As Task(Of Boolean)
+                                           historyMessages As List(Of Tuple(Of String, String)),
+                                           Optional officeContext As Agent.Context.OfficeContext = Nothing) As Task(Of Boolean)
         Try
             EnsureInitialized()
 
@@ -114,7 +116,7 @@ Public Class AgentKernelService
             End If
 
             ' 执行 Agent 任务
-            Dim result = Await _agentKernel.ExecuteAsync(userRequest, appType, currentContent)
+            Dim result = Await _agentKernel.ExecuteAsync(userRequest, appType, currentContent, officeContext)
 
             Return result.Success
         Catch ex As Exception
@@ -192,7 +194,13 @@ Public Class AgentKernelService
         Try
             If iteration Is Nothing Then Return
 
-            Dim iterationJson = $"{{""index"":{iteration.Index},""thought"":""{_escapeJs(iteration.Thought)}"",""action"":""{_escapeJs(If(iteration.Action?.ToolId, ""))}"",""observation"":""{_escapeJs(iteration.Observation)}""}}"
+            Dim iterationJson = JObject.FromObject(New With {
+                .index = iteration.Index,
+                .thought = If(iteration.Thought, ""),
+                .action = If(iteration.Action?.ToolId, ""),
+                .observation = If(iteration.Observation, ""),
+                .explanation = iteration.Explanation
+            }).ToString(Formatting.None)
             _executeScript($"updateAgentIteration('{CurrentAgentSessionId}', {iterationJson})")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnIterationUpdate 出错: {ex.Message}")
@@ -208,6 +216,16 @@ Public Class AgentKernelService
             _executeScript($"updateAgentStep('{CurrentAgentSessionId}', {stepIndex}, '{stepStatus}', '{_escapeJs(message)}')")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnStepCompleted 出错: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub OnKernelExecutionExplained(explanation As Agent.ExecutionExplanation)
+        Try
+            If explanation Is Nothing OrElse String.IsNullOrWhiteSpace(CurrentAgentSessionId) Then Return
+            Dim explanationJson = JObject.FromObject(explanation).ToString(Formatting.None)
+            _executeScript($"showAgentExecutionExplanation('{CurrentAgentSessionId}', {explanationJson})")
+        Catch ex As Exception
+            Debug.WriteLine($"[AgentKernelService] OnExecutionExplained 出错: {ex.Message}")
         End Try
     End Sub
 
@@ -252,6 +270,22 @@ Public Class AgentKernelService
             Dim planJson = $"{{""sessionId"":""{CurrentAgentSessionId}"",""understanding"":""{_escapeJs(If(plan.Understanding, ""))}"",""steps"":{stepsJson.ToString()},""summary"":""{_escapeJs(If(plan.Summary, ""))}"",""replaceThinkingUuid"":""{AgentThinkingUuid}""}}"
 
             _executeScript($"showAgentPlanCard({planJson})")
+            Dim planTrace As New ChatContextTrace With {
+                .ExecutionPlan = New ChatContextPlanTrace With {
+                    .Summary = If(plan.Summary, ""),
+                    .Understanding = If(plan.Understanding, "")
+                }
+            }
+            For Each stepItem In plan.Steps
+                planTrace.ExecutionPlan.Steps.Add(New ChatContextPlanStepTrace With {
+                    .StepNumber = stepItem.StepNumber,
+                    .Description = If(stepItem.Description, ""),
+                    .ToolOrCode = If(stepItem.Code, ""),
+                    .Language = If(stepItem.Language, "")
+                })
+            Next
+            Dim traceJson = JObject.FromObject(planTrace).ToString(Formatting.None)
+            _executeScript($"showContextHints({{ trace: {traceJson} }})")
             _executeScript("var planningCard = document.getElementById('planning-status-card'); if(planningCard) planningCard.remove();")
             AgentThinkingUuid = Nothing
         Catch ex As Exception

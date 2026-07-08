@@ -101,6 +101,10 @@ Public Class ThisAddIn
     ' 为新工作簿创建任务窗格
     Private Sub CreateChatTaskPane()
         Try
+            If chatControl IsNot Nothing AndAlso chatTaskPane IsNot Nothing Then
+                Return
+            End If
+
             chatControl = New ChatControl()
             chatTaskPane = Me.CustomTaskPanes.Add(chatControl, "Word AI智能助手")
                 chatTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight

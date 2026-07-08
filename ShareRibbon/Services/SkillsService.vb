@@ -345,6 +345,40 @@ Public Class SkillsService
     End Sub
 
     ''' <summary>
+    ''' 记录 Skill 的真实执行结果，并把失败原因/使用场景沉淀为可检索记忆。
+    ''' </summary>
+    Public Shared Sub RecordSkillExecution(skillName As String,
+                                           success As Boolean,
+                                           Optional failureReason As String = "",
+                                           Optional scenario As String = "",
+                                           Optional tokensUsed As Long = 0)
+        If String.IsNullOrWhiteSpace(skillName) Then Return
+
+        RecordSkillUsage(skillName, success, tokensUsed)
+
+        Try
+            Dim scene = If(String.IsNullOrWhiteSpace(scenario), "未记录场景", scenario.Trim())
+            Dim outcome = If(success, "成功", "失败")
+            Dim content = $"Skill '{skillName}' 执行{outcome}。场景: {scene}"
+            If Not success AndAlso Not String.IsNullOrWhiteSpace(failureReason) Then
+                content &= $"。失败原因: {failureReason.Trim()}"
+            End If
+
+            MemoryRepository.InsertMemory(
+                content,
+                Nothing,
+                Nothing,
+                Nothing,
+                If(success, "short_term", "long_term"),
+                importance:=If(success, 0.45, 0.7),
+                sourceType:="skill_execution"
+            )
+        Catch ex As Exception
+            Debug.WriteLine($"[SkillsService] RecordSkillExecution memory failed: {ex.Message}")
+        End Try
+    End Sub
+
+    ''' <summary>
     ''' 强制保存使用统计（程序退出时调用）
     ''' </summary>
     Public Shared Sub FlushUsageStats()

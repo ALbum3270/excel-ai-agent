@@ -1,9 +1,11 @@
 ' ExcelAi\Ribbon1.vb
 Imports System.Diagnostics
 Imports System.Text.RegularExpressions
+Imports System.Threading.Tasks
 Imports System.Windows.Forms
 Imports Microsoft.Office.Tools.Ribbon
 Imports ShareRibbon  ' 添加此引用
+Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
 Imports Microsoft.Office.Interop.Excel
 
@@ -13,9 +15,8 @@ Public Class Ribbon1
     Protected Overrides Sub ChatButton_Click(sender As Object, e As RibbonControlEventArgs)
         Globals.ThisAddIn.ShowChatTaskPane()
     End Sub
-    Protected Overrides Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' Excel 暂未实现独立网页爬取面板，按钮已隐藏。保留事件防止 Designer 解绑异常。
-        MessageBox.Show("Excel 暂未实现独立的网页爬取面板，请在 Word 中使用此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Protected Overrides Async Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请根据当前工作簿上下文自动处理网页内容采集需求；如果用户已提供网址或网页文本，请提取结构化数据并写入适合的工作表区域。")
     End Sub
     Protected Overrides Sub SpotlightButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
@@ -296,12 +297,12 @@ Public Class Ribbon1
 
     ' MCPButton_Click 已在 BaseOfficeRibbon 中提供共用实现，Excel 不需要差异化逻辑，故不再重写。
 
-    Protected Overrides Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
-        MessageBox.Show("Excel校对功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Protected Overrides Async Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请自动校对当前选中单元格区域，检查错别字、标点、术语一致性和明显的数据文本问题，并在适合时直接给出修改建议或执行低风险修正。")
     End Sub
 
-    Protected Overrides Sub ReformatButton_Click(sender As Object, e As RibbonControlEventArgs)
-        MessageBox.Show("Excel排版功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Protected Overrides Async Sub ReformatButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请自动分析当前选中单元格区域或当前工作表，并进行专业表格排版：标题、表头、列宽、数字格式、边框、对齐、重点高亮和可读性优化。")
     End Sub
 
     ' 一键翻译功能 - Excel实现（翻译选中单元格内容）
@@ -358,15 +359,33 @@ Public Class Ribbon1
         End Try
     End Sub
 
-    ' AI续写功能 - Excel暂不支持（续写主要用于文档类型）
-    Protected Overrides Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
-        MessageBox.Show("AI续写功能主要用于Word和PowerPoint文档，Excel暂不支持此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    ' AI续写功能 - Excel 交给 Agent 根据表格上下文自动补全
+    Protected Overrides Async Sub ContinuationButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请根据当前选中单元格或相邻数据自动续写/补全内容，保持已有字段、语气、格式和数据规律一致。")
     End Sub
 
 
 
-    ' 模板排版功能 - Excel暂不支持
-    Protected Overrides Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
-        MessageBox.Show("模板排版功能主要用于Word和PowerPoint文档，Excel暂不支持此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    ' 模板排版功能 - 交给 Agent 自动识别当前表格结构和可用模板/样式
+    Protected Overrides Async Sub TemplateFormatButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请根据当前工作表内容自动识别表格类型，并套用适合的专业模板化排版方案；如果有可用 Skills 或模板，请自动选择最匹配的方案执行。")
     End Sub
+
+    Private Async Function StartAgentFromRibbonAsync(request As String) As Task
+        Try
+            Globals.ThisAddIn.ShowChatTaskPane()
+            Await Task.Delay(350)
+
+            Dim chatCtrl = ThisAddIn.chatControl
+            If chatCtrl Is Nothing Then
+                GlobalStatusStripAll.ShowWarning("无法获取 AI 助手面板")
+                Return
+            End If
+
+            Dim requestJson = JsonConvert.SerializeObject(request)
+            Await chatCtrl.ExecuteJavaScriptAsyncJS($"sendMessageToServer({{ type: 'startAgent', request: {requestJson} }});")
+        Catch ex As Exception
+            GlobalStatusStripAll.ShowWarning($"启动 AI Agent 失败: {ex.Message}")
+        End Try
+    End Function
 End Class

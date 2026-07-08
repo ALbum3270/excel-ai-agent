@@ -1,5 +1,5 @@
 ' ShareRibbon\Config\SqliteAssemblyResolver.vb
-' 部署时仅 WordAi 目录含 System.Data.SQLite.dll，ExcelAi/PowerPointAi 需从此加载
+' 部署时可将共享依赖集中放在一个目录，ExcelAi/WordAi/PowerPointAi 按需从此加载
 
 Imports System.Collections.Generic
 Imports System.IO
@@ -7,7 +7,7 @@ Imports System.Reflection
 Imports System.Linq
 
     ''' <summary>
-    ''' AssemblyResolve：从 WordAi、根目录等目录加载 System.Data.SQLite 或 Markdig
+    ''' AssemblyResolve：从安装根目录、ShareRibbon/Common、三端目录加载共享依赖
     ''' 启动优化：EnsureRegistered() 仅注册事件处理器（微秒级），PreloadAssemblies() 可在后台线程调用
     ''' </summary>
     Public Class SqliteAssemblyResolver
@@ -16,6 +16,45 @@ Imports System.Linq
     Private Shared _preloaded As Boolean = False
     Private Shared ReadOnly _lockObj As New Object()
     Private Shared ReadOnly _preloadLock As New Object()
+    Private Shared ReadOnly _sharedDependencyNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase) From {
+        "AngleSharp",
+        "DocumentFormat.OpenXml",
+        "DocumentFormat.OpenXml.Framework",
+        "EntityFramework",
+        "EntityFramework.SqlServer",
+        "HtmlAgilityPack",
+        "Markdig",
+        "MessagePack",
+        "MessagePack.Annotations",
+        "Microsoft.Bcl.AsyncInterfaces",
+        "Microsoft.Data.Sqlite",
+        "Microsoft.NET.StringTools",
+        "Microsoft.VisualStudio.Threading",
+        "Microsoft.VisualStudio.Validation",
+        "Microsoft.Web.WebView2.Core",
+        "Microsoft.Web.WebView2.WinForms",
+        "Microsoft.Web.WebView2.Wpf",
+        "Microsoft.Win32.Registry",
+        "Nerdbank.Streams",
+        "Newtonsoft.Json",
+        "SQLitePCLRaw.core",
+        "System.Buffers",
+        "System.Collections.Immutable",
+        "System.Data.SQLite",
+        "System.Data.SQLite.EF6",
+        "System.Diagnostics.DiagnosticSource",
+        "System.IO.Pipelines",
+        "System.Memory",
+        "System.Numerics.Vectors",
+        "System.Runtime.CompilerServices.Unsafe",
+        "System.Security.AccessControl",
+        "System.Security.Principal.Windows",
+        "System.Text.Encodings.Web",
+        "System.Text.Json",
+        "System.Threading.Tasks.Dataflow",
+        "System.Threading.Tasks.Extensions",
+        "System.ValueTuple"
+    }
 
     ''' <summary>
     ''' 仅注册 AssemblyResolve 事件处理器，不做预加载（微秒级，可在 VSTO Startup 中同步调用）
@@ -30,15 +69,16 @@ Imports System.Linq
     End Sub
 
     ''' <summary>
-    ''' 后台预加载 SQLite 和 Markdig 程序集（可在后台线程调用，不阻塞主线程）
+    ''' 后台预加载高频共享依赖（可在后台线程调用，不阻塞主线程）
     ''' 即使不调用此方法，OnAssemblyResolve 也能在首次需要时按需加载
     ''' </summary>
     Public Shared Sub PreloadAssemblies()
         If _preloaded Then Return
         SyncLock _preloadLock
             If _preloaded Then Return
-            TryPreloadSqlite()
-            TryPreloadMarkdig()
+            TryPreloadAssembly("System.Data.SQLite")
+            TryPreloadAssembly("Markdig")
+            TryPreloadAssembly("Newtonsoft.Json")
             _preloaded = True
         End SyncLock
     End Sub
@@ -71,6 +111,11 @@ Imports System.Linq
         Dim initialPaths = list.ToArray()
         For Each p In initialPaths
             If String.IsNullOrEmpty(p) Then Continue For
+            list.Add(Path.Combine(p, "ShareRibbon"))
+            list.Add(Path.Combine(p, "Common"))
+            list.Add(Path.Combine(p, "Shared"))
+            list.Add(Path.Combine(p, "SharedRuntime"))
+            list.Add(Path.Combine(p, "lib"))
             list.Add(Path.Combine(p, "WordAi"))
             list.Add(Path.Combine(p, "ExcelAi"))
             list.Add(Path.Combine(p, "PowerPointAi"))
@@ -124,22 +169,10 @@ Imports System.Linq
         End Try
     End Function
 
-    Private Shared Sub TryPreloadSqlite()
+    Private Shared Sub TryPreloadAssembly(simpleName As String)
+        If String.IsNullOrWhiteSpace(simpleName) Then Return
         For Each d As String In GetProbeDirs()
-            Dim p = Path.Combine(d, "System.Data.SQLite.dll")
-            If File.Exists(p) Then
-                Try
-                    Assembly.LoadFrom(p)
-                Catch
-                End Try
-                Return
-            End If
-        Next
-    End Sub
-
-    Private Shared Sub TryPreloadMarkdig()
-        For Each d As String In GetProbeDirs()
-            Dim p = Path.Combine(d, "Markdig.dll")
+            Dim p = Path.Combine(d, simpleName & ".dll")
             If File.Exists(p) Then
                 Try
                     Assembly.LoadFrom(p)
@@ -154,7 +187,7 @@ Imports System.Linq
         Try
             Dim name As New AssemblyName(args.Name)
             Dim simpleName = name.Name
-            If simpleName <> "System.Data.SQLite" AndAlso simpleName <> "Markdig" Then Return Nothing
+            If Not _sharedDependencyNames.Contains(simpleName) Then Return Nothing
 
             For Each d As String In GetProbeDirs()
                 Dim p = Path.Combine(d, simpleName & ".dll")

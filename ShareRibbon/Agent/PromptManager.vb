@@ -144,18 +144,29 @@ Namespace Agent
             If skill IsNot Nothing Then
                 sb.AppendLine()
                 sb.AppendLine($"【匹配技能】{skill.Name}: {skill.Description}")
+                If skill.RequiredTools IsNot Nothing AndAlso skill.RequiredTools.Count > 0 Then
+                    sb.AppendLine($"【技能建议工具】{String.Join(", ", skill.RequiredTools)}")
+                End If
+                If Not String.IsNullOrWhiteSpace(skill.PromptTemplate) Then
+                    sb.AppendLine()
+                    sb.AppendLine("【技能详细说明】")
+                    sb.AppendLine(skill.PromptTemplate)
+                End If
             End If
 
             sb.AppendLine()
             sb.AppendLine("请分析用户需求，制定详细的执行计划。")
+            If skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing AndAlso skill.RequiredTools.Count > 0 Then
+                sb.AppendLine("若匹配技能提供了建议工具，并且能完成任务，优先在步骤 code 中使用这些工具。")
+            End If
             sb.AppendLine("返回 JSON 格式：")
             sb.AppendLine("```json")
             sb.AppendLine("{")
-            sb.AppendLine("  ""understanding"": ""对用户需求的理解""")
+            sb.AppendLine("  ""understanding"": ""对用户需求的理解"",")
             sb.AppendLine("  ""steps"": [")
             sb.AppendLine("    {")
             sb.AppendLine("      ""step"": 1,")
-            sb.AppendLine("      ""description"": ""步骤描述""")
+            sb.AppendLine("      ""description"": ""步骤描述"",")
             sb.AppendLine("      ""code"": ""{\\""command\\"":\\""工具ID\\"",\\""params\\"":{...}}""")
             sb.AppendLine("    }")
             sb.AppendLine("  ],")

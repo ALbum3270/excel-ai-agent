@@ -14,17 +14,15 @@ Public Class Ribbon1
         Globals.ThisAddIn.ShowChatTaskPane()
     End Sub
 
-    Protected Overrides Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' PowerPoint 暂未实现独立网页爬取面板，按钮已在 Designer 中隐藏。
-        MessageBox.Show("PowerPoint 暂未实现独立的网页爬取面板，请在 Word 中使用此功能。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Protected Overrides Async Sub WebCaptureButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请根据当前演示文稿上下文自动处理网页内容采集需求；如果用户已提供网址或网页文本，请提取适合制作幻灯片的结构化要点、标题和页面内容。")
     End Sub
 
     Protected Overrides Sub SpotlightButton_Click(sender As Object, e As RibbonControlEventArgs)
         'Globals.ThisAddIn.ShowChatTaskPane()
     End Sub
-    Protected Overrides Sub DataAnalysisButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' PowerPoint 特定的数据分析逻辑
-        MessageBox.Show("PowerPoint数据分析功能正在开发中...")
+    Protected Overrides Async Sub DataAnalysisButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请自动分析当前演示文稿或选中幻灯片中的数据、图表和表格，提炼关键结论、异常点和适合放入演示的洞察；如可执行，请直接生成或优化对应页面内容。")
     End Sub
 
     Protected Overrides Function GetApplication() As ApplicationInfo
@@ -44,8 +42,8 @@ Public Class Ribbon1
 
     ' MCPButton_Click 已在 BaseOfficeRibbon 中提供共用实现，PowerPoint 不需要差异化逻辑，故不再重写。
 
-    Protected Overrides Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
-        MessageBox.Show("PowerPoint校对功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
+    Protected Overrides Async Sub ProofreadButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请自动校对当前选中幻灯片或整份演示文稿，检查错别字、标点、术语一致性、标题层级、表达简洁度和演示语气，并在适合时直接执行低风险修正。")
     End Sub
 
     ' 排版功能 - 进入模板选择模式
@@ -412,6 +410,24 @@ Public Class Ribbon1
             End Select
         Catch
             Return "文本"
+        End Try
+    End Function
+
+    Private Async Function StartAgentFromRibbonAsync(request As String) As Task
+        Try
+            Globals.ThisAddIn.ShowChatTaskPane()
+            Await Task.Delay(350)
+
+            Dim chatCtrl = ThisAddIn.chatControl
+            If chatCtrl Is Nothing Then
+                GlobalStatusStripAll.ShowWarning("无法获取 AI 助手面板")
+                Return
+            End If
+
+            Dim requestJson = JsonConvert.SerializeObject(request)
+            Await chatCtrl.ExecuteJavaScriptAsyncJS($"sendMessageToServer({{ type: 'startAgent', request: {requestJson} }});")
+        Catch ex As Exception
+            GlobalStatusStripAll.ShowWarning($"启动 AI Agent 失败: {ex.Message}")
         End Try
     End Function
 End Class

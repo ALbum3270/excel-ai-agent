@@ -308,6 +308,7 @@
     <Compile Include="ConversationRuntime\DefaultConversationRuntime.vb" />
     <Compile Include="Loop\RalphLoopMemory.vb" />
     <Compile Include="Agent\AgentKernel.vb" />
+    <Compile Include="Agent\AiNativeRuntime.vb" />
     <Compile Include="Agent\LoopEngine.vb" />
     <Compile Include="Agent\AgentSession.vb" />
     <Compile Include="Agent\AgentMemory.vb" />
@@ -317,7 +318,6 @@
     <Compile Include="Agent\StreamingResponseHandler.vb" />
     <Compile Include="Agent\Context\IContextProvider.vb" />
     <Compile Include="Agent\Context\OfficeContext.vb" />
-    <Compile Include="Agent\Context\ExcelContextProvider.vb" />
     <Compile Include="Agent\Execution\SafetyChecker.vb" />
     <Compile Include="Config\WebView2Loader.vb" />
     <Compile Include="Config\WebView2EnvironmentCache.vb" />
@@ -572,7 +572,6 @@
     <None Include="Resources\js\mcp-manager.js" />
     <None Include="Resources\js\revision-manager.js" />
     <None Include="Resources\js\history-manager.js" />
-    <None Include="Resources\js\intent-preview.js" />
     <None Include="Resources\js\ralph-loop.js" />
     <None Include="Resources\js\ralph-agent.js" />
     <None Include="Resources\js\agent-protocol.js" />

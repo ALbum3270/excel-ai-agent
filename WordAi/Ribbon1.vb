@@ -23,9 +23,8 @@ Public Class Ribbon1
     Protected Overrides Sub SpotlightButton_Click(sender As Object, e As RibbonControlEventArgs)
         'Globals.ThisAddIn.ShowChatTaskPane()
     End Sub
-    Protected Overrides Sub DataAnalysisButton_Click(sender As Object, e As RibbonControlEventArgs)
-        ' Word 特定的数据分析逻辑
-        MessageBox.Show("Word数据分析功能正在开发中...")
+    Protected Overrides Async Sub DataAnalysisButton_Click(sender As Object, e As RibbonControlEventArgs)
+        Await StartAgentFromRibbonAsync("请自动分析当前选中文档内容或整篇 Word 文档，提取结构、关键数据、风险点、摘要结论和可执行改进建议；如包含表格或数字，请优先进行结构化分析。")
     End Sub
 
     Protected Overrides Function GetApplication() As ApplicationInfo
@@ -495,6 +494,24 @@ Public Class Ribbon1
             Return $"#{r:X2}{g:X2}{b:X2}"
         Catch
             Return "auto"
+        End Try
+    End Function
+
+    Private Async Function StartAgentFromRibbonAsync(request As String) As Task
+        Try
+            Globals.ThisAddIn.ShowChatTaskPane()
+            Await Task.Delay(350)
+
+            Dim chatCtrl = ThisAddIn.chatControl
+            If chatCtrl Is Nothing Then
+                GlobalStatusStripAll.ShowWarning("无法获取 AI 助手面板")
+                Return
+            End If
+
+            Dim requestJson = JsonConvert.SerializeObject(request)
+            Await chatCtrl.ExecuteJavaScriptAsyncJS($"sendMessageToServer({{ type: 'startAgent', request: {requestJson} }});")
+        Catch ex As Exception
+            GlobalStatusStripAll.ShowWarning($"启动 AI Agent 失败: {ex.Message}")
         End Try
     End Function
 
