@@ -34,7 +34,7 @@
 
 - [Overview](#overview)
 - [Features](#features)
-- [🚀 Latest Architecture Upgrade (2026-06-09)](#latest-architecture-upgrade)
+- [AI Native Architecture](#ai-native-architecture)
 - [Supported Products](#supported-products)
 - [Screenshots](#screenshots)
 - [Installation](#installation)
@@ -47,7 +47,7 @@
 
 ## Overview
 
-Office AI Assistant is an intelligent office automation tool built with **Visual Studio Community 2022 + Visual Basic.NET + VSTO**. It provides AI-powered assistance for Microsoft Office applications, helping users improve productivity through intelligent data analysis and document processing.
+Office AI Assistant is an AI Native Office add-in built with **Visual Studio Community 2022/2026 + Visual Basic.NET + VSTO + WebView2**. It brings chat-driven task panes, document context reading, smart formatting and proofreading, data analysis, content generation, MCP/Skills integration, and agentic execution to Excel, Word, and PowerPoint.
 
 ### 🎯 Project Goals
 
@@ -62,13 +62,16 @@ Office AI Assistant is an intelligent office automation tool built with **Visual
 
 ### ✨ Core Features
 
-- **AI-Powered Analysis**: Intelligent data analysis and processing
-- **Multi-Document Support**: Handle Excel, Word, and PowerPoint files
-- **External Data Integration**: Import and analyze data from external sources
-- **Smart Content Generation**: Automatically generate reports and summaries
-- **Real-time Assistance**: Interactive chat interface for immediate help
-- **MCP Client Integration**: Built-in MCP-Client support with MCP-Server configuration
-- **Enhanced DeepSeek Support**: Optimized DeepSeek integration for better AI performance
+- **AI Native Chat**: Ask the current document, selected range, table, or slide to do real work from the Office task pane.
+- **Word Smart Formatting**: Natural-language formatting, heading/numbering restructuring, automatic numbering repair, style unification, preview, and execution feedback.
+- **Word Proofreading**: Review typos, punctuation, wording, and formal-document expression with focused suggestions.
+- **Excel Data Analysis**: Read selected ranges and worksheets, answer data questions, organize analysis, assist formulas, and generate chart ideas.
+- **PowerPoint Assistance**: Generate, continue, translate, format, and review presentation content.
+- **AI Translation**: Translate selected paragraphs, pages, or documents with configurable models.
+- **Memory and Context**: Combine short-term conversation state, long-term memory retrieval, and current Office file context.
+- **MCP / Skills Integration**: Built-in MCP Client support for MCP Servers and skills.
+- **Agent Loop**: Complex tasks follow plan -> act -> observe -> repair -> explain instead of stopping at a chat response.
+- **Multi-Model Configuration**: Supports DeepSeek, Doubao, and extensible model configuration.
 
 ### 🔧 Technical Features
 
@@ -81,103 +84,69 @@ Office AI Assistant is an intelligent office automation tool built with **Visual
 
 ---
 
-## 🚀 Latest Architecture Upgrade
+## AI Native Architecture
 
-### AI-First Architecture (v2.8.0 - 2026-06-09)
-
-**Implementation Progress: 85% ✅**
-
-We have completed the core implementation of the **AI-First Architecture**, significantly enhancing AI capabilities and user experience. Compared to competitors, we have several unique features.
+The project is moving from a chat-style add-in to an executable Office Agent. The goal is for AI to observe the current Office file, plan an operation, call tools, verify the result, and repair failures when needed.
 
 #### 🎯 Core Capabilities
 
-| Capability | Status | Description | Competitor Comparison |
-|------------|--------|-------------|----------------------|
-| **🔧 Harness Atomic Tools** | ✅ Complete | AI can explore, iterate, and make autonomous decisions | 🌟 **Unique** |
-| **🔄 Multi-Round Auto-Fix** | ✅ Complete | Automatically fix failed code execution (up to 3 attempts) | 🌟 **Unique** |
-| **🛡️ Safety Checker** | ✅ Complete | Block dangerous operations (Shell, file deletion, etc.) | 🌟 **Unique** |
-| **📍 Context Awareness** | ✅ Complete | Auto-detect selected content and data structure | ⭐ Leading |
-| **📝 Scenario-Based Config** | ✅ Complete | Smart recognition for official documents/papers/reports (260+ lines of rules) | 🌟 **Unique** |
-| **↩️ Undo Mechanism** | ✅ Complete | Auto-save state before execution, one-click undo | ⭐ Leading |
+| Capability | Status | Description |
+|------------|--------|-------------|
+| **Harness** | In progress | Wrap Office operations as AI-callable, observable, and verifiable capabilities |
+| **Agent Loop** | In progress | Route complex tasks through planning, execution, observation, repair, and explanation |
+| **Context Awareness** | Available | Read selections, whole documents, paragraphs, styles, data tables, and conversation context |
+| **Word Action Harness** | Available | Natural-language entry point for Word formatting, proofreading, and numbering operations |
+| **MCP Client** | Available | Connect MCP Servers to extend external tool capabilities |
+| **Memory** | Available | Retrieve recent sessions and long-term memory |
+| **Preview / Undo Direction** | In progress | Prefer preview, explanation, and recoverable execution for important write operations |
 
-#### ✨ Unique Advantages
+#### ✨ Experience Goals
 
-**1. Multi-Round Auto-Fix** (Competitors Don't Have)
-```
-User: "Generate commission formula"
-  ↓
-AI: =IF(B2>100000, B2*5%, B2*3%)  ❌ Syntax Error
-  ↓
-AI Auto-Fix: =IF(B2>100000, B2*0.05, B2*0.03)  ✅ Success
-```
+**1. Word actions should execute, not just chat**
 
-**2. Safety Protection** (Competitors Weak)
-```
-AI Generated: Shell("del C:\*.*")
+```text
+User: "Change the front numbering to 1 2 3 4 5"
   ↓
-SafetyChecker Blocked → Warning Dialog
+Harness reads Word paragraphs, numbering, and range context
   ↓
-User Safe ✅
+Numbering Agent plans and applies automatic numbering repair
+  ↓
+Observer verifies the numbering and reports the result
 ```
 
-**3. Deep Context Awareness** (Leading Competitors)
+**2. The add-in should read context by itself**
+
+```text
+User selects several Word paragraphs
+User: "Restructure the numbering and headings"
+
+AI should not repeatedly ask for range, numbering style, or selected text when the add-in can observe them. It should read the context first, then provide an executable plan or preview.
 ```
+
+**3. Excel data understanding**
+
+```text
 User selects A1:B100 sales data
 AI automatically knows:
 - Range: A1:B100
-- Data Type: Table (with headers)
+- Data Type: Table with headers
 - Column Names: Salesperson, Sales Amount
 - Preview: First 3 rows
 
 User: "Calculate commission"
-AI: Knows to calculate in column B, no need to ask
+AI knows where to work without asking again.
 ```
-
-#### 📊 Competitor Comparison
-
-| Capability | Office AI Agent | Microsoft Copilot | Claude for Office |
-|------------|----------------|-------------------|-------------------|
-| Context Awareness | ✅ Complete | ⚠️ Weak | ⚠️ Weak |
-| **Multi-Round Auto-Fix** | ✅ **Unique** | ❌ | ❌ |
-| **Safety Checker** | ✅ **Unique** | ⚠️ Weak | ❌ |
-| Undo Mechanism | ✅ | ❌ | ❌ |
-| Atomic Tools | ✅ **Unique** | ❌ | ❌ |
-| Scenario-Based Config | ✅ **Unique** | ❌ | ❌ |
-| **Overall Capability** | **90%** | **70%** | **60%** |
 
 #### 🔍 Technical Highlights
 
-**Harness Atomic Tools Architecture**
-- `ListParagraphs` - List all paragraphs
-- `GetParagraphInfo` - Get paragraph details
-- `SetParagraphFormat` - Set paragraph format
-- AI can manipulate Office documents like Cursor writes code
-
-**Scenario-Based Prompt Management**
-- Official Document Recognition: 13 element recognition patterns (document number, title, signature, etc.)
-- Academic Paper Recognition: Auto-identify chapters, abstracts, references
-- Report Recognition: Auto-identify titles, charts, conclusions
-- 260+ lines of configuration with regex pattern matching
-
-**Multi-Round Fix Mechanism**
-```vb
-Const MaxFixAttempts As Integer = 3
-While fixAttempt < MaxFixAttempts
-    toolResult = ExecuteToolAsync(...)
-    If toolResult.Success Then Exit While
-    
-    ' AI auto-fix
-    Dim fixPrompt = $"Previous execution failed: {toolResult.Message}"
-    Dim fixedResponse = Await SendAIRequest(fixPrompt, ...)
-    toolCall = ParseFixedToolCall(fixedResponse)
-End While
-```
+- **Harness atomic tools**: Expose Office actions such as `ListParagraphs`, `GetParagraphInfo`, and `SetParagraphFormat` as composable capabilities.
+- **Planner / Agent**: Produce structured plans from user goals instead of turning every request into a chat reply.
+- **Observer / Repair**: Read the real Office state after execution and repair the plan if the result is not correct.
+- **Capability / Skill**: Add new features as discoverable, explainable, and testable units.
 
 #### 📖 Documentation
 
-- [Code Changes Summary and Testing Guide](docs/代码改动总结-2026-06-09.md) (Chinese)
-- [AI-First Architecture Implementation Progress Report](docs/AI-First-架构实现进度-最终报告-2026-06-09.md) (Chinese)
-- [Architecture Design Document](docs/AI-First-架构详细设计-基于现有代码.md) (Chinese)
+- [Visual Studio 2026 Installer Projects troubleshooting](docs/VS2026-InstallerProjects.md) (Chinese)
 
 ---
 
@@ -185,9 +154,9 @@ End While
 
 | Product | Status | Features |
 |---------|--------|----------|
-| **Microsoft Excel** | ✅ Supported | Data analysis, chart generation, formula assistance |
-| **Microsoft Word** | ✅ Supported | Document processing, content generation, formatting |
-| **Microsoft PowerPoint** | ✅ Supported | Presentation creation, slide design, content optimization |
+| **Microsoft Excel** | ✅ Supported | Data analysis, chart generation, formula assistance, ALLM/CLLM functions, selected-range Q&A |
+| **Microsoft Word** | ✅ Supported | Document processing, content generation/completion, proofreading, continuation, formatting, heading/numbering restructuring, translation |
+| **Microsoft PowerPoint** | ✅ Supported | Presentation creation, slide design, review, continuation, formatting, translation |
 | **WPS Office** | ✅ Compatible | Full compatibility with WPS suite |
 
 ---
@@ -218,21 +187,53 @@ Import and analyze data from external websites, then insert results into Word do
 
 - **Operating System**: Windows 10/11
 - **Office Suite**: Microsoft Office 2016+ or WPS Office
-- **Development Environment**: Visual Studio Community 2022 (for development)
-- **.NET Framework**: 4.7.2 or higher
+- **Runtime**: .NET Framework 4.7.2+, Microsoft Edge WebView2 Runtime, VSTO Runtime
+- **Development Environment**: Visual Studio Community 2022/2026 with the VSTO workload
+- **MSI Packaging**: `OfficeAgent/OfficeAgent.vdproj` requires the `Microsoft Visual Studio Installer Projects` extension in the current Visual Studio instance
 
-### Installation Steps
+### User Installation
 
-1. **Download**: Clone or download the repository
-2. **Build**: Open solution in Visual Studio and build the project
-3. **Deploy**: Install the add-ins to your Office applications
-4. **Configure**: Set up API keys and preferences
+1. Close Word, Excel, PowerPoint, and WPS.
+2. Download `OfficeAgent.msi` from the official site or a release page.
+3. Run the installer. If enterprise policy blocks Office add-in registry writes, run it as administrator.
+4. Open Word, Excel, or PowerPoint.
+5. Find the AI Assistant entry in the ribbon and configure models, API keys, MCP, and skills on first use.
+6. If Office disables the add-in, re-enable it from `File -> Options -> Add-ins`.
 
 ### 📦 Download Installer
 
 - **Official Download**: [https://www.officeso.cn/](https://www.officeso.cn/)
 - **Latest Version**: Get the most recent stable release
 - **Easy Installation**: One-click installer for Windows
+
+### Build and Debug from Source
+
+```bash
+# Restore dependencies
+msbuild AiHelper.sln -t:Restore
+
+# Build all code projects
+msbuild AiHelper.sln
+
+# Or open AiHelper.sln in Visual Studio and run Rebuild Solution
+```
+
+For VSTO debugging, launch the corresponding Office host from Visual Studio. Debug builds are for development; Release builds plus MSI installation are recommended for distribution.
+
+### Visual Studio 2026 Cannot Load OfficeAgent.vdproj
+
+If VS 2026 reports that `OfficeAgent.vdproj` is incompatible and shows `54435603-dbb4-11d2-8724-00a0c9a8b90c`, the usual cause is missing `.vdproj` project type support in that Visual Studio instance, not an outdated VB.NET project.
+
+Fix:
+
+1. Install and enable [Microsoft Visual Studio Installer Projects](https://marketplace.visualstudio.com/items?itemName=VisualStudioClient.MicrosoftVisualStudio2022InstallerProjects) in VS 2026.
+2. Restart Visual Studio and reopen `AiHelper.sln`.
+3. If the extension is temporarily unavailable, build and debug `ShareRibbon`, `WordAi`, `ExcelAi`, and `PowerPointAi` first, then build the MSI with a Visual Studio instance that supports the extension.
+4. See [Visual Studio 2026 Installer Projects troubleshooting](docs/VS2026-InstallerProjects.md) for details.
+
+### Excel XLL Digital Signature Prompt
+
+In Debug builds, `ExcelAi-AddIn64.xll` may show a missing digital signature warning. For local development, use Office trusted locations, enable the add-in, or install from an internal trusted path. Paid code signing is only needed when you decide to distribute a signed production build.
 
 ---
 
@@ -242,16 +243,38 @@ Import and analyze data from external websites, then insert results into Word do
 
 1. **Launch Office Application**: Open Excel, Word, or PowerPoint
 2. **Access AI Assistant**: Find the AI Assistant tab in the ribbon
-3. **Start Chat**: Use the chat interface to ask questions
-4. **Analyze Data**: Select data and ask for analysis
-5. **Generate Content**: Let AI help create reports and summaries
+3. **Configure Models**: Set API keys, model endpoints, and preferences
+4. **Reference Context**: Select document text, a table range, or a slide, then type what you want
+5. **Execute Tasks**: Let AI analyze, generate, format, proofread, or explain based on the current file
+
+### Word Examples
+
+- `Restructure the numbering and headings`
+- `Change the front numbering to 1 2 3 4 5`
+- `Increase the whole document font size by 2 points`
+- `Proofread the whole document and only fix obvious typos and punctuation`
+- `Rewrite the selected content in a formal report style`
+
+### Excel Examples
+
+- `Analyze anomalies in the selected range`
+- `Generate a business analysis based on this table`
+- `Suggest a chart for the current data`
+- `Fill this column with a formula and explain it`
+
+### PowerPoint Examples
+
+- `Generate a summary slide for the current topic`
+- `Improve the wording on the selected slide`
+- `Make this slide look like a business report`
+- `Check the whole deck for typos and wording issues`
 
 ### Advanced Features
 
-- **Batch Processing**: Process multiple files simultaneously
-- **Custom Templates**: Create and use custom analysis templates
-- **Data Export**: Export analysis results in various formats
-- **Integration APIs**: Connect with external data sources
+- **MCP/Skills**: Connect external tools, knowledge bases, or enterprise systems.
+- **Memory**: Use recent conversations and long-term memory to reduce repeated instructions.
+- **Execution Explanation**: Show what will be changed, what was changed, and what still needs confirmation.
+- **Preview First**: Prefer preview and execution feedback for formatting and proofreading operations.
 
 ---
 
@@ -259,7 +282,7 @@ Import and analyze data from external websites, then insert results into Word do
 
 ### Development Environment
 
-- **IDE**: Visual Studio Community 2022
+- **IDE**: Visual Studio Community 2022/2026
 - **Language**: Visual Basic.NET
 - **Framework**: VSTO (Visual Studio Tools for Office)
 - **Version Control**: Git
@@ -272,7 +295,9 @@ AiHelper/
 ├── WordAi/           # Word Add-in
 ├── PowerPointAi/     # PowerPoint Add-in
 ├── ShareRibbon/      # Shared Components
-└── OfficeAgent/      # Installer
+├── OfficeAgent/      # Installer
+├── docs/             # Debugging and installation docs
+└── openspec/         # Requirements and design specs
 ```
 
 ### Building from Source
@@ -281,10 +306,14 @@ AiHelper/
 # Clone the repository
 git clone https://github.com/it235/office-ai-agent.git
 
-# Open solution in Visual Studio
+# Restore dependencies
+msbuild AiHelper.sln -t:Restore
+
 # Build the solution
-# Deploy add-ins to Office applications
+msbuild AiHelper.sln
 ```
+
+Before building the installer, make sure Visual Studio has the `Microsoft Visual Studio Installer Projects` extension installed; otherwise `OfficeAgent.vdproj` cannot load.
 
 ---
 

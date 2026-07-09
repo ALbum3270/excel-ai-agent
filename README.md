@@ -36,7 +36,7 @@
 
 - [概述](#概述)
 - [功能特性](#功能特性)
-- [🚀 最新架构升级 (2026-06-09)](#最新架构升级)
+- [AI Native 架构](#ai-native-架构)
 - [支持产品](#支持产品)
 - [功能展示](#功能展示)
 - [安装说明](#安装说明)
@@ -49,7 +49,7 @@
 
 ## 概述
 
-办公AI智能体是基于 **Visual Studio Community 2022 + Visual Basic.NET + VSTO** 开发的智能办公自动化工具。它为Microsoft Office应用程序提供AI驱动的辅助功能，通过智能数据分析和文档处理帮助用户提高工作效率。
+办公AI智能体是基于 **Visual Studio Community 2022/2026 + Visual Basic.NET + VSTO + WebView2** 开发的 AI Native Office 插件。它为 Excel、Word、PowerPoint 提供聊天式任务窗格、文档上下文读取、智能排版校对、数据分析、内容生成、MCP/Skills 扩展等能力，让用户可以直接用自然语言驱动当前打开的 Office 文件。
 
 ### 🎯 项目目标
 
@@ -64,58 +64,61 @@
 
 ### ✨ 核心功能
 
-- **AI驱动分析**: 智能数据分析和处理
-- **多文档支持**: 处理Excel、Word和PowerPoint文件
-- **AI智能翻译**: 多语言，多模型AI翻译，支持段落、整页翻译
-- **智能排版/续写/审阅**: 智能对文档或PPT内容进行排版，续写，错句词审阅修订
-- **Ralph Loop集成**: 首个将智能规划Ralph Loop集成到Office中的插件
-- **MCP客户端集成**: 已集成MCP-Client，支持MCP-Server配置
-- **DeepSeek增强**: 已对Deepseek增强，提供更好的AI性能
-- **Doubao增强**: 已对Doubao增强，提供更好的AI性能
+- **AI Native Chat**: 在 Office 右侧任务窗格中直接对当前文档、选区、表格或幻灯片提需求。
+- **Word 智能排版**: 支持自然语言排版、标题/序号重构、自动编号整理、样式统一、预览和执行反馈。
+- **Word 校对审阅**: 面向错别字、标点、病句、正式文档表达进行校对建议，减少无意义遮挡式提示。
+- **Excel 数据分析**: 支持选区/工作表上下文读取、数据问答、整理分析、图表和公式辅助。
+- **PowerPoint 内容辅助**: 支持演示文稿内容生成、续写、翻译、排版和审阅。
+- **AI 智能翻译**: 支持段落、页面、文档级多语言翻译，可配置不同模型。
+- **记忆与上下文**: 支持短期会话上下文、长期记忆检索和当前 Office 文件上下文组合。
+- **MCP / Skills 扩展**: 内置 MCP Client，可配置 MCP Server 和 Skills，扩展外部工具能力。
+- **Agent Loop**: 面向复杂任务采用 plan -> act -> observe -> repair -> explain 的执行链路，而不是只生成聊天回复。
+- **多模型配置**: 支持 DeepSeek、Doubao 等模型接入，并保留可扩展配置入口。
 
 ---
 
-## 🚀 最新架构升级
+## AI Native 架构
 
-### AI-First 架构 (v2.8.0 - 2026-06-09)
-
-**实现进度：85% ✅**
-
-我们完成了 **AI-First 架构**的核心实现，显著提升了 AI 能力和用户体验。与竞品相比，我们拥有多项独有功能。
+项目正在从“聊天式插件”升级为“可执行的 Office Agent”。核心目标是让 AI 能观察当前 Office 文件、规划操作、调用工具、验证结果，并在失败时自动修复。
 
 #### 🎯 核心能力
 
-| 能力 | 状态 | 说明 | 竞品对比 |
-|------|------|------|---------|
-| **🔧 Harness 原子工具** | ✅ 完成 | AI 可探索、迭代、自主决策 | 🌟 **独有** |
-| **🔄 多轮自动修复** | ✅ 完成 | 代码执行失败后自动修复（最多3次） | 🌟 **独有** |
-| **🛡️ 安全检查器** | ✅ 完成 | 拦截危险操作（Shell、删除文件等） | 🌟 **独有** |
-| **📍 上下文感知** | ✅ 完成 | 自动识别选中内容、数据结构 | ⭐ 领先 |
-| **📝 场景化配置** | ✅ 完成 | 公文/论文/报告智能识别（260+行规则） | 🌟 **独有** |
-| **↩️ 撤销机制** | ✅ 完成 | 执行前自动保存状态，可一键撤销 | ⭐ 领先 |
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| **Harness** | 持续建设 | 把 Office 操作封装成 AI 可调用、可观察、可验证的能力 |
+| **Agent Loop** | 持续建设 | 复杂任务进入计划、执行、观察、修复和解释流程 |
+| **上下文感知** | 已接入 | 自动读取选区、全文、段落、样式、数据表和会话上下文 |
+| **Word Action Harness** | 已接入 | 支持 Word 排版、校对、自动编号等自然语言操作入口 |
+| **MCP Client** | 已接入 | 支持连接 MCP Server 扩展工具 |
+| **记忆系统** | 已接入 | 支持近期会话和长期记忆检索 |
+| **预览/撤销方向** | 持续建设 | 关键写操作优先提供预览、解释和可恢复路径 |
 
-#### ✨ 独有优势
+#### ✨ 使用体验目标
 
-**1. 多轮自动修复**（竞品没有）
-```
-用户: "生成提成公式"
-  ↓
-AI: =IF(B2>100000, B2*5%, B2*3%)  ❌ 语法错误
-  ↓
-AI 自动修复: =IF(B2>100000, B2*0.05, B2*0.03)  ✅ 成功
-```
+**1. Word 能力从聊天走向执行**
 
-**2. 安全防护**（竞品薄弱）
-```
-AI 生成: Shell("del C:\*.*")
+```text
+用户: "帮我把前面的序号改为12345"
   ↓
-SafetyChecker 拦截 → 弹窗警告
+Harness 读取当前 Word 文档的段落、编号和范围
   ↓
-用户安全 ✅
+Numbering Agent 规划并执行自动编号修复
+  ↓
+Observer 验证编号是否连续并反馈结果
 ```
 
-**3. 深度上下文感知**（领先竞品）
+**2. 插件自己读取上下文**
+
+```text
+用户选中 Word 中几段内容
+用户: "给我重构序号和标题"
+
+AI 不应反复询问全文/选区/编号格式，而是先读取选区和段落结构，给出可执行计划或预览。
 ```
+
+**3. Excel 数据理解**
+
+```text
 用户选中 A1:B100 销售数据
 AI 自动知道:
 - 选区: A1:B100
@@ -127,51 +130,16 @@ AI 自动知道:
 AI: 知道在 B 列计算，不需要再问
 ```
 
-#### 📊 与竞品对比
-
-| 能力 | Office AI 智能体 | Microsoft Copilot | Claude for Office |
-|------|----------------|-------------------|-------------------|
-| 上下文感知 | ✅ 完整 | ⚠️ 弱 | ⚠️ 弱 |
-| **多轮自修复** | ✅ **独有** | ❌ | ❌ |
-| **安全检查** | ✅ **独有** | ⚠️ 弱 | ❌ |
-| 撤销机制 | ✅ | ❌ | ❌ |
-| 工具原子化 | ✅ **独有** | ❌ | ❌ |
-| 场景化配置 | ✅ **独有** | ❌ | ❌ |
-| **综合能力** | **90%** | **70%** | **60%** |
-
 #### 🔍 技术亮点
 
-**Harness 原子工具架构**
-- `ListParagraphs` - 列出所有段落
-- `GetParagraphInfo` - 获取段落详细信息
-- `SetParagraphFormat` - 设置段落格式
-- AI 可以像 Cursor 写代码一样操作 Office 文档
+- **Harness 原子工具架构**: 把 `ListParagraphs`、`GetParagraphInfo`、`SetParagraphFormat` 等 Office 操作暴露为可组合能力。
+- **Planner / Agent**: 面向用户目标生成结构化计划，而不是把自然语言直接变成聊天回复。
+- **Observer / Repair**: 执行后读取真实 Office 状态，失败时基于观察结果修复计划。
+- **Capability / Skill**: 新能力以可发现、可解释、可测试的能力单元接入。
 
-**场景化提示词管理**
-- 公文识别：13种元素识别模式（发文字号、标题、署名等）
-- 论文识别：章节、摘要、参考文献自动识别
-- 报告识别：标题、图表、结论自动识别
-- 260+ 行配置，支持正则表达式匹配
+#### 📖 相关文档
 
-**多轮修复机制**
-```vb
-Const MaxFixAttempts As Integer = 3
-While fixAttempt < MaxFixAttempts
-    toolResult = ExecuteToolAsync(...)
-    If toolResult.Success Then Exit While
-    
-    ' AI 自动修复
-    Dim fixPrompt = $"上一次执行失败：{toolResult.Message}"
-    Dim fixedResponse = Await SendAIRequest(fixPrompt, ...)
-    toolCall = ParseFixedToolCall(fixedResponse)
-End While
-```
-
-#### 📖 详细文档
-
-- [代码改动总结与测试方案](docs/代码改动总结-2026-06-09.md)
-- [AI-First 架构实现进度报告](docs/AI-First-架构实现进度-最终报告-2026-06-09.md)
-- [架构详细设计文档](docs/AI-First-架构详细设计-基于现有代码.md)
+- [Visual Studio 2026 打开 OfficeAgent.vdproj 失败处理](docs/VS2026-InstallerProjects.md)
 
 ---
 
@@ -179,8 +147,8 @@ End While
 
 | 产品 | 状态 | 功能 |
 |------|------|------|
-| **Microsoft Excel** | ✅ 支持 | 数据分析、图表生成、公式辅助、ALLM/CLLM函数 |
-| **Microsoft Word** | ✅ 支持 | 文档处理、内容生成/补全、审阅、续写、排版、智能翻译 |
+| **Microsoft Excel** | ✅ 支持 | 数据分析、图表生成、公式辅助、ALLM/CLLM 函数、选区问答 |
+| **Microsoft Word** | ✅ 支持 | 文档处理、内容生成/补全、校对、续写、排版、标题/序号重构、智能翻译 |
 | **Microsoft PowerPoint** | ✅ 支持 | 演示文稿创建、幻灯片设计、审阅、续写、排版、智能翻译 |
 | **WPS Office** | ✅ 兼容 | 与WPS套件完全兼容 |
 
@@ -210,23 +178,55 @@ End While
 
 ### 系统要求
 
-- **操作系统**: Windows 10+
-- **办公套件**: Microsoft Office 2013+ 或 WPS Office
-- **开发环境**: Visual Studio Community 2022 (开发用)
-- **.NET Framework**: 4.7.2 或更高版本
+- **操作系统**: Windows 10/11
+- **办公套件**: Microsoft Office 2016+ 或 WPS Office
+- **运行时**: .NET Framework 4.7.2+、Microsoft Edge WebView2 Runtime、VSTO Runtime
+- **开发环境**: Visual Studio Community 2022/2026 + VSTO 工作负载
+- **安装包构建**: `OfficeAgent/OfficeAgent.vdproj` 需要当前 Visual Studio 实例安装 `Microsoft Visual Studio Installer Projects` 扩展
 
-### 安装步骤
+### 用户安装
 
-1. **下载**: 克隆或下载代码仓库
-2. **构建**: 在Visual Studio中打开解决方案并构建项目
-3. **部署**: 将插件安装到Office应用程序
-4. **配置**: 设置API密钥和偏好设置
+1. 关闭正在运行的 Word、Excel、PowerPoint 和 WPS。
+2. 从官网或发布页下载 `OfficeAgent.msi`。
+3. 双击运行安装包；如果企业策略限制写入 Office 插件注册表，请使用管理员身份运行。
+4. 安装完成后打开 Word、Excel 或 PowerPoint。
+5. 在功能区找到 AI 助手入口，首次使用时配置模型、API Key、MCP/Skills 等选项。
+6. 如果 Office 提示加载项被禁用，在 Office 的 `文件 -> 选项 -> 加载项` 中重新启用对应插件。
 
 ### 📦 下载安装包
 
 - **官方下载**: [https://www.officeso.cn/](https://www.officeso.cn/)
 - **最新版本**: 获取最新的稳定版本
 - **简易安装**: Windows一键安装程序
+
+### 从源码构建和调试
+
+```bash
+# 还原依赖
+msbuild AiHelper.sln -t:Restore
+
+# 构建全部代码项目
+msbuild AiHelper.sln
+
+# 或在 Visual Studio 中打开 AiHelper.sln 后 Rebuild Solution
+```
+
+调试 VSTO 插件时，建议用 Visual Studio 启动对应 Office 宿主进程。Debug 构建通常用于开发调试；生产分发建议使用 Release 构建并通过 MSI 安装。
+
+### Visual Studio 2026 打不开 OfficeAgent.vdproj
+
+如果 VS 2026 提示 `OfficeAgent.vdproj` 不兼容，并出现 `54435603-dbb4-11d2-8724-00a0c9a8b90c`，原因通常不是 VB.NET 项目版本过低，而是当前 VS 实例缺少 `.vdproj` 项目类型支持。
+
+处理方式：
+
+1. 在 VS 2026 安装并启用 [Microsoft Visual Studio Installer Projects](https://marketplace.visualstudio.com/items?itemName=VisualStudioClient.MicrosoftVisualStudio2022InstallerProjects) 扩展。
+2. 重启 Visual Studio 后重新打开 `AiHelper.sln`。
+3. 如果扩展短期不可用，可以先构建/调试 `ShareRibbon`、`WordAi`、`ExcelAi`、`PowerPointAi`，再用支持该扩展的 Visual Studio 实例构建 MSI。
+4. 详细说明见 [Visual Studio 2026 打开 OfficeAgent.vdproj 失败处理](docs/VS2026-InstallerProjects.md)。
+
+### Excel XLL 数字签名提示
+
+Debug 环境下 `ExcelAi-AddIn64.xll` 可能提示没有可用的数字签名。开发阶段可通过 Office 信任位置、启用加载项或内部安装路径解决；公开分发时再考虑代码签名。没有付费证书不影响本地开发和功能验证。
 
 ---
 
@@ -236,16 +236,38 @@ End While
 
 1. **启动Office应用程序**: 打开Excel、Word或PowerPoint
 2. **访问AI助手**: 在功能区找到AI助手选项卡
-3. **开始聊天**: 使用聊天界面提问
-4. **分析数据**: 选择数据并请求分析
-5. **生成内容**: 让AI帮助创建报告和摘要
+3. **配置模型**: 在设置中填写 API Key、模型地址和偏好配置
+4. **引用上下文**: 选中文档内容、表格区域或幻灯片后直接输入需求
+5. **执行任务**: AI 会根据当前文件上下文进行分析、生成、排版、校对或解释
+
+### Word 常用说法
+
+- `给我重构序号和标题`
+- `帮我把前面的序号改为12345`
+- `把全文字体统一加大2号`
+- `校对全文，只修明显错别字和标点`
+- `把选中的内容改成正式报告风格`
+
+### Excel 常用说法
+
+- `分析选中区域的数据异常`
+- `根据这张表生成一段经营分析`
+- `帮我生成适合当前数据的图表`
+- `给这一列补充公式并解释`
+
+### PowerPoint 常用说法
+
+- `根据当前主题生成一页总结页`
+- `优化选中幻灯片的表达`
+- `把这页改成汇报风格`
+- `检查整份 PPT 的错别字和表达问题`
 
 ### 高级功能
 
-- **批处理**: 同时处理多个文件
-- **自定义模板**: 创建和使用自定义分析模板
-- **数据导出**: 以各种格式导出分析结果
-- **集成API**: 连接外部数据源
+- **MCP/Skills**: 连接外部工具、知识库或企业系统。
+- **记忆**: 结合近期会话和长期记忆减少重复说明。
+- **执行解释**: 对关键写操作展示准备修改什么、已经修改什么、是否需要确认。
+- **预览优先**: 排版、校对等高影响操作优先走预览/执行反馈链路。
 
 ---
 
@@ -253,7 +275,7 @@ End While
 
 ### 开发环境
 
-- **开发工具**: Visual Studio Community 2022
+- **开发工具**: Visual Studio Community 2022/2026
 - **编程语言**: Visual Basic.NET
 - **框架**: VSTO (Visual Studio Tools for Office)
 - **版本控制**: Git
@@ -266,7 +288,9 @@ AiHelper/
 ├── WordAi/           # Word插件
 ├── PowerPointAi/     # PowerPoint插件
 ├── ShareRibbon/      # 共享组件
-└── OfficeAgent/      # 安装程序
+├── OfficeAgent/      # 安装程序
+├── docs/             # 调试和安装说明
+└── openspec/         # 需求和设计规格
 ```
 
 ### 从源码构建
@@ -275,10 +299,14 @@ AiHelper/
 # 克隆仓库
 git clone https://github.com/it235/office-ai-agent.git
 
-# 在Visual Studio中打开解决方案
+# 还原依赖
+msbuild AiHelper.sln -t:Restore
+
 # 构建解决方案
-# 部署插件到Office应用程序
+msbuild AiHelper.sln
 ```
+
+构建安装包前，请先确认 Visual Studio 已安装 `Microsoft Visual Studio Installer Projects` 扩展，否则 `OfficeAgent.vdproj` 无法加载。
 
 ---
 
@@ -346,4 +374,3 @@ git clone https://github.com/it235/office-ai-agent.git
 
 </div>
 
- 

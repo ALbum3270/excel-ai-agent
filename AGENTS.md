@@ -34,7 +34,7 @@ AiHelper/
 ├── PowerPointAi/                        # PowerPoint VSTO 插件
 ├── ShareRibbon/                         # 共享组件库
 ├── OfficeAgent/                         # 安装包项目 (.vdproj)
-├── OfficeAgentSetupCustomActions/        # 安装自定义动作 VB.NET 项目
+├── OfficeAgentSetupCustomActions/        # 安装自定义动作 VB.NET 项目（如存在）
 ├── docs/                                # 调试、迁移、说明文档
 ├── openspec/                            # 需求/变更规格与归档
 ├── packages/                            # NuGet packages 目录
@@ -53,7 +53,7 @@ AiHelper/
 | Word 功能 | `WordAi/` | 文档、段落、续写、翻译、OpenXml 处理 |
 | PowerPoint 功能 | `PowerPointAi/` | 演示文稿、幻灯片、形状、续写、翻译 |
 | 安装包定义 | `OfficeAgent/` | `.vdproj` 安装项目，慎改，保持最小 diff |
-| 安装自定义动作 | `OfficeAgentSetupCustomActions/` | 安装流程辅助逻辑，优先在这里承载可代码化安装行为 |
+| 安装自定义动作 | `OfficeAgentSetupCustomActions/`（如存在） | 安装流程辅助逻辑，优先在这里承载可代码化安装行为 |
 | 调试/迁移文档 | `docs/` | Visual Studio/VSTO 调试、迁移指南等 |
 | 需求/变更规格 | `openspec/` | 变更说明、规格草案、归档记录 |
 | NuGet 依赖 | 各项目 `packages.config` 与根 `packages/` | 判断技术栈、依赖版本、目标框架 |
@@ -121,8 +121,43 @@ AiHelper/
 ### OfficeAgent 与 OfficeAgentSetupCustomActions
 
 - `OfficeAgent/` 的 `.vdproj` 是安装包定义，自动化修改风险高，除非必要不要大范围编辑。
-- `OfficeAgentSetupCustomActions/` 是 VB.NET 自定义动作项目，适合承载安装过程中需要代码实现的逻辑。
-- 如果安装逻辑可以通过自定义动作表达，优先改 `OfficeAgentSetupCustomActions/`，避免直接重写 `.vdproj`。
+- `OfficeAgentSetupCustomActions/` 如存在，是 VB.NET 自定义动作项目，适合承载安装过程中需要代码实现的逻辑。
+- 如果安装逻辑可以通过自定义动作表达，优先改自定义动作项目，避免直接重写 `.vdproj`。
+
+## AI Native Architecture Rules
+
+本项目的核心方向是 AI Native Office 插件。新增或重构智能能力时，默认采用 `Harness -> Agent -> Loop -> Capability/Skill -> Executor -> Observe/Repair/Explain` 的结构，而不是在入口处继续堆叠关键词 `if/else`。
+
+### 设计原则
+
+- Chat、Ribbon、快捷入口只负责收集上下文、调用 harness、展示结果；不要在入口层写大量业务判断。
+- 意图识别应优先交给 planner/harness/agent 结合当前 Office 上下文、选区、文档结构和历史会话来判断。
+- 确定性规则只允许作为轻量安全门、成本优化门或兜底门；不要把它扩展成主逻辑。
+- 新能力应登记为可发现的 capability/skill，包含名称、适用场景、输入 schema、执行器、验证器和可解释输出。
+- Agent Loop 至少包含 `plan -> act -> observe -> repair/continue -> explain`。执行失败时应基于观察结果修复计划，而不是直接把错误抛给用户。
+- 能读当前 Office 文档上下文的地方，必须先读上下文再决策；不要让用户重复描述插件已经能读取的信息。
+- 用户给出明确操作目标时，默认进入执行/预览流程；不要退化成普通聊天长篇解释工具边界。
+- 需要澄清时，只问会阻塞执行的最小问题；可推断、可预览、可撤销的操作应先形成计划。
+
+### 模块边界
+
+- `ShareRibbon/` 可以承载共享抽象，例如上下文模型、capability 契约、loop 状态、MCP/Skill 协议、通用 UI 组件。
+- `ShareRibbon/` 不应引入 Word/Excel/PowerPoint 的具体 COM 实现。
+- Word 具体执行器、文档读取、编号、排版、校对等能力放在 `WordAi/`；已有方向可参考 `WordAi/Services/WordActionHarness.vb`。
+- Excel、PowerPoint 的具体能力分别放在 `ExcelAi/`、`PowerPointAi/`，通过相同抽象接入共享 harness/loop。
+- `openspec/` 中的 AI Native 设计文档是产品/架构意图来源；实现时要优先保持与 roadmap 一致。
+
+### 新能力落地清单
+
+新增一个 AI Native 能力时，至少补齐：
+
+1. capability/skill 描述：自然语言触发范围、输入输出、风险级别。
+2. context reader：能读取选区、全文、结构、样式或宿主状态。
+3. planner/agent：基于上下文产生结构化计划，而不是字符串拼接命令。
+4. executor：执行最小可验证动作，支持预览或撤销。
+5. observer/verifier：验证实际 Office 文档是否达到目标。
+6. repair loop：失败时让 AI 根据观察结果修复计划。
+7. explanation：向用户解释“准备改什么、已经改什么、哪里需要确认”。
 
 ## Common Agent Mistakes
 
@@ -137,6 +172,9 @@ AiHelper/
 7. 新增 SQLite 字段只改建表逻辑，没有写升级迁移。
 8. 大范围格式化 `.vdproj`、`.vbproj`、Designer 文件或生成文件。
 9. 多 Agent 并行创建类型时，没有先统一共享模型/接口，导致 API 不一致。
+10. 用关键词 `if/else` 堆叠用户意图，绕过 harness/agent/loop，导致场景永远补不完。
+11. 明明能读取 Office 上下文，却让用户反复回答文档范围、编号格式、选区内容等插件可自行观察的信息。
+12. 对明确执行请求只输出聊天解释或 JSON 示例，不进入预览、执行、观察和修复流程。
 
 ## Commands
 
@@ -157,7 +195,7 @@ msbuild ExcelAi/ExcelAi.vbproj
 msbuild WordAi/WordAi.vbproj
 msbuild PowerPointAi/PowerPointAi.vbproj
 
-# 构建安装自定义动作项目
+# 构建安装自定义动作项目（目录存在时）
 msbuild OfficeAgentSetupCustomActions/OfficeAgentSetupCustomActions.vbproj
 ```
 

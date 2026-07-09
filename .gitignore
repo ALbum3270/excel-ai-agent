@@ -65,6 +65,7 @@ OfficeAgent/Release
 docs/*
 !docs/design/
 !docs/design/**
+!docs/VS2026-InstallerProjects.md
 
 # 不提交 IDE/CI 配置目录
 .github/
