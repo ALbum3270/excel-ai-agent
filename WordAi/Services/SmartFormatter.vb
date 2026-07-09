@@ -392,6 +392,8 @@ Namespace Services
             Select Case op.Kind
                 Case FormattingOperationKind.FontSizeDelta
                     ApplyFontSizeDelta(targetRange, op.NumericValue)
+                Case FormattingOperationKind.FontSizeGradeDelta
+                    ApplyFontSizeGradeDelta(targetRange, op.NumericValue)
                 Case FormattingOperationKind.FontSizeAbsolute
                     targetRange.Font.Size = CSng(op.NumericValue)
                 Case FormattingOperationKind.FontFamily
@@ -461,6 +463,40 @@ Namespace Services
                 Throw
             End Try
         End Sub
+
+        Private Sub ApplyFontSizeGradeDelta(targetRange As Word.Range, gradeDelta As Double)
+            Try
+                If targetRange.Paragraphs IsNot Nothing AndAlso targetRange.Paragraphs.Count > 0 Then
+                    For Each para As Word.Paragraph In targetRange.Paragraphs
+                        Dim rng = para.Range
+                        rng.Font.Size = CSng(ShiftChineseFontSizeGrade(NormalizeFontSize(rng.Font.Size), gradeDelta))
+                    Next
+                Else
+                    targetRange.Font.Size = CSng(ShiftChineseFontSizeGrade(NormalizeFontSize(targetRange.Font.Size), gradeDelta))
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"[SmartFormatter] ApplyFontSizeGradeDelta 失败: {ex.Message}")
+                Throw
+            End Try
+        End Sub
+
+        Private Function ShiftChineseFontSizeGrade(currentSize As Double, gradeDelta As Double) As Double
+            Dim grades As Double() = {5, 5.5, 6.5, 7.5, 9, 10.5, 12, 14, 15, 16, 18, 22, 24, 26, 36, 42}
+            Dim nearestIndex As Integer = 0
+            Dim nearestDistance As Double = Double.MaxValue
+
+            For i = 0 To grades.Length - 1
+                Dim distance = Math.Abs(grades(i) - currentSize)
+                If distance < nearestDistance Then
+                    nearestDistance = distance
+                    nearestIndex = i
+                End If
+            Next
+
+            Dim targetIndex = nearestIndex + CInt(Math.Round(gradeDelta))
+            targetIndex = Math.Max(0, Math.Min(grades.Length - 1, targetIndex))
+            Return grades(targetIndex)
+        End Function
 
         Private Function NormalizeFontSize(value As Single) As Double
             If value > 0 AndAlso value < 200 Then Return value

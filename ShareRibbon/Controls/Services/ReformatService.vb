@@ -31,6 +31,15 @@ Public Class ReformatService
         End Get
     End Property
 
+    Private Async Function PushFormattingCardHtmlAsync(html As String, Optional responseUuid As String = Nothing) As Task
+        Dim uuid = If(String.IsNullOrWhiteSpace(responseUuid), Guid.NewGuid().ToString(), responseUuid)
+        Dim payload As New JObject()
+        payload("uuid") = uuid
+        payload("html") = html
+
+        Await _executeScript($"appendFormattingCard({payload.ToString(Formatting.None)});")
+    End Function
+
     Public ReadOnly Property ChatFormatterAgent As ChatFormatterAgent
         Get
             If _chatFormatterAgent Is Nothing Then
@@ -776,9 +785,7 @@ Public Class ReformatService
             End If
 
             Dim html = ChatFormatterAgent.GenerateFormattingCardHtml(plan)
-            Dim escapedHtml = _escapeJs(html)
-
-            Await _executeScript($"showFormattingPreview('{escapedHtml}');")
+            Await PushFormattingCardHtmlAsync(html)
             GlobalStatusStrip.ShowInfo("排版预览已生成")
 
         Catch ex As Exception
@@ -793,106 +800,9 @@ Public Class ReformatService
     ''' </summary>
     Public Async Function HandleApplyReformat(jsonDoc As JObject) As Task
         Try
-            Dim mappingJson = jsonDoc("mapping")?.ToString()
-            Dim taggedParagraphsJson = jsonDoc("taggedParagraphs")?.ToString()
-            Dim wordParagraphsJson = jsonDoc("wordParagraphs")?.ToString()
-
-            If String.IsNullOrEmpty(mappingJson) Then
-                ' 使用当前上下文中最后的排版方案
-                Dim context = FormattingOrchestrator.RefinementContext
-                If context.LastPlan IsNot Nothing AndAlso context.LastPlan.SemanticMapping IsNot Nothing Then
-                    mappingJson = JsonConvert.SerializeObject(context.LastPlan.SemanticMapping)
-                Else
-                    GlobalStatusStrip.ShowWarning("没有可应用的排版方案")
-                    Return
-                End If
-            End If
-
-            Dim mapping = JsonConvert.DeserializeObject(Of SemanticStyleMapping)(mappingJson)
-            If mapping Is Nothing Then
-                GlobalStatusStrip.ShowWarning("排版映射数据无效")
-                Return
-            End If
-
-            ' 如果没有传入标注结果，尝试使用AI标注结果
-            Dim taggedParagraphs As List(Of TaggedParagraph)
-            If Not String.IsNullOrEmpty(taggedParagraphsJson) Then
-                taggedParagraphs = JsonConvert.DeserializeObject(Of List(Of TaggedParagraph))(taggedParagraphsJson)
-            Else
-                ' 优先尝试使用ChatFormatterAgent中最后AI标注的结果
-                Dim aiTagged = ChatFormatterAgent.GetLastTaggedParagraphs()
-                If aiTagged IsNot Nothing AndAlso aiTagged.Count > 0 Then
-                    taggedParagraphs = aiTagged
-                    Debug.WriteLine($"[HandleApplyReformat] 使用AI标注结果: {taggedParagraphs.Count}个段落")
-                Else
-                    ' 如果没有AI标注结果，从JSON中解析wordParagraphs数量
-                    Dim paraCountObj = jsonDoc("paraCount")?.ToObject(Of Integer)()
-                    Dim paraCount = If(paraCountObj, 0)
-                    taggedParagraphs = New List(Of TaggedParagraph)()
-                    For i = 0 To paraCount - 1
-                        taggedParagraphs.Add(New TaggedParagraph(i, "body.normal"))
-                    Next
-                End If
-            End If
-
-            ' 构建段落类型列表：优先从JSON获取，其次从编排器上下文获取，最后从Word推断
-            Dim paragraphTypes As List(Of String) = Nothing
-
-            ' 1. 尝试从JSON payload获取
-            Dim paragraphTypesJson = jsonDoc("paragraphTypes")?.ToString()
-            If Not String.IsNullOrEmpty(paragraphTypesJson) Then
-                paragraphTypes = JsonConvert.DeserializeObject(Of List(Of String))(paragraphTypesJson)
-            End If
-
-            ' 2. 尝试从编排器上下文获取
-            If paragraphTypes Is Nothing Then
-                Dim context = FormattingOrchestrator.RefinementContext
-                If context.LastPlan IsNot Nothing AndAlso context.LastPlan.ParagraphTypes IsNot Nothing Then
-                    paragraphTypes = context.LastPlan.ParagraphTypes
-                End If
-            End If
-
-            ' 3. 从Word段落对象推断（在UI线程中执行）
-            If paragraphTypes Is Nothing Then
-                paragraphTypes = New List(Of String)()
-                For rt = 0 To taggedParagraphs.Count - 1
-                    paragraphTypes.Add("text")
-                Next
-            End If
-
-            ' 执行渲染（在UI线程中操作Word对象）
-            _invokeOnUiThread(Sub()
-                Try
-                    ' 获取Word Application对象（通过反射访问）
-                    Dim wordApp = GetWordApplication()
-                    If wordApp Is Nothing Then
-                        GlobalStatusStrip.ShowWarning("无法访问Word应用程序")
-                        Return
-                    End If
-
-                    ' 获取Word段落对象列表
-                    Dim wordParagraphs As New List(Of Object)()
-                    Dim doc = wordApp.ActiveDocument
-                    For i = 1 To doc.Paragraphs.Count
-                        wordParagraphs.Add(doc.Paragraphs.Item(i))
-                    Next
-
-                    Dim result = SemanticRenderingEngine.ApplySemanticFormatting(
-                        taggedParagraphs, mapping, wordParagraphs, paragraphTypes, wordApp)
-
-                    FormattingOrchestrator.RefinementContext.IsApplied = True
-
-                    Dim output As New JObject()
-                    output("appliedCount") = result.AppliedCount
-                    output("skippedCount") = result.SkippedCount
-                    _executeScript($"onReformatApplied({output.ToString(Formatting.None)});")
-
-                    GlobalStatusStrip.ShowSuccess($"排版应用完成: {result.AppliedCount}段已修改")
-                Catch ex As Exception
-                    Debug.WriteLine($"应用排版失败: {ex.Message}")
-                    GlobalStatusStrip.ShowWarning($"应用排版失败: {ex.Message}")
-                End Try
-            End Sub)
+            Await Task.FromResult(0)
+            Debug.WriteLine("HandleApplyReformat is deprecated. Use applySmartReformat and the host-specific override instead.")
+            GlobalStatusStrip.ShowWarning("当前排版应用入口已迁移，请通过具体 Office 插件的智能排版入口执行。")
 
         Catch ex As Exception
             Debug.WriteLine($"HandleApplyReformat 出错: {ex.Message}")
@@ -929,8 +839,8 @@ Public Class ReformatService
 
             If refinedPlan IsNot Nothing Then
                 ' 推送预览卡片到前端
-                Dim json = refinedPlan.ToPreviewJson().ToString(Newtonsoft.Json.Formatting.None)
-                _executeScript($"showFormattingPreview({json});")
+                Dim html = ChatFormatterAgent.GenerateFormattingCardHtml(refinedPlan)
+                Await PushFormattingCardHtmlAsync(html)
                 GlobalStatusStrip.ShowSuccess("排版微调已应用，请预览确认")
             End If
 
@@ -945,101 +855,13 @@ Public Class ReformatService
     ''' </summary>
     Public Async Function HandleMirrorFormat(jsonDoc As JObject) As Task
         Try
-            Dim referenceDocPath = jsonDoc("referencePath")?.ToString()
-
-            If String.IsNullOrEmpty(referenceDocPath) Then
-                ' 打开文件对话框选择范文
-                _invokeOnUiThread(Sub()
-                    Dim ofd As New OpenFileDialog With {
-                        .Filter = "Word文档 (*.docx;*.doc)|*.docx;*.doc|所有文件 (*.*)|*.*",
-                        .Title = "选择范文文档"
-                    }
-                    If ofd.ShowDialog() = DialogResult.OK Then
-                        referenceDocPath = ofd.FileName
-                        ProcessMirrorFormatInternal(referenceDocPath)
-                    End If
-                End Sub)
-            Else
-                ProcessMirrorFormatInternal(referenceDocPath)
-            End If
+            Await Task.FromResult(0)
+            Debug.WriteLine("HandleMirrorFormat is deprecated. Host add-ins should implement document-specific format clone flows.")
+            GlobalStatusStrip.ShowWarning("格式克隆需要由具体 Office 插件实现，请使用 Word 排版入口。")
 
         Catch ex As Exception
             Debug.WriteLine($"HandleMirrorFormat 出错: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"格式克隆失败: {ex.Message}")
-        End Try
-    End Function
-
-    ''' <summary>
-    ''' 内部处理格式克隆逻辑
-    ''' </summary>
-    Private Async Sub ProcessMirrorFormatInternal(referenceDocPath As String)
-        Try
-            GlobalStatusStrip.ShowInfo("正在分析范文格式...")
-
-            ' 获取Word Application
-            Dim wordApp = GetWordApplication()
-            If wordApp Is Nothing Then
-                GlobalStatusStrip.ShowWarning("无法访问Word应用程序")
-                Return
-            End If
-
-            ' 打开范文文档（在后台打开，不显示）
-            Dim refDoc As Object = Nothing
-            Try
-                refDoc = wordApp.Documents.Open(referenceDocPath, ReadOnly:=True, Visible:=False)
-            Catch ex As Exception
-                GlobalStatusStrip.ShowWarning($"无法打开范文: {ex.Message}")
-                Return
-            End Try
-
-            Try
-                ' 提取范文格式
-                Dim extractedFormats = FormatMirrorService.ExtractFormattingFromDocument(wordApp, False)
-                If extractedFormats Is Nothing OrElse extractedFormats.Count = 0 Then
-                    GlobalStatusStrip.ShowWarning("未能从范文中提取格式信息")
-                    Return
-                End If
-
-                ' 关闭范文
-                refDoc.Close(SaveChanges:=False)
-
-                ' 构建AI克隆提示词
-                Dim clonePrompt = FormatMirrorService.BuildClonePrompt(extractedFormats)
-
-                ' 通过JS传递到AI处理
-                Dim promptJson As New JObject()
-                promptJson("prompt") = clonePrompt
-                promptJson("extractedCount") = extractedFormats.Count
-
-                _executeScript($"onMirrorFormatReady({promptJson.ToString(Formatting.None)});")
-                GlobalStatusStrip.ShowSuccess($"已从范文提取{extractedFormats.Count}种格式规则，请确认是否应用")
-
-            Catch ex As Exception
-                ' 确保范文关闭
-                Try
-                    refDoc?.Close(SaveChanges:=False)
-                Catch
-                End Try
-                Debug.WriteLine($"格式克隆处理失败: {ex.Message}")
-                GlobalStatusStrip.ShowWarning($"格式克隆失败: {ex.Message}")
-            End Try
-
-        Catch ex As Exception
-            Debug.WriteLine($"ProcessMirrorFormatInternal 出错: {ex.Message}")
-            GlobalStatusStrip.ShowWarning($"格式克隆失败: {ex.Message}")
-        End Try
-    End Sub
-
-    ''' <summary>
-    ''' 获取Word Application对象（通过反射，避免ShareRibbon直接依赖Word Interop）
-    ''' </summary>
-    Private Shared Function GetWordApplication() As Object
-        Try
-            Dim wordApp = System.Runtime.InteropServices.Marshal.GetActiveObject("Word.Application")
-            Return wordApp
-        Catch ex As Exception
-            Debug.WriteLine($"获取Word Application失败: {ex.Message}")
-            Return Nothing
         End Try
     End Function
 

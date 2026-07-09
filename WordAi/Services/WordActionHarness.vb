@@ -1,0 +1,157 @@
+' WordAi\Services\WordActionHarness.vb
+' Word 专属 Action Harness：把自然语言请求路由到可执行 capability，而不是在 ChatControl 中堆条件分支。
+
+Imports ShareRibbon
+
+Namespace Services
+
+    Public Enum WordActionKind
+        None
+        Proofread
+        DirectFormatting
+        Numbering
+        SemanticReformat
+    End Enum
+
+    Public Class WordActionPlan
+        Public Property Kind As WordActionKind = WordActionKind.None
+        Public Property Confidence As Double
+        Public Property Reason As String = ""
+        Public Property Intent As IntentResult
+        Public Property FormattingPlan As FormattingIntentPlan
+
+        Public ReadOnly Property ShouldHandle As Boolean
+            Get
+                Return Kind <> WordActionKind.None AndAlso Confidence >= 0.55
+            End Get
+        End Property
+    End Class
+
+    Public Class WordActionHarness
+
+        Private ReadOnly _app As Object
+
+        Public Sub New(app As Object)
+            _app = app
+        End Sub
+
+        Public Function Plan(userMessage As String, Optional intent As IntentResult = Nothing) As WordActionPlan
+            Dim result As New WordActionPlan With {
+                .Intent = intent
+            }
+
+            If String.IsNullOrWhiteSpace(userMessage) Then Return result
+
+            Dim hasSelection = HasUsableSelection()
+            Dim formattingCompiler As New FormattingIntentCompiler()
+            Dim formattingPlan = formattingCompiler.Compile(userMessage, hasSelection)
+            result.FormattingPlan = formattingPlan
+
+            If ShouldRouteToNumbering(userMessage) Then
+                result.Kind = WordActionKind.Numbering
+                result.Confidence = 0.92
+                result.Reason = "匹配到 Word 自动编号连续化 capability"
+                Return result
+            End If
+
+            If formattingPlan IsNot Nothing AndAlso formattingPlan.HasOperations Then
+                result.Kind = WordActionKind.DirectFormatting
+                result.Confidence = Math.Max(0.82, formattingPlan.Confidence)
+                result.Reason = "已生成可执行 FormattingIntentPlan"
+                Return result
+            End If
+
+            If intent IsNot Nothing Then
+                Select Case intent.OfficeIntent
+                    Case OfficeIntentType.PROOFREAD
+                        result.Kind = WordActionKind.Proofread
+                        result.Confidence = Math.Max(0.72, intent.Confidence)
+                        result.Reason = "意图识别为校对"
+                        Return result
+
+                    Case OfficeIntentType.TEXT_FORMAT
+                        result.Kind = WordActionKind.DirectFormatting
+                        result.Confidence = Math.Max(0.62, intent.Confidence)
+                        result.Reason = "意图识别为文本格式调整，交给排版执行器尝试"
+                        Return result
+
+                    Case OfficeIntentType.FORMAT_STYLE
+                        result.Kind = WordActionKind.SemanticReformat
+                        result.Confidence = Math.Max(0.66, intent.Confidence)
+                        result.Reason = "意图识别为样式/排版调整"
+                        Return result
+                End Select
+            End If
+
+            If LooksLikeStructuralReformat(userMessage) Then
+                result.Kind = WordActionKind.SemanticReformat
+                result.Confidence = 0.7
+                result.Reason = "匹配到结构化排版/标题/编号整理请求"
+                Return result
+            End If
+
+            Return result
+        End Function
+
+        Private Function ShouldRouteToNumbering(message As String) As Boolean
+            If WordNumberingAgent.LooksLikeSequentialNumberingCommand(message) Then Return True
+
+            ' 这里不是靠无限关键词穷举，而是结合文档状态和用户动作意图：
+            ' 文档存在自动编号，用户表达“改/整理/重排/连续/12345”等序列化目标时，优先交给编号 capability。
+            If CountAutomaticNumberedParagraphs() = 0 Then Return False
+
+            Dim text = If(message, "")
+            Dim hasSequenceGoal = ContainsAny(text, {"12345", "1 2 3", "1,2,3", "1，2，3", "连续", "递增", "顺序"})
+            Dim hasChangeVerb = ContainsAny(text, {"改", "变", "整理", "修正", "重排", "重置", "统一", "处理"})
+            Dim refersToFrontMarker = ContainsAny(text, {"前面", "前面的", "开头", "列表", "编号", "序号"})
+
+            Return hasSequenceGoal AndAlso hasChangeVerb AndAlso refersToFrontMarker
+        End Function
+
+        Private Function CountAutomaticNumberedParagraphs() As Integer
+            Try
+                If _app Is Nothing OrElse _app.ActiveDocument Is Nothing Then Return 0
+
+                Dim count As Integer = 0
+                For Each para As Object In _app.ActiveDocument.Paragraphs
+                    Try
+                        Dim listType = para.Range.ListFormat.ListType
+                        If CInt(listType) <> 0 Then count += 1
+                    Catch
+                    End Try
+                    If count >= 1 Then Return count
+                Next
+            Catch
+            End Try
+
+            Return 0
+        End Function
+
+        Private Function HasUsableSelection() As Boolean
+            Try
+                If _app Is Nothing OrElse _app.Selection Is Nothing OrElse _app.Selection.Range Is Nothing Then Return False
+                Dim text = If(_app.Selection.Range.Text, "").Replace(vbCr, "").Replace(vbLf, "").Replace(ChrW(7), "").Trim()
+                Return text.Length > 0
+            Catch
+                Return False
+            End Try
+        End Function
+
+        Private Shared Function LooksLikeStructuralReformat(message As String) As Boolean
+            Dim text = If(message, "")
+            Dim hasStructureTarget = ContainsAny(text, {"标题", "序号", "编号", "层级", "目录", "列表"})
+            Dim hasAction = ContainsAny(text, {"重构", "整理", "规范", "优化", "调整", "排版", "格式"})
+            Return hasStructureTarget AndAlso hasAction
+        End Function
+
+        Private Shared Function ContainsAny(text As String, keywords As IEnumerable(Of String)) As Boolean
+            If String.IsNullOrWhiteSpace(text) OrElse keywords Is Nothing Then Return False
+            For Each keyword In keywords
+                If text.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 Then Return True
+            Next
+            Return False
+        End Function
+
+    End Class
+
+End Namespace

@@ -193,6 +193,31 @@
 
 ## 核心对象
 
+### WordActionHarness
+
+Word 侧统一的能力编排入口，负责把用户自然语言、当前文档状态、选区状态和 `IntentService` 结果组合成可执行 `WordActionPlan`。
+
+它的职责不是无限堆关键词，而是做 harness：
+
+- 收集上下文：是否有选区、是否有自动编号、活动文档状态。
+- 调用 planner：优先读取 `IntentService` 和结构化 compiler 的计划结果。
+- 选择 capability：例如校对、直接格式、自动编号、语义排版。
+- 返回 `WordActionPlan`：包含 `Kind`、`Confidence`、`Reason`、可执行计划。
+- 由 `ChatControl` 只按 plan 路由，不再把所有判断散落在入口。
+
+后续能力扩展方式：
+
+```text
+WordActionHarness
+  ├── Proofread capability
+  ├── DirectFormatting capability
+  ├── Numbering capability
+  ├── SemanticReformat capability
+  └── Future: Rewrite / Table / TOC / Citation capability
+```
+
+这层对应 Cursor/Codex 类产品里常见的 harness 思路：模型不直接“聊天解释能力边界”，而是先被放进一个有上下文、有工具清单、有观察反馈的执行容器。模型可以参与 planner，但最终动作必须落到 capability 和 executor。
+
 ### WordTaskPlan
 
 统一承载 Word AI Native 任务。
@@ -464,6 +489,28 @@ Explain
 - 失败不静默。
 - 用户能看到 AI 为什么又修了一次。
 
+### 第五阶段：Action Harness 化
+
+目标：
+
+- 不再让 `SmartFormatter.LooksLikeDirectFormattingCommand` 这种窄规则决定是否进入执行链路。
+- Chat 主入口只调用 `WordActionHarness.Plan()`。
+- 新能力以 capability 形式接入，避免在 `HandleSendMessage` 中继续堆 if。
+
+落地：
+
+- 新增 `WordActionHarness` 和 `WordActionPlan`。
+- `WordActionHarness` 读取 Word 文档状态、选区状态、`IntentService` 结果、`FormattingIntentPlan`。
+- `FormattingIntentCompiler.Compile()` 能生成操作时，直接进入 `DirectFormatting`。
+- 文档存在自动编号且用户表达连续/递增/12345 等序列目标时，进入 `Numbering`。
+- `FORMAT_STYLE` / 结构化标题编号需求进入 `SemanticReformat`。
+
+验收：
+
+- `帮我把前面的序号改为12345` 不进入普通 Chat，而是进入自动编号 capability。
+- `把全文字体统一加大2号` 不依赖 `LooksLikeDirectFormattingCommand`，只要能生成 `FormattingIntentPlan` 就执行。
+- Chat 主入口不再散落编号、字体、校对、排版的多段独立判断。
+
 ## UI 设计
 
 ### Chat 中的表达
@@ -561,6 +608,12 @@ AI 返回格式异常，无法生成校对列表
 - 支持「先校对，再排版」。
 - 多步骤计划进入 Agent Loop。
 
+### Step 7：Word Action Harness
+
+- 新增 Word 侧 capability harness。
+- 将编号、直接格式、校对、语义排版统一路由为 `WordActionPlan`。
+- 后续复杂 planner 可替换/增强 harness 内部决策，不改变 Chat 主入口。
+
 ## 验收标准
 
 ### 用户体验
@@ -586,3 +639,18 @@ AI 返回格式异常，无法生成校对列表
 - `devenv.com .\AiHelper.sln /Rebuild Debug`
 - `git diff --check`
 
+## 实施进度
+
+- [x] Step 1：校对结果状态化。新增 `ProofreadAnalysisResult`，区分 `NoIssues`、`ParseFailed`、`ModelFailed`、`HasIssues`；解析失败不再显示为没有发现问题。
+- [x] Step 2：校对面板体验优化。`proofread-side-panel` 改为可折叠 Drawer，移除固定 380px 主体挤压，并展示本轮校对计划摘要。
+- [x] Step 3：排版计划 JSON 化。`FormattingIntentPlan` 支持 JSON 序列化/反序列化，新增 `FormattingPlanPromptBuilder` 约束 LLM 输出同结构计划。
+- [x] Step 4：新增 Word 专属 `WordFormattingAgent` 外壳。直接格式命令先进入 Agent，再由 `SmartFormatter` 执行 Word COM 操作。
+- [x] Step 5：Observe 基础层。`WordFormattingAgent` 在应用格式后观察活动文档和执行器返回的应用范围/操作数量，并把观察结果写入用户摘要。
+- [x] Step 5 增强层：读取 Word 真实格式并对照成功标准，例如字号、字体、行距、缩进、标题层级。
+- [x] Step 6：组合任务。支持「先校对，再排版」进入多步骤 Agent Loop；校对结果处理完成后自动继续直接格式调整或智能排版卡片流程。
+- [x] Step 7：Word Action Harness。新增 `WordActionHarness`，Chat 主入口先生成 `WordActionPlan`，再路由到编号、直接格式、校对或语义排版 capability。
+- [x] 自动编号 capability：`帮我把前面的序号改为12345`、`全文自动编号连续递增` 等请求直接执行 Word 自动编号重排，不再掉到普通 LLM 对话。
+- [x] Word 排版路由修复：`重构/整理/规范/优化/调整 + 序号/编号/标题/层级` 进入智能排版链路；无选区时使用全文，避免掉到普通 Chat 澄清。
+- [x] AI Native 意图识别修复：`IntentRecognitionService` 支持字符串应用类型构造，避免 `"Word"` 在 VB `Option Strict Off` 下被强转为枚举整数导致意图识别失败。
+- [x] 智能排版通用兜底：补齐通用文档标准、baseline 语义标签和标题编号启发式候选，避免预览卡片 0 变更以及 `body.normal` 校验失败。
+- [x] 智能排版执行兜底：未保存文档不再把 `文档1` 当文件路径复制；AI 全部标为 `body.normal` 时，用预览方案中的标题/编号候选覆盖对应段落。

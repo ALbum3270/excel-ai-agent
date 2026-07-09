@@ -56,6 +56,9 @@ Public Class TaggingValidator
             Return result
         End If
 
+        If mapping Is Nothing Then mapping = New SemanticStyleMapping()
+        mapping.EnsureBaselineTags()
+
         Dim availableTags = mapping.GetAvailableTagIds()
         Dim severeErrorCount As Integer = 0
 

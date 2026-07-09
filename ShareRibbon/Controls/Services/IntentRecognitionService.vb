@@ -153,6 +153,24 @@ Public Class IntentRecognitionService
         Me.AppType = appType
     End Sub
 
+    ''' <summary>
+    ''' 带应用类型名称的构造函数，避免 VB 在 Option Strict Off 下把 "Word" 强转为枚举整数。
+    ''' </summary>
+    Public Sub New(appType As String)
+        Me.AppType = ParseOfficeApplicationType(appType)
+    End Sub
+
+    Private Shared Function ParseOfficeApplicationType(appType As String) As OfficeApplicationType
+        Select Case If(appType, "").Trim().ToLowerInvariant()
+            Case "word"
+                Return OfficeApplicationType.Word
+            Case "powerpoint", "ppt"
+                Return OfficeApplicationType.PowerPoint
+            Case Else
+                Return OfficeApplicationType.Excel
+        End Select
+    End Function
+
 #Region "Excel关键词映射"
 
     ' 数据分析关键词

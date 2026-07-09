@@ -10,6 +10,7 @@ Public Class SemanticTagRegistry
 
 #Region "Layer 1 固定语义标签"
     Public Const TAG_TITLE As String = "title"
+    Public Const TAG_HEADING As String = "heading"
     Public Const TAG_BODY As String = "body"
     Public Const TAG_LIST As String = "list"
     Public Const TAG_QUOTE As String = "quote"
@@ -32,7 +33,7 @@ Public Class SemanticTagRegistry
 
     ''' <summary>所有Layer 1标签</summary>
     Private Shared ReadOnly Layer1Tags As String() = {
-        TAG_TITLE, TAG_BODY, TAG_LIST, TAG_QUOTE,
+        TAG_TITLE, TAG_HEADING, TAG_BODY, TAG_LIST, TAG_QUOTE,
         TAG_CAPTION, TAG_HEADER, TAG_FOOTER, TAG_CODE, TAG_TABLE_HEADER
     }
 
@@ -74,6 +75,7 @@ Public Class SemanticTagRegistry
     Public Shared Function GetLayer1TagDescriptions() As Dictionary(Of String, String)
         Return New Dictionary(Of String, String) From {
             {TAG_TITLE, "标题"},
+            {TAG_HEADING, "章节标题"},
             {TAG_BODY, "正文"},
             {TAG_LIST, "列表"},
             {TAG_QUOTE, "引用"},

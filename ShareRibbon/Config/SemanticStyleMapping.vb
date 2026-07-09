@@ -69,6 +69,69 @@ Public Class SemanticStyleMapping
     Public Function GetAvailableTagIds() As List(Of String)
         Return SemanticTags.Select(Function(t) t.TagId).ToList()
     End Function
+
+    ''' <summary>
+    ''' 补齐 AI Native 排版流程必须可用的基础语义标签。
+    ''' 用户导入模板或通用文档没有完整 mapping 时，仍要让 AI 标注和渲染有稳定落点。
+    ''' </summary>
+    Public Sub EnsureBaselineTags()
+        If SemanticTags Is Nothing Then SemanticTags = New List(Of SemanticTag)()
+
+        AddMissingTag(CreateDefaultBodyNormalTag())
+        AddMissingTag(CreateDefaultTitleTag(SemanticTagRegistry.TAG_TITLE_1, "一级标题", 16, True))
+        AddMissingTag(CreateDefaultTitleTag(SemanticTagRegistry.TAG_TITLE_2, "二级标题", 14, True))
+        AddMissingTag(CreateDefaultTitleTag(SemanticTagRegistry.TAG_TITLE_3, "三级标题", 12, True))
+        AddMissingTag(CreateDefaultHeadingTag("heading.1", "章节一级标题", 16, True))
+        AddMissingTag(CreateDefaultHeadingTag("heading.2", "章节二级标题", 14, True))
+        AddMissingTag(CreateDefaultHeadingTag("heading.3", "章节三级标题", 12, True))
+        AddMissingTag(CreateDefaultListTag(SemanticTagRegistry.TAG_LIST_ORDERED, "有序列表"))
+        AddMissingTag(CreateDefaultListTag(SemanticTagRegistry.TAG_LIST_UNORDERED, "无序列表"))
+    End Sub
+
+    Private Sub AddMissingTag(tag As SemanticTag)
+        If tag Is Nothing OrElse String.IsNullOrWhiteSpace(tag.TagId) Then Return
+        If SemanticTags.Any(Function(t) String.Equals(t.TagId, tag.TagId, StringComparison.OrdinalIgnoreCase)) Then Return
+        SemanticTags.Add(tag)
+    End Sub
+
+    Private Shared Function CreateDefaultBodyNormalTag() As SemanticTag
+        Dim tag As New SemanticTag(SemanticTagRegistry.TAG_BODY_NORMAL, "正文", SemanticTagRegistry.TAG_BODY, 2, "普通正文段落")
+        tag.Font = New FontConfig("宋体", "Times New Roman", 12)
+        tag.Paragraph = New ParagraphConfig("justify", 2, 1.5)
+        tag.Color = New ColorConfig("#000000")
+        Return tag
+    End Function
+
+    Private Shared Function CreateDefaultTitleTag(tagId As String, displayName As String, fontSize As Double, bold As Boolean) As SemanticTag
+        Dim tag As New SemanticTag(tagId, displayName, SemanticTagRegistry.TAG_TITLE, 2, displayName & "，用于文档标题或编号标题")
+        tag.Font = New FontConfig("黑体", "Times New Roman", fontSize, bold)
+        tag.Paragraph = New ParagraphConfig("left", 0, 1.5)
+        tag.Paragraph.SpaceBefore = 0.5
+        tag.Paragraph.SpaceAfter = 0.25
+        tag.Paragraph.KeepWithNext = True
+        tag.Color = New ColorConfig("#000000")
+        Return tag
+    End Function
+
+    Private Shared Function CreateDefaultHeadingTag(tagId As String, displayName As String, fontSize As Double, bold As Boolean) As SemanticTag
+        Dim tag As New SemanticTag(tagId, displayName, SemanticTagRegistry.TAG_HEADING, 2, displayName & "，用于通用文档章节结构")
+        tag.Font = New FontConfig("黑体", "Times New Roman", fontSize, bold)
+        tag.Paragraph = New ParagraphConfig("left", 0, 1.5)
+        tag.Paragraph.SpaceBefore = 0.5
+        tag.Paragraph.SpaceAfter = 0.25
+        tag.Paragraph.KeepWithNext = True
+        tag.Color = New ColorConfig("#000000")
+        Return tag
+    End Function
+
+    Private Shared Function CreateDefaultListTag(tagId As String, displayName As String) As SemanticTag
+        Dim tag As New SemanticTag(tagId, displayName, SemanticTagRegistry.TAG_LIST, 2, displayName & "，用于需要保留或规范编号的列表项")
+        tag.Font = New FontConfig("宋体", "Times New Roman", 12)
+        tag.Paragraph = New ParagraphConfig("left", 0, 1.5)
+        tag.Paragraph.LeftIndent = 0.75
+        tag.Color = New ColorConfig("#000000")
+        Return tag
+    End Function
 End Class
 
 ''' <summary>

@@ -80,7 +80,10 @@ Public Class FormattingStandardRegistry
             If byAnalysisType IsNot Nothing Then Return byAnalysisType
         End If
 
-        Return _knowledgeEngine.GetStandardForDocumentType(DocumentType.GeneralDocument)
+        Dim general = _knowledgeEngine.GetStandardForDocumentType(DocumentType.GeneralDocument)
+        If general IsNot Nothing Then Return general
+
+        Return CreateGeneralFallbackStandard()
     End Function
 
     Private Sub AddBuiltInCandidates(result As List(Of FormattingStandardCandidate))
@@ -171,6 +174,7 @@ Public Class FormattingStandardRegistry
         Dim standard As New FormattingStandard(name, description)
         standard.Id = If(Not String.IsNullOrWhiteSpace(mapping.SourceId), mapping.SourceId, mapping.Id)
         standard.SemanticMapping = mapping
+        standard.SemanticMapping.EnsureBaselineTags()
         standard.IsBuiltIn = isBuiltIn
         standard.IsActive = True
         For Each docType In InferDocumentTypes(name, category)
@@ -181,6 +185,21 @@ Public Class FormattingStandardRegistry
         If standard.ApplicableDocumentTypes.Count = 0 Then
             standard.ApplicableDocumentTypes.Add(DocumentType.GeneralDocument.ToString())
         End If
+        Return standard
+    End Function
+
+    Private Shared Function CreateGeneralFallbackStandard() As FormattingStandard
+        Dim standard As New FormattingStandard("通用文档智能排版", "适用于未识别出明确类型的 Word 文档，提供标题、正文、编号列表的基础排版能力。")
+        standard.Id = "general-document-ai-native"
+        standard.IsBuiltIn = True
+        standard.IsActive = True
+        standard.ApplicableDocumentTypes.Add(DocumentType.GeneralDocument.ToString())
+        standard.SemanticMapping = New SemanticStyleMapping()
+        standard.SemanticMapping.Id = standard.Id
+        standard.SemanticMapping.Name = standard.Name
+        standard.SemanticMapping.SourceType = SemanticMappingSourceType.FromStyleGuide
+        standard.SemanticMapping.SourceId = standard.Id
+        standard.SemanticMapping.EnsureBaselineTags()
         Return standard
     End Function
 

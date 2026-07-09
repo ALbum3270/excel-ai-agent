@@ -65,15 +65,10 @@ Public Class Ribbon1
         End Try
     End Sub
 
-    ' 排版入口：打开对话排版，不自动分析文档，不生成默认建议卡片
+    ' 排版入口：一键分析当前选区；没有选区时自动分析全文并生成建议卡片。
     Protected Overrides Async Sub ReformatButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try
-            If Not HasUsableFormattingSelection() Then
-                ShareRibbon.GlobalStatusStripAll.ShowWarning("请先选中需要排版的文本内容。")
-                Return
-            End If
-
-            ' 打开 Chat 面板并进入对话排版入口
+            ' 打开 Chat 面板并立即进入智能排版分析。
             Await Globals.ThisAddIn.ShowChatTaskPaneAsync()
 
             Dim chatCtrl = ThisAddIn.chatControl
@@ -82,10 +77,10 @@ Public Class Ribbon1
                 Return
             End If
 
-            Await chatCtrl.OpenReformatPageAsync()
+            Await chatCtrl.TriggerSmartReformat()
 
         Catch ex As Exception
-            MessageBox.Show("打开排版页面出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show("启动智能排版出错: " & ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
         End Try
     End Sub
 

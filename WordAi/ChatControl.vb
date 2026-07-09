@@ -45,6 +45,8 @@ Public Class ChatControl
     Private _formatterAgent As ChatFormatterAgent = Nothing
     Private _activeReformatPlan As ReformatPreviewPlan = Nothing
     Private _activeReformatJob As ReformatJob = Nothing
+    Private _activeWordFormattingTaskPlan As Services.WordFormattingTaskPlan = Nothing
+    Private _reformatVariantIndex As Integer = 0
 
     ' 排版撤销快照
     Private _reformatSnapshot As SemanticRenderingEngine.ReformatSnapshot = Nothing
@@ -374,6 +376,61 @@ Public Class ChatControl
         Return job
     End Function
 
+    Private Function ResolveReformatTargetRange(wordApp As Microsoft.Office.Interop.Word.Application,
+                                                userMessage As String,
+                                                ByRef scopeKind As ReformatScopeKind) As Microsoft.Office.Interop.Word.Range
+        scopeKind = ReformatScopeKind.Selection
+        If wordApp Is Nothing Then Return Nothing
+
+        Dim hasSelection = HasUsableProofreadSelection(wordApp)
+        Dim explicitWhole = HasExplicitWholeDocumentScope(userMessage)
+        Dim explicitSelection = HasExplicitSelectionScope(userMessage)
+
+        Try
+            If explicitSelection AndAlso hasSelection Then
+                scopeKind = ReformatScopeKind.Selection
+                Return wordApp.Selection.Range
+            End If
+
+            If explicitWhole AndAlso wordApp.ActiveDocument IsNot Nothing Then
+                scopeKind = ReformatScopeKind.WholeDocument
+                Return wordApp.ActiveDocument.Content
+            End If
+
+            If hasSelection Then
+                scopeKind = ReformatScopeKind.Selection
+                Return wordApp.Selection.Range
+            End If
+
+            If wordApp.ActiveDocument IsNot Nothing Then
+                scopeKind = ReformatScopeKind.WholeDocument
+                Return wordApp.ActiveDocument.Content
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"ResolveReformatTargetRange error: {ex.Message}")
+        End Try
+
+        Return Nothing
+    End Function
+
+    Private Shared Function HasExplicitWholeDocumentScope(message As String) As Boolean
+        If String.IsNullOrWhiteSpace(message) Then Return False
+        Return ContainsAnyText(message, {"全文", "整篇", "整个文档", "全部", "所有", "通篇", "统一"})
+    End Function
+
+    Private Shared Function HasExplicitSelectionScope(message As String) As Boolean
+        If String.IsNullOrWhiteSpace(message) Then Return False
+        Return ContainsAnyText(message, {"选中", "选区", "所选", "当前选择", "选择的内容"})
+    End Function
+
+    Private Shared Function ContainsAnyText(text As String, keywords As IEnumerable(Of String)) As Boolean
+        If String.IsNullOrWhiteSpace(text) Then Return False
+        For Each keyword In keywords
+            If text.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 Then Return True
+        Next
+        Return False
+    End Function
+
     Private Async Function StartSemanticReformatPipeline(mapping As SemanticStyleMapping, displayName As String) As Task
         Dim wordApp = Globals.ThisAddIn.Application
         If wordApp Is Nothing OrElse wordApp.Selection Is Nothing OrElse wordApp.Selection.Range Is Nothing Then
@@ -548,7 +605,11 @@ Public Class ChatControl
         Try
             Dim wordApp = Globals.ThisAddIn.Application
 
-            Dim job = CreateReformatJobFromRange(wordApp.Selection.Range)
+            Dim targetRange As Microsoft.Office.Interop.Word.Range = Nothing
+            Dim scopeKind As ReformatScopeKind = ReformatScopeKind.Selection
+            targetRange = ResolveReformatTargetRange(wordApp, "", scopeKind)
+
+            Dim job = CreateReformatJobFromRange(targetRange, scopeKind)
             If job Is Nothing OrElse Not job.HasUsableParagraphs() Then
                 GlobalStatusStrip.ShowWarning("没有找到有效段落。")
                 Return
@@ -564,6 +625,9 @@ Public Class ChatControl
 
             ' 存储段落类型
             plan.ParagraphTypes = job.ParagraphTypes
+            AttachReformatJobMetadata(plan, job)
+            _reformatVariantIndex = 0
+            _activeWordFormattingTaskPlan = CreateSemanticWordFormattingTaskPlan("一键智能排版", job, plan)
 
             ' 保存方案供后续应用
             _activeReformatPlan = plan
@@ -591,6 +655,50 @@ Public Class ChatControl
         jsonPayload("uuid") = responseUuid
         jsonPayload("html") = html
         Await ExecuteJavaScriptAsyncJS($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
+    End Function
+
+    Private Sub AttachReformatJobMetadata(plan As ReformatPreviewPlan, job As ReformatJob)
+        If plan Is Nothing OrElse job Is Nothing Then Return
+
+        plan.ScopeSummary = job.GetScopeSummary()
+        plan.TextParagraphCount = job.TextParagraphCount
+        plan.TotalParagraphs = Math.Max(plan.TotalParagraphs, job.ParagraphCount)
+
+        Select Case job.ScopeKind
+            Case ReformatScopeKind.WholeDocument
+                plan.ScopeKindName = "wholeDocument"
+            Case ReformatScopeKind.Section
+                plan.ScopeKindName = "section"
+            Case Else
+                plan.ScopeKindName = "selection"
+        End Select
+    End Sub
+
+    Private Function CreateSemanticWordFormattingTaskPlan(userRequest As String,
+                                                          job As ReformatJob,
+                                                          plan As ReformatPreviewPlan) As Services.WordFormattingTaskPlan
+        If job Is Nothing OrElse plan Is Nothing Then Return Nothing
+
+        Dim targetSummary As String = ""
+        If plan.TextParagraphCount > 0 AndAlso plan.TextParagraphCount <> plan.TotalParagraphs Then
+            targetSummary = $"文本段落 {plan.TextParagraphCount} / 总段落 {plan.TotalParagraphs}"
+        Else
+            targetSummary = $"段落 {plan.TotalParagraphs}"
+        End If
+
+        Return Services.WordFormattingTaskPlan.FromSemanticReformat(
+            userRequest,
+            job.GetScopeSummary(),
+            plan.StandardName,
+            targetSummary,
+            plan.TotalChanges)
+    End Function
+
+    Private Function FormatWordFormattingTaskSummary(taskPlan As Services.WordFormattingTaskPlan,
+                                                     executionSummary As String) As String
+        If taskPlan Is Nothing Then Return executionSummary
+        If String.IsNullOrWhiteSpace(executionSummary) Then Return taskPlan.ToHumanReadableSummary()
+        Return taskPlan.ToHumanReadableSummary() & "；执行: " & executionSummary
     End Function
 
     ''' <summary>应用当前预览的排版方案到 Word 文档</summary>
@@ -706,6 +814,8 @@ Public Class ChatControl
             Dim agent = GetFormatterAgent()
             Dim refinedPlan = agent.Orchestrator.ApplyRefinement(instruction)
             If refinedPlan IsNot Nothing Then
+                AttachReformatJobMetadata(refinedPlan, job)
+                _activeWordFormattingTaskPlan = CreateSemanticWordFormattingTaskPlan(instruction, job, refinedPlan)
                 _activeReformatPlan = refinedPlan
                 job.PreviewPlan = refinedPlan
                 _activeReformatJob = job
@@ -738,7 +848,9 @@ Public Class ChatControl
                 Dim job = _activeReformatJob
                 If job Is Nothing OrElse Not job.HasUsableParagraphs() Then
                     Dim wordApp = Globals.ThisAddIn.Application
-                    job = CreateReformatJobFromRange(wordApp.Selection.Range)
+                    Dim scopeKind As ReformatScopeKind = ReformatScopeKind.Selection
+                    Dim targetRange = ResolveReformatTargetRange(wordApp, "", scopeKind)
+                    job = CreateReformatJobFromRange(targetRange, scopeKind)
                 End If
 
                 If job Is Nothing OrElse Not job.HasUsableParagraphs() Then
@@ -747,13 +859,19 @@ Public Class ChatControl
                 End If
 
                 Dim agent = GetFormatterAgent()
-                Dim plan = agent.Orchestrator.AnalyzeAndRecommend(
+                _reformatVariantIndex += 1
+                Dim currentStandardName = If(_activeReformatPlan Is Nothing, "", _activeReformatPlan.StandardName)
+                Dim plan = agent.Orchestrator.GenerateAlternativePlan(
                     job.ParagraphTexts,
                     job.ParagraphStyles,
                     job.ParagraphFontSizes,
-                    job.ParagraphIsBold)
+                    job.ParagraphIsBold,
+                    currentStandardName,
+                    _reformatVariantIndex)
                 If plan IsNot Nothing Then
                     plan.ParagraphTypes = job.ParagraphTypes
+                    AttachReformatJobMetadata(plan, job)
+                    _activeWordFormattingTaskPlan = CreateSemanticWordFormattingTaskPlan("换一种排版方案", job, plan)
                     _activeReformatPlan = plan
                     job.PreviewPlan = plan
                     _activeReformatJob = job
@@ -765,9 +883,9 @@ Public Class ChatControl
                     jsonPayload("uuid") = responseUuid
                     jsonPayload("html") = html
                     Await ExecuteJavaScriptAsyncJS($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
+                    GlobalStatusStrip.ShowInfo($"已切换到备选排版方案: {plan.StandardName}")
                 End If
             Else
-                ' TODO: 按指定标准名称重新分析（扩展点）
                 GlobalStatusStrip.ShowInfo($"切换到标准: {templateName}")
             End If
         Catch ex As Exception
@@ -786,12 +904,20 @@ Public Class ChatControl
 
             Dim sb As New StringBuilder()
             sb.AppendLine("【排版前后对比】")
+            If Not String.IsNullOrWhiteSpace(_activeReformatPlan.ScopeSummary) Then
+                sb.AppendLine($"作用范围: {_activeReformatPlan.ScopeSummary}")
+            End If
             sb.AppendLine($"推荐标准: {_activeReformatPlan.StandardName}")
             sb.AppendLine($"文档类型: {_activeReformatPlan.DetectedType.ToString()}")
             sb.AppendLine($"共 {_activeReformatPlan.TotalStyleChanges} 处格式变更:")
-            For Each change In _activeReformatPlan.Changes
-                sb.AppendLine($"  - [{change.NewTag}] {change.ChangeDescription}")
-            Next
+            If _activeReformatPlan.Changes Is Nothing OrElse _activeReformatPlan.Changes.Count = 0 Then
+                sb.AppendLine("  - 已完成结构分析，暂未发现需要立即调整的样式区。")
+            Else
+                For Each change In _activeReformatPlan.Changes
+                    Dim tagName = GetReformatTagDisplayName(change.NewTag, _activeReformatPlan.SemanticMapping)
+                    sb.AppendLine($"  - [{tagName}] {change.ChangeDescription}")
+                Next
+            End If
 
             Dim responseUuid As String = Guid.NewGuid().ToString()
             Dim jsCreate As String = $"createChatSection('排版对比', formatDateTime(new Date()), '{responseUuid}');"
@@ -803,6 +929,37 @@ Public Class ChatControl
             GlobalStatusStrip.ShowWarning($"预览对比失败: {ex.Message}")
         End Try
     End Sub
+
+    Private Function GetReformatTagDisplayName(tagId As String, mapping As SemanticStyleMapping) As String
+        If String.IsNullOrWhiteSpace(tagId) Then Return "待识别样式"
+
+        Try
+            If mapping IsNot Nothing Then
+                Dim tag = mapping.FindTag(tagId)
+                If tag IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tag.DisplayName) Then
+                    Return tag.DisplayName
+                End If
+            End If
+        Catch
+        End Try
+
+        Select Case tagId.ToLowerInvariant()
+            Case "body.normal"
+                Return "正文"
+            Case "title.1", "heading.1"
+                Return "一级标题"
+            Case "title.2", "heading.2"
+                Return "二级标题"
+            Case "title.3", "heading.3"
+                Return "三级标题"
+            Case "list.ordered"
+                Return "有序列表"
+            Case "list.unordered"
+                Return "无序列表"
+            Case Else
+                Return tagId
+        End Select
+    End Function
 
     ''' <summary>
     ''' 重写消息发送：拦截排版相关消息，走专门的排版流程
@@ -817,30 +974,59 @@ Public Class ChatControl
         End If
         Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] question='{question}', IsExplicit={IsExplicitFormattingRequest(question)}")
 
-        If Services.ProofreadIntentCompiler.LooksLikeProofreadCommand(question) Then
-            Debug.WriteLine("[DEBUG WordAi.HandleSendMessage] routing to HandleProofreadCommand")
-            HandleProofreadCommand(question, jsonDoc)
+        If IsMixedProofreadFormattingRequest(question) Then
+            Debug.WriteLine("[DEBUG WordAi.HandleSendMessage] routing to HandleMixedProofreadFormattingCommand")
+            HandleMixedProofreadFormattingCommand(question, jsonDoc)
             Return
         End If
 
-        If Services.SmartFormatter.LooksLikeDirectFormattingCommand(question) Then
-            Debug.WriteLine("[DEBUG WordAi.HandleSendMessage] routing to HandleDirectFormattingCommand")
-            HandleDirectFormattingCommand(question, jsonDoc)
-            Return
-        End If
-
-        ' 仅拦截明确的排版指令（严格匹配），避免误截日常对话
-        If Not String.IsNullOrEmpty(question) AndAlso IsExplicitFormattingRequest(question) Then
-            Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] routing to HandleChatDrivenReformat")
-            ' 排版消息走专门流程（内部处理显示+出错回退）
-            HandleChatDrivenReformat(question, jsonDoc)
-            Return
-        End If
+        If TryRouteWordActionHarness(question, jsonDoc) Then Return
 
         ' 非排版消息走正常流程
         Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] routing to MyBase.HandleSendMessage")
         MyBase.HandleSendMessage(jsonDoc)
     End Sub
+
+    Private Function TryRouteWordActionHarness(userMessage As String, originalJsonDoc As JObject) As Boolean
+        If String.IsNullOrWhiteSpace(userMessage) Then Return False
+
+        Try
+            Dim intent As IntentResult = Nothing
+            Try
+                intent = IntentService.IdentifyIntent(userMessage)
+            Catch ex As Exception
+                Debug.WriteLine($"[WordActionHarness] IntentService failed: {ex.Message}")
+            End Try
+
+            Dim harness As New Services.WordActionHarness(Globals.ThisAddIn.Application)
+            Dim plan = harness.Plan(userMessage, intent)
+            If plan Is Nothing OrElse Not plan.ShouldHandle Then Return False
+
+            Debug.WriteLine($"[WordActionHarness] kind={plan.Kind}, confidence={plan.Confidence:0.00}, reason={plan.Reason}")
+
+            Select Case plan.Kind
+                Case Services.WordActionKind.Numbering
+                    HandleNumberingCommand(userMessage, originalJsonDoc)
+                    Return True
+
+                Case Services.WordActionKind.Proofread
+                    HandleProofreadCommand(userMessage, originalJsonDoc)
+                    Return True
+
+                Case Services.WordActionKind.DirectFormatting
+                    HandleDirectFormattingCommand(userMessage, originalJsonDoc)
+                    Return True
+
+                Case Services.WordActionKind.SemanticReformat
+                    HandleChatDrivenReformat(userMessage, originalJsonDoc)
+                    Return True
+            End Select
+        Catch ex As Exception
+            Debug.WriteLine($"[WordActionHarness] route failed: {ex.Message}")
+        End Try
+
+        Return False
+    End Function
 
     Private Async Sub HandleDirectFormattingCommand(userMessage As String, originalJsonDoc As JObject)
         Try
@@ -849,7 +1035,7 @@ Public Class ChatControl
                 If originalJsonDoc IsNot Nothing Then
                     MyBase.HandleSendMessage(originalJsonDoc)
                 Else
-                    Await Send(userMessage, "", True, "")
+                    SendChatMessage(userMessage)
                 End If
             End If
         Catch ex As Exception
@@ -867,6 +1053,47 @@ Public Class ChatControl
         End Try
     End Sub
 
+    Private Async Sub HandleNumberingCommand(userMessage As String, originalJsonDoc As JObject)
+        Try
+            Dim userMsgUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
+            Await ExecuteJavaScriptAsyncJS($"document.getElementById('content-{userMsgUuid}').innerHTML = '<p>{EscapeHtmlForInline(userMessage)}</p>';")
+
+            Dim agent As New Services.WordNumberingAgent(Globals.ThisAddIn.Application)
+            Dim result = agent.RebuildSequentialNumbering(userMessage)
+
+            If result Is Nothing OrElse Not result.Success Then
+                Dim reason = If(result Is Nothing, "未生成编号执行结果", result.ToHumanReadableSummary())
+                Debug.WriteLine($"[Word] 自动编号重排未执行: {reason}")
+                Dim failureResponseUuid = Guid.NewGuid().ToString()
+                Await ExecuteJavaScriptAsyncJS($"createChatSection('AI编号助手', formatDateTime(new Date()), '{failureResponseUuid}');")
+                Dim escapedReason = reason.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
+                Await ExecuteJavaScriptAsyncJS($"appendRenderer('{failureResponseUuid}','没有执行自动编号重排：{escapedReason}');")
+                GlobalStatusStrip.ShowWarning(reason)
+                Return
+            End If
+
+            Dim responseUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('AI编号助手', formatDateTime(new Date()), '{responseUuid}');")
+            Dim summary = result.ToHumanReadableSummary()
+            Dim escapedSummary = summary.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
+            Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}','已完成自动编号重排：{escapedSummary}');")
+            GlobalStatusStrip.ShowSuccess("自动编号已重排为连续递增")
+        Catch ex As Exception
+            Debug.WriteLine($"HandleNumberingCommand error: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"自动编号重排失败: {ex.Message}")
+            Try
+                If originalJsonDoc IsNot Nothing Then
+                    MyBase.HandleSendMessage(originalJsonDoc)
+                Else
+                    SendChatMessage(userMessage)
+                End If
+            Catch fallbackEx As Exception
+                Debug.WriteLine($"HandleNumberingCommand fallback error: {fallbackEx.Message}")
+            End Try
+        End Try
+    End Sub
+
     Private Async Function ExecuteDirectFormattingCommandAsync(userMessage As String,
                                                                showUserMessage As Boolean) As Task(Of Boolean)
         Try
@@ -876,8 +1103,9 @@ Public Class ChatControl
                 Await ExecuteJavaScriptAsyncJS($"document.getElementById('content-{userMsgUuid}').innerHTML = '<p>{EscapeHtmlForInline(userMessage)}</p>';")
             End If
 
-            Dim formatter As New Services.SmartFormatter(Globals.ThisAddIn.Application)
-            Dim result = formatter.ApplyNaturalLanguageFormatDetailed(userMessage)
+            Dim agent As New Services.WordFormattingAgent(Globals.ThisAddIn.Application)
+            Dim result = agent.RunDirectFormatting(userMessage)
+            _activeWordFormattingTaskPlan = result?.TaskPlan
 
             If result Is Nothing OrElse Not result.Success Then
                 Dim reason = If(result Is Nothing, "未生成执行结果", result.ToHumanReadableSummary())
@@ -887,7 +1115,8 @@ Public Class ChatControl
 
             Dim responseUuid = Guid.NewGuid().ToString()
             Await ExecuteJavaScriptAsyncJS($"createChatSection('AI排版助手', formatDateTime(new Date()), '{responseUuid}');")
-            Dim escapedSummary = result.ToHumanReadableSummary().Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
+            Dim unifiedSummary = FormatWordFormattingTaskSummary(result.TaskPlan, result.ToHumanReadableSummary())
+            Dim escapedSummary = unifiedSummary.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
             Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}','已应用格式调整：{escapedSummary}');")
             GlobalStatusStrip.ShowSuccess("格式调整已应用")
             Return True
@@ -896,6 +1125,55 @@ Public Class ChatControl
             GlobalStatusStrip.ShowWarning($"格式调整失败: {ex.Message}")
             Return False
         End Try
+    End Function
+
+    Private Shared Function IsMixedProofreadFormattingRequest(message As String) As Boolean
+        If String.IsNullOrWhiteSpace(message) Then Return False
+        If Not Services.ProofreadIntentCompiler.LooksLikeProofreadCommand(message) Then Return False
+        Return Services.SmartFormatter.LooksLikeDirectFormattingCommand(message) OrElse IsExplicitFormattingRequest(message)
+    End Function
+
+    Private Async Sub HandleMixedProofreadFormattingCommand(userMessage As String, originalJsonDoc As JObject)
+        Try
+            Dim userMsgUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
+            Await ExecuteJavaScriptAsyncJS($"document.getElementById('content-{userMsgUuid}').innerHTML = '<p>{EscapeHtmlForInline(userMessage)}</p>';")
+
+            _pendingPostProofreadFormattingRequest = ExtractPostProofreadFormattingRequest(userMessage)
+            GlobalStatusStrip.ShowInfo("已识别组合任务：先校对，再排版。")
+
+            Dim wordApp = Globals.ThisAddIn.Application
+            Dim compiler As New Services.ProofreadIntentCompiler()
+            Dim plan = compiler.Compile(userMessage, HasUsableProofreadSelection(wordApp))
+            Await ExecuteProofreadAsync(plan, userMessage)
+        Catch ex As Exception
+            Debug.WriteLine($"HandleMixedProofreadFormattingCommand error: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"组合任务启动失败: {ex.Message}")
+            Try
+                If originalJsonDoc IsNot Nothing Then
+                    MyBase.HandleSendMessage(originalJsonDoc)
+                Else
+                    SendChatMessage(userMessage)
+                End If
+            Catch fallbackEx As Exception
+                Debug.WriteLine($"HandleMixedProofreadFormattingCommand fallback error: {fallbackEx.Message}")
+            End Try
+        End Try
+    End Sub
+
+    Private Shared Function ExtractPostProofreadFormattingRequest(message As String) As String
+        If String.IsNullOrWhiteSpace(message) Then Return ""
+
+        Dim separators As String() = {"再", "然后", "之后", "接着", "并且", "并"}
+        For Each separator In separators
+            Dim index = message.IndexOf(separator, StringComparison.Ordinal)
+            If index >= 0 AndAlso index + separator.Length < message.Length Then
+                Dim tail = message.Substring(index + separator.Length).Trim()
+                If Not String.IsNullOrWhiteSpace(tail) Then Return tail
+            End If
+        Next
+
+        Return message
     End Function
 
     Private Async Function SendWithIntentPromptAsync(message As String, intent As IntentResult) As Task
@@ -999,7 +1277,8 @@ Public Class ChatControl
         ' 补充场景词（配合动作词使用）
         Dim topicKeywords As String() = {
             "公文", "国标", "GB/T", "gbt", "标准格式",
-            "仿宋", "宋体", "黑体", "楷体", "微软雅黑", "小标宋"
+            "仿宋", "宋体", "黑体", "楷体", "微软雅黑", "小标宋",
+            "序号", "编号", "标题", "标题层级", "标题编号"
         }
 
         Dim msg = message.Trim()
@@ -1013,6 +1292,10 @@ Public Class ChatControl
         If msg.Contains("格式化") Then Return True
         ' "套用/应用格式" 动作
         If (msg.Contains("套用") OrElse msg.Contains("应用")) AndAlso msg.Contains("格式") Then Return True
+        ' 标题/编号结构重构
+        If (msg.Contains("重构") OrElse msg.Contains("整理") OrElse msg.Contains("规范") OrElse msg.Contains("优化") OrElse msg.Contains("调整")) AndAlso
+           (msg.Contains("序号") OrElse msg.Contains("编号") OrElse msg.Contains("标题") OrElse msg.Contains("层级")) Then Return True
+        If msg.Contains("标题") AndAlso (msg.Contains("序号") OrElse msg.Contains("编号") OrElse msg.Contains("层级")) Then Return True
         ' 主题词+动作组合（如"公文标准"、"宋体样式"）
         For Each topic In topicKeywords
             If msg.Contains(topic) AndAlso
@@ -1032,11 +1315,19 @@ Public Class ChatControl
         Try
             Dim wordApp = Globals.ThisAddIn.Application
 
-            ' 1. 从选区创建固定排版任务
-            Dim job = CreateReformatJobFromRange(wordApp.Selection.Range)
+            ' 1. 从用户表达和当前 Word 状态推断选区/全文，并创建固定排版任务
+            Dim targetRange As Microsoft.Office.Interop.Word.Range = Nothing
+            Dim scopeKind As ReformatScopeKind = ReformatScopeKind.Selection
+            targetRange = ResolveReformatTargetRange(wordApp, userMessage, scopeKind)
+
+            Dim job = CreateReformatJobFromRange(targetRange, scopeKind)
             If job Is Nothing OrElse Not job.HasUsableParagraphs() Then
                 ' 没有选区时回退到正常AI对话流程
-                MyBase.HandleSendMessage(originalJsonDoc)
+                If originalJsonDoc IsNot Nothing Then
+                    MyBase.HandleSendMessage(originalJsonDoc)
+                Else
+                    Await Send(userMessage, "", True, "")
+                End If
                 Return
             End If
 
@@ -1059,6 +1350,19 @@ Public Class ChatControl
             If intentResult IsNot Nothing Then
                 Debug.WriteLine($"[ReformatIntent] source={intentResult.Source}, confidence={intentResult.Confidence:0.00}, type={intentResult.Intent.IntentType}, standard={intentResult.Intent.TargetStandardName}")
                 GlobalStatusStrip.ShowInfo($"已识别排版意图: {intentResult.Intent.IntentType} ({intentResult.Source})")
+
+                If intentResult.ScopeHint = ReformatScopeKind.WholeDocument AndAlso
+                   scopeKind <> ReformatScopeKind.WholeDocument AndAlso
+                   Not HasExplicitSelectionScope(userMessage) AndAlso
+                   wordApp IsNot Nothing AndAlso wordApp.ActiveDocument IsNot Nothing Then
+
+                    Dim wholeDocJob = CreateReformatJobFromRange(wordApp.ActiveDocument.Content, ReformatScopeKind.WholeDocument)
+                    If wholeDocJob IsNot Nothing AndAlso wholeDocJob.HasUsableParagraphs() Then
+                        job = wholeDocJob
+                        scopeKind = ReformatScopeKind.WholeDocument
+                        Debug.WriteLine("[ReformatIntent] scope hint switched target to whole document")
+                    End If
+                End If
             End If
 
             Dim plan = Await agent.Orchestrator.ChatReformatAsync(
@@ -1072,6 +1376,9 @@ Public Class ChatControl
 
             ' 5. 存储段落类型到方案中
             plan.ParagraphTypes = job.ParagraphTypes
+            AttachReformatJobMetadata(plan, job)
+            _reformatVariantIndex = 0
+            _activeWordFormattingTaskPlan = CreateSemanticWordFormattingTaskPlan(userMessage, job, plan)
 
             ' 6. 存储上下文供后续应用
             _activeReformatPlan = plan
@@ -1119,6 +1426,7 @@ Public Class ChatControl
     ''' 校对时用户选中的 Range（用于替换操作限定范围）
     ''' </summary>
     Private _proofreadSelectionRange As Object = Nothing
+    Private _pendingPostProofreadFormattingRequest As String = ""
 
     ''' <summary>
     ''' 获取或创建校对专注模式实例
@@ -1261,6 +1569,7 @@ Public Class ChatControl
             ' 进入校对专注模式
             Dim proofreadMode = GetProofreadFocusMode()
             Await proofreadMode.EnterAsync()
+            Await ExecuteJavaScriptAsyncJS($"updateProofreadPlanSummary({Newtonsoft.Json.JsonConvert.SerializeObject(plan.ToHumanReadableSummary())});")
 
             ' 显示加载中提示
             Await ExecuteJavaScriptAsyncJS("showProofreadModeIndicator(); showProofreadLoading();")
@@ -1357,8 +1666,45 @@ Public Class ChatControl
             Else
                 proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset).Wait()
             End If
+
+            StartPendingPostProofreadFormatting()
         Catch ex As Exception
             Debug.WriteLine($"ProcessProofreadResult 出错: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub StartPendingPostProofreadFormatting()
+        Dim request = _pendingPostProofreadFormattingRequest
+        If String.IsNullOrWhiteSpace(request) Then Return
+
+        _pendingPostProofreadFormattingRequest = ""
+
+        If Me.InvokeRequired Then
+            Me.BeginInvoke(New System.Action(Sub() ContinuePostProofreadFormattingAsync(request)))
+        Else
+            ContinuePostProofreadFormattingAsync(request)
+        End If
+    End Sub
+
+    Private Async Sub ContinuePostProofreadFormattingAsync(formattingRequest As String)
+        Try
+            Dim responseUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('AI排版助手', formatDateTime(new Date()), '{responseUuid}');")
+            Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}','校对步骤已完成，继续执行后续排版任务。');")
+
+            If Services.SmartFormatter.LooksLikeDirectFormattingCommand(formattingRequest) Then
+                Dim applied = Await ExecuteDirectFormattingCommandAsync(formattingRequest, False)
+                If applied Then Return
+            End If
+
+            If IsExplicitFormattingRequest(formattingRequest) Then
+                HandleChatDrivenReformat(formattingRequest, Nothing)
+            Else
+                Await Send(formattingRequest, "", True, "")
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"ContinuePostProofreadFormattingAsync 出错: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"后续排版任务执行失败: {ex.Message}")
         End Try
     End Sub
 
@@ -2616,6 +2962,51 @@ Public Class ChatControl
     End Sub
 
     ''' <summary>
+    ''' AI 语义标注过于保守时，用预览方案中的确定性结构标签覆盖对应段落。
+    ''' 例如用户要求“重构序号和标题”，但模型全部返回 body.normal，仍应执行 plan 中的标题/编号候选。
+    ''' </summary>
+    Private Function MergePreviewPlanTags(aiTags As List(Of TaggedParagraph)) As List(Of TaggedParagraph)
+        Dim merged As New Dictionary(Of Integer, TaggedParagraph)()
+
+        If aiTags IsNot Nothing Then
+            For Each tagged As TaggedParagraph In aiTags
+                If tagged Is Nothing Then Continue For
+                merged(tagged.ParaIndex) = New TaggedParagraph(tagged.ParaIndex, tagged.TagId, tagged.Reason)
+            Next
+        End If
+
+        Dim plan = If(_activeReformatJob?.PreviewPlan, _activeReformatPlan)
+        If plan Is Nothing OrElse plan.Changes Is Nothing Then
+            Return merged.Values.OrderBy(Function(t) t.ParaIndex).ToList()
+        End If
+
+        Dim overrideCount As Integer = 0
+        For Each change In plan.Changes
+            If change Is Nothing OrElse change.ParagraphIndex < 0 Then Continue For
+            If String.IsNullOrWhiteSpace(change.NewTag) Then Continue For
+            If String.Equals(change.NewTag, SemanticTagRegistry.TAG_BODY_NORMAL, StringComparison.OrdinalIgnoreCase) Then Continue For
+
+            Dim paraType As String = "text"
+            If _reformatTypes IsNot Nothing AndAlso change.ParagraphIndex < _reformatTypes.Count Then
+                paraType = If(_reformatTypes(change.ParagraphIndex), "text")
+            End If
+            If Not String.Equals(paraType, "text", StringComparison.OrdinalIgnoreCase) Then Continue For
+
+            Dim reason = If(String.IsNullOrWhiteSpace(change.ChangeDescription),
+                            "预览方案识别为结构段落",
+                            "预览方案: " & change.ChangeDescription)
+            merged(change.ParagraphIndex) = New TaggedParagraph(change.ParagraphIndex, change.NewTag, reason)
+            overrideCount += 1
+        Next
+
+        If overrideCount > 0 Then
+            Debug.WriteLine($"[Reformat] 使用预览方案覆盖 AI 标注: {overrideCount} 个结构段落")
+        End If
+
+        Return merged.Values.OrderBy(Function(t) t.ParaIndex).ToList()
+    End Function
+
+    ''' <summary>
     ''' 处理AI语义标注结果 - 渲染引擎确定性应用格式
     ''' </summary>
     Private Async Sub ApplySemanticTaggingResult(taggingJson As String)
@@ -2676,6 +3067,10 @@ Public Class ChatControl
             ' 使用ReformatCoordinator执行"临时文档 → OpenXML排版 → 预览 → 合并"流程
             Dim wordApp = Globals.ThisAddIn.Application
             Dim renderResult As SemanticRenderingEngine.RenderResult = Nothing
+            Dim effectiveTags = MergePreviewPlanTags(validation.ValidatedTags)
+            If _reformatMapping IsNot Nothing Then
+                _reformatMapping.EnsureBaselineTags()
+            End If
 
             ' 在应用前捕获格式快照（独立于Word UndoRecord的撤销机制）
             Try
@@ -2693,17 +3088,24 @@ Public Class ChatControl
             Dim reformatResult = Await coordinator.ExecuteReformatPipelineAsync(
                 wordApp.ActiveDocument,
                 ReformatOperationType.Semantic,
-                validation.ValidatedTags,
+                effectiveTags,
                 _reformatMapping,
                 _reformatMapping?.Name,
                 _reformatParagraphs,
                 _reformatTypes)
 
+            Dim repairCount As Integer = 0
             If reformatResult.Success Then
+                repairCount = RepairStructuralSemanticFormattingIfNeeded(effectiveTags, _reformatMapping)
+                If repairCount > 0 Then
+                    reformatResult.ModifiedCount += repairCount
+                    Debug.WriteLine($"[ReformatObserve] 自动修复结构段落: {repairCount}")
+                End If
+
                 ' 构建兼容的RenderResult用于前端展示
                 renderResult = New SemanticRenderingEngine.RenderResult() With {
                     .AppliedCount = reformatResult.ModifiedCount,
-                    .SkippedCount = validation.ValidatedTags.Count - reformatResult.ModifiedCount
+                    .SkippedCount = Math.Max(0, effectiveTags.Count - reformatResult.ModifiedCount)
                 }
                 If reformatResult.GeneratedInstructions IsNot Nothing Then
                     renderResult.GeneratedInstructions = reformatResult.GeneratedInstructions
@@ -2726,6 +3128,10 @@ Public Class ChatControl
             If renderResult IsNot Nothing Then
                 Dim resultJson = renderResult.ToJson()
                 Await ExecuteJavaScriptAsyncJS($"showReformatResult({resultJson.ToString(Formatting.None)});")
+                Dim observationSummary = BuildSemanticReformatObservationSummary(effectiveTags, _reformatMapping, reformatResult, validation.AutoFixedCount, repairCount)
+                If Not String.IsNullOrWhiteSpace(observationSummary) Then
+                    Await ShowSemanticReformatObservation(observationSummary)
+                End If
             Else
                 ' ApplySemanticFormatting 返回了 Nothing（理论上不应该）
                 Await ShowReformatError("排版渲染引擎返回空结果")
@@ -2758,6 +3164,132 @@ Public Class ChatControl
             GlobalStatusStrip.ShowWarning($"语义排版应用失败: {ex.Message}")
         End Try
     End Sub
+
+    Private Function RepairStructuralSemanticFormattingIfNeeded(tags As List(Of TaggedParagraph),
+                                                               mapping As SemanticStyleMapping) As Integer
+        If tags Is Nothing OrElse mapping Is Nothing OrElse _reformatParagraphs Is Nothing Then Return 0
+
+        Dim failedTags As New List(Of TaggedParagraph)()
+        For Each tagged In tags
+            If tagged Is Nothing Then Continue For
+            If tagged.ParaIndex < 0 OrElse tagged.ParaIndex >= _reformatParagraphs.Count Then Continue For
+
+            Dim semanticTag = mapping.FindTag(tagged.TagId)
+            If Not IsStructuralSemanticTag(tagged.TagId, semanticTag) Then Continue For
+            If Not IsSemanticTagObserved(_reformatParagraphs(tagged.ParaIndex), semanticTag) Then
+                failedTags.Add(tagged)
+            End If
+        Next
+
+        If failedTags.Count = 0 Then Return 0
+
+        Try
+            Dim result = SemanticRenderingEngine.ApplySemanticFormatting(
+                failedTags,
+                mapping,
+                _reformatParagraphs,
+                _reformatTypes,
+                Globals.ThisAddIn.Application)
+            Return If(result Is Nothing, 0, result.AppliedCount)
+        Catch ex As Exception
+            Debug.WriteLine($"[ReformatObserve] 结构段落修复失败: {ex.Message}")
+            Return 0
+        End Try
+    End Function
+
+    Private Function IsStructuralSemanticTag(tagId As String, tag As SemanticTag) As Boolean
+        Dim parentId = If(tag?.ParentTagId, "")
+        Dim value = If(tagId, "")
+        Return parentId.Equals("title", StringComparison.OrdinalIgnoreCase) OrElse
+               parentId.Equals("heading", StringComparison.OrdinalIgnoreCase) OrElse
+               parentId.Equals("list", StringComparison.OrdinalIgnoreCase) OrElse
+               value.StartsWith("title.", StringComparison.OrdinalIgnoreCase) OrElse
+               value.StartsWith("heading.", StringComparison.OrdinalIgnoreCase) OrElse
+               value.StartsWith("list.", StringComparison.OrdinalIgnoreCase)
+    End Function
+
+    Private Function IsSemanticTagObserved(paragraphObj As Object, tag As SemanticTag) As Boolean
+        If paragraphObj Is Nothing OrElse tag Is Nothing OrElse tag.Font Is Nothing Then Return True
+
+        Try
+            Dim rng = paragraphObj.Range
+            If rng Is Nothing OrElse rng.Font Is Nothing Then Return True
+
+            If tag.Font.FontSize > 0 Then
+                Dim currentSize As Double = CDbl(rng.Font.Size)
+                If currentSize > 0 AndAlso currentSize < 200 AndAlso
+                   Math.Abs(currentSize - tag.Font.FontSize) > 0.75 Then
+                    Return False
+                End If
+            End If
+
+            If tag.Font.Bold Then
+                Dim boldValue As Integer = CInt(rng.Font.Bold)
+                If boldValue = 0 Then Return False
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[ReformatObserve] 样式观察跳过: {ex.Message}")
+        End Try
+
+        Return True
+    End Function
+
+    Private Function BuildSemanticReformatObservationSummary(tags As List(Of TaggedParagraph),
+                                                            mapping As SemanticStyleMapping,
+                                                            result As ReformatResult,
+                                                            autoFixedCount As Integer,
+                                                            repairCount As Integer) As String
+        If tags Is Nothing OrElse result Is Nothing Then Return ""
+
+        Dim expectedTextCount As Integer = 0
+        For Each tagged In tags
+            If tagged Is Nothing Then Continue For
+            Dim paraType = "text"
+            If _reformatTypes IsNot Nothing AndAlso
+               tagged.ParaIndex >= 0 AndAlso tagged.ParaIndex < _reformatTypes.Count Then
+                paraType = If(_reformatTypes(tagged.ParaIndex), "text")
+            End If
+            If String.Equals(paraType, "text", StringComparison.OrdinalIgnoreCase) Then
+                expectedTextCount += 1
+            End If
+        Next
+
+        Dim groups = tags.
+            Where(Function(t) t IsNot Nothing).
+            GroupBy(Function(t) GetReformatTagDisplayName(t.TagId, mapping)).
+            Select(Function(g) $"{g.Key} {g.Count()}段").
+            Take(5).
+            ToList()
+
+        Dim details As New List(Of String)()
+        If groups.Count > 0 Then
+            details.Add("主要样式为 " & String.Join("、", groups))
+        End If
+        If autoFixedCount > 0 Then
+            details.Add($"自动修正了 {autoFixedCount} 个标签")
+        End If
+
+        If expectedTextCount > 0 AndAlso result.ModifiedCount < expectedTextCount Then
+            details.Add("仍有部分段落未应用，建议使用预览对比或微调后再次应用。")
+        Else
+            details.Add("结果已进入 Word 撤销栈，可用撤销恢复。")
+        End If
+
+        Dim agentResult = Services.WordFormattingAgentResult.FromSemanticReformat(
+            _activeWordFormattingTaskPlan,
+            result.ModifiedCount,
+            expectedTextCount,
+            repairCount,
+            String.Join("；", details))
+
+        Return agentResult.ToHumanReadableSummary()
+    End Function
+
+    Private Async Function ShowSemanticReformatObservation(summary As String) As Task
+        Dim responseUuid As String = Guid.NewGuid().ToString()
+        Await ExecuteJavaScriptAsyncJS($"createChatSection('AI排版观察', formatDateTime(new Date()), '{responseUuid}');")
+        Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}', {JsonConvert.SerializeObject(summary)});")
+    End Function
 
     ''' <summary>
     ''' 显示排版错误到前端

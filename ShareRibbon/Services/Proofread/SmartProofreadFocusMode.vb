@@ -6,6 +6,7 @@ Imports System.Diagnostics
 Imports System.Linq
 Imports System.Text
 Imports System.Threading.Tasks
+Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
 
 ''' <summary>
@@ -87,11 +88,26 @@ Public Class SmartProofreadFocusMode
         Optional selectionStartOffset As Integer = 0) As Task
         
         Try
-            ' 1. 解析AI返回的校对问题
-            _state.CurrentIssues = ProofreadPromptBuilder.ParseProofreadResponse(aiResponse, paragraphs)
+            ' 1. 解析AI返回的校对问题，区分无问题和解析失败
+            Dim analysis = ProofreadPromptBuilder.AnalyzeProofreadResponse(aiResponse, paragraphs)
             _state.ProcessedParagraphs = paragraphs
-            
-            If _state.CurrentIssues Is Nothing OrElse _state.CurrentIssues.Count = 0 Then
+
+            If analysis Is Nothing Then
+                Await ShowParseErrorMessageAsync("校对分析结果为空", "")
+                Await _executeScript("window.proofreadIssueCount = 0;")
+                Return
+            End If
+
+            If analysis.Status = ProofreadAnalysisStatus.ParseFailed OrElse
+               analysis.Status = ProofreadAnalysisStatus.ModelFailed Then
+                Await ShowParseErrorMessageAsync(analysis.ErrorMessage, analysis.RawResponsePreview)
+                Await _executeScript("window.proofreadIssueCount = 0;")
+                Return
+            End If
+
+            _state.CurrentIssues = If(analysis.Issues, New List(Of ProofreadIssue)())
+
+            If analysis.Status = ProofreadAnalysisStatus.NoIssues OrElse _state.CurrentIssues.Count = 0 Then
                 Await ShowNoIssuesMessageAsync()
                 Await _executeScript("window.proofreadIssueCount = 0;")
                 Return
@@ -328,7 +344,7 @@ Public Class SmartProofreadFocusMode
     ''' </summary>
     Private Async Function ShowProofreadListPanelAsync(issues As List(Of ProofreadIssue)) As Task
         Dim html = GenerateProofreadListHtml(issues)
-        Await _executeScript($"showProofreadList('{ html.Replace("'", "\'") }');")
+        Await _executeScript($"showProofreadList({JsonConvert.SerializeObject(html)});")
     End Function
 
     ''' <summary>
@@ -461,6 +477,17 @@ Public Class SmartProofreadFocusMode
     ''' </summary>
     Private Async Function ShowNoIssuesMessageAsync() As Task
         Await _executeScript("showProofreadNoIssues();")
+    End Function
+
+    ''' <summary>
+    ''' 显示校对解析失败消息。
+    ''' </summary>
+    Private Async Function ShowParseErrorMessageAsync(errorMessage As String, rawPreview As String) As Task
+        Dim payload As New JObject From {
+            {"errorMessage", If(errorMessage, "AI 返回格式异常，无法生成校对列表。")},
+            {"rawPreview", If(rawPreview, "")}
+        }
+        Await _executeScript($"showProofreadParseError({payload.ToString(Formatting.None)});")
     End Function
 
     ''' <summary>

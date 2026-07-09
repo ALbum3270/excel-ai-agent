@@ -100,6 +100,9 @@ Public Class ReformatIntentRecognizer
         sb.AppendLine("3. 用户说清理格式、去掉混乱格式时，使用 FormatCleanup。")
         sb.AppendLine("4. 用户说参考范文、照这个、格式克隆时，使用 StyleClone。")
         sb.AppendLine("5. specificRequests 保留用户的真实约束，例如页码位置、三线表、标题字号、行距、字体、颜色。")
+        sb.AppendLine("6. 用户说重构序号、整理编号、规范标题层级、重构标题和序号时，这是结构排版任务，使用 AutoFormat，不要要求用户澄清。")
+        sb.AppendLine("7. 用户说全文、整篇、所有、统一时，scope 使用 wholeDocument；用户说选中、所选、当前选择时，scope 使用 selection。")
+        sb.AppendLine("8. 不要因为文档内容像技术说明就切换到普通问答；只要用户要求排版、标题、编号、样式，就按 Word 排版任务解析。")
         sb.AppendLine()
 
         sb.AppendLine("可用标准：")

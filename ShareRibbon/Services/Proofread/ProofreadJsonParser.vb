@@ -288,3 +288,31 @@ Public Class ProofreadParseResult
     Public Property Summary As String
     Public Property FormatDetected As String  ' 检测到的格式
 End Class
+
+''' <summary>
+''' 校对分析状态，用于区分真正无问题和解析失败。
+''' </summary>
+Public Enum ProofreadAnalysisStatus
+    HasIssues
+    NoIssues
+    ParseFailed
+    ModelFailed
+End Enum
+
+''' <summary>
+''' 校对分析结果。不要再用空列表同时表达“无问题”和“解析失败”。
+''' </summary>
+Public Class ProofreadAnalysisResult
+    Public Property Status As ProofreadAnalysisStatus = ProofreadAnalysisStatus.ModelFailed
+    Public Property Issues As New List(Of ProofreadIssue)()
+    Public Property ErrorMessage As String
+    Public Property RawResponsePreview As String
+    Public Property Summary As String
+    Public Property FormatDetected As String
+
+    Public ReadOnly Property HasIssues As Boolean
+        Get
+            Return Status = ProofreadAnalysisStatus.HasIssues AndAlso Issues IsNot Nothing AndAlso Issues.Count > 0
+        End Get
+    End Property
+End Class

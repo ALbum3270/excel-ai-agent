@@ -24,11 +24,22 @@ function showProofreadSidePanel() {
     var panel = document.createElement('div');
     panel.id = 'proofread-side-panel';
     panel.className = 'proofread-side-panel';
-    panel.innerHTML = '<div class="proofread-panel-content" id="proofread-panel-content"></div>';
+    panel.innerHTML = '<div class="proofread-panel-header">' +
+        '<div class="proofread-panel-title">' +
+        '<span class="proofread-panel-icon">✓</span>' +
+        '<span>AI校对</span>' +
+        '</div>' +
+        '<div class="proofread-panel-actions">' +
+        '<button class="proofread-panel-action" title="折叠/展开" onclick="toggleProofreadPanelCollapse()">‹</button>' +
+        '<button class="proofread-panel-action" title="退出校对" onclick="proofreadExit()">×</button>' +
+        '</div>' +
+        '</div>' +
+        '<div class="proofread-plan-summary" id="proofread-plan-summary"></div>' +
+        '<div class="proofread-panel-content" id="proofread-panel-content"></div>';
 
     document.body.appendChild(panel);
 
-    // 调整主体布局，让出右侧空间
+    // 标记面板打开；不再强制挤压主体，避免在窄任务窗格中形成遮盖感。
     document.body.classList.add('proofread-panel-open');
 
     // 添加面板样式（如果尚未添加）
@@ -204,8 +215,76 @@ function showProofreadNoIssues() {
             '<span class="success-icon">✅</span>' +
             '<span class="success-text">没有发现问题！</span>' +
             '<p class="success-hint">您的文档没有需要修改的内容。</p>' +
+            '<button class="proofread-btn secondary" onclick="proofreadExit()">退出校对</button>' +
             '</div>';
     }
+}
+
+/**
+ * 更新校对计划摘要
+ */
+function updateProofreadPlanSummary(planText) {
+    var summary = document.getElementById('proofread-plan-summary');
+    if (!summary) return;
+
+    if (!planText) {
+        summary.style.display = 'none';
+        summary.innerHTML = '';
+        return;
+    }
+
+    summary.style.display = 'block';
+    summary.innerHTML = '<div class="proofread-plan-label">本轮计划</div>' +
+        '<div class="proofread-plan-text">' + escapeProofreadHtml(planText).replace(/\n/g, '<br>') + '</div>';
+}
+
+/**
+ * 折叠/展开校对面板
+ */
+function toggleProofreadPanelCollapse() {
+    var panel = document.getElementById('proofread-side-panel');
+    if (!panel) return;
+
+    panel.classList.toggle('collapsed');
+    var btn = panel.querySelector('.proofread-panel-action');
+    if (btn) {
+        btn.textContent = panel.classList.contains('collapsed') ? '›' : '‹';
+    }
+}
+
+/**
+ * 显示校对解析失败消息
+ */
+function showProofreadParseError(payload) {
+    var content = document.getElementById('proofread-panel-content');
+    if (!content) return;
+
+    payload = payload || {};
+    var errorMessage = escapeProofreadHtml(payload.errorMessage || 'AI 返回格式异常，无法生成校对列表。');
+    var rawPreview = escapeProofreadHtml(payload.rawPreview || '');
+    var rawBlock = rawPreview
+        ? '<pre class="proofread-error-raw">' + rawPreview + '</pre>'
+        : '<p class="proofread-error-hint">本次没有可展示的原始响应。</p>';
+
+    content.innerHTML = '<div class="proofread-error">' +
+        '<span class="error-icon">⚠️</span>' +
+        '<span class="error-title">校对结果解析失败</span>' +
+        '<p class="error-message">' + errorMessage + '</p>' +
+        '<p class="proofread-error-hint">这通常表示 AI 没有按要求返回 JSON。文档尚未被修改。</p>' +
+        rawBlock +
+        '<div class="proofread-list-actions">' +
+        '<button class="proofread-btn secondary" onclick="proofreadExit()">退出校对</button>' +
+        '</div>' +
+        '</div>';
+}
+
+function escapeProofreadHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -232,23 +311,103 @@ function injectProofreadStyles() {
     style.textContent =
 /* ========== 校对面板打开时主体布局避让 ========== */
 'body.proofread-panel-open {' +
-'    margin-right: 380px !important;' +
+'    margin-right: 0 !important;' +
 '    transition: margin-right 0.3s ease;' +
 '}' +
 '' +
 /* ========== 校对面板样式 ========== */
 '.proofread-side-panel {' +
 '    position: fixed;' +
-'    right: 0;' +
-'    top: 0;' +
-'    bottom: 0;' +
-'    width: 380px;' +
+'    right: 8px;' +
+'    top: 48px;' +
+'    bottom: 8px;' +
+'    width: min(360px, calc(100vw - 24px));' +
+'    max-width: calc(100vw - 24px);' +
 '    background: #fff;' +
-'    box-shadow: -4px 0 20px rgba(0,0,0,0.1);' +
+'    box-shadow: 0 8px 28px rgba(15,23,42,0.18);' +
+'    border: 1px solid #e5e7eb;' +
+'    border-radius: 10px;' +
 '    z-index: 1000;' +
 '    display: flex;' +
 '    flex-direction: column;' +
 '    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;' +
+'    overflow: hidden;' +
+'    transition: width 0.2s ease, max-width 0.2s ease;' +
+'}' +
+'.proofread-side-panel.collapsed {' +
+'    width: 46px;' +
+'    min-width: 46px;' +
+'}' +
+'.proofread-side-panel.collapsed .proofread-panel-title span:last-child,' +
+'.proofread-side-panel.collapsed .proofread-plan-summary,' +
+'.proofread-side-panel.collapsed .proofread-panel-content,' +
+'.proofread-side-panel.collapsed .proofread-panel-actions button:last-child {' +
+'    display: none;' +
+'}' +
+'.proofread-panel-header {' +
+'    height: 44px;' +
+'    flex: 0 0 auto;' +
+'    display: flex;' +
+'    align-items: center;' +
+'    justify-content: space-between;' +
+'    padding: 0 10px 0 12px;' +
+'    background: #f8fafc;' +
+'    border-bottom: 1px solid #e5e7eb;' +
+'}' +
+'.proofread-panel-title {' +
+'    display: flex;' +
+'    align-items: center;' +
+'    gap: 8px;' +
+'    min-width: 0;' +
+'    font-size: 14px;' +
+'    font-weight: 600;' +
+'    color: #111827;' +
+'}' +
+'.proofread-panel-icon {' +
+'    width: 22px;' +
+'    height: 22px;' +
+'    display: inline-flex;' +
+'    align-items: center;' +
+'    justify-content: center;' +
+'    border-radius: 999px;' +
+'    background: #2563eb;' +
+'    color: white;' +
+'    font-size: 13px;' +
+'}' +
+'.proofread-panel-actions {' +
+'    display: flex;' +
+'    gap: 4px;' +
+'}' +
+'.proofread-panel-action {' +
+'    width: 26px;' +
+'    height: 26px;' +
+'    border: none;' +
+'    border-radius: 6px;' +
+'    background: transparent;' +
+'    color: #475569;' +
+'    cursor: pointer;' +
+'    font-size: 18px;' +
+'    line-height: 1;' +
+'}' +
+'.proofread-panel-action:hover {' +
+'    background: #e5e7eb;' +
+'}' +
+'.proofread-plan-summary {' +
+'    display: none;' +
+'    flex: 0 0 auto;' +
+'    padding: 10px 14px;' +
+'    border-bottom: 1px solid #e5e7eb;' +
+'    background: #f9fafb;' +
+'}' +
+'.proofread-plan-label {' +
+'    font-size: 11px;' +
+'    color: #64748b;' +
+'    margin-bottom: 4px;' +
+'}' +
+'.proofread-plan-text {' +
+'    font-size: 12px;' +
+'    line-height: 1.5;' +
+'    color: #334155;' +
 '}' +
 '.proofread-panel-content {' +
 '    flex: 1;' +
@@ -444,6 +603,52 @@ function injectProofreadStyles() {
 '    font-size: 14px;' +
 '    color: #6b7280;' +
 '    margin-top: 8px;' +
+'}' +
+'.proofread-error {' +
+'    display: flex;' +
+'    flex-direction: column;' +
+'    align-items: stretch;' +
+'    justify-content: center;' +
+'    padding: 36px 16px;' +
+'    text-align: left;' +
+'}' +
+'.proofread-error .error-icon {' +
+'    font-size: 42px;' +
+'    text-align: center;' +
+'    margin-bottom: 12px;' +
+'}' +
+'.proofread-error .error-title {' +
+'    font-size: 17px;' +
+'    color: #b45309;' +
+'    font-weight: 600;' +
+'    text-align: center;' +
+'    margin-bottom: 8px;' +
+'}' +
+'.proofread-error .error-message {' +
+'    color: #92400e;' +
+'    background: #fffbeb;' +
+'    border: 1px solid #fde68a;' +
+'    border-radius: 6px;' +
+'    padding: 10px;' +
+'    font-size: 13px;' +
+'    line-height: 1.5;' +
+'}' +
+'.proofread-error-hint {' +
+'    color: #6b7280;' +
+'    font-size: 13px;' +
+'    line-height: 1.5;' +
+'}' +
+'.proofread-error-raw {' +
+'    max-height: 160px;' +
+'    overflow: auto;' +
+'    white-space: pre-wrap;' +
+'    word-break: break-word;' +
+'    background: #111827;' +
+'    color: #e5e7eb;' +
+'    border-radius: 6px;' +
+'    padding: 10px;' +
+'    font-size: 12px;' +
+'    line-height: 1.45;' +
 '}';
     
     document.head.appendChild(style);

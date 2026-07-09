@@ -92,27 +92,61 @@ Public Class ProofreadPromptBuilder
     End Function
 
     ''' <summary>
-    ''' 解析AI返回的校对结果（使用统一解析器）
+    ''' 分析AI返回的校对结果，保留解析失败状态。
+    ''' </summary>
+    Public Shared Function AnalyzeProofreadResponse(
+        aiResponse As String,
+        Optional paragraphs As List(Of String) = Nothing) As ProofreadAnalysisResult
+
+        Try
+            Dim parseResult = ProofreadJsonParser.Parse(aiResponse)
+            Dim analysis As New ProofreadAnalysisResult With {
+                .RawResponsePreview = BuildRawResponsePreview(aiResponse),
+                .Summary = parseResult.Summary,
+                .FormatDetected = parseResult.FormatDetected
+            }
+
+            If Not parseResult.Success Then
+                Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果失败: {parseResult.ErrorMessage}")
+                analysis.Status = ProofreadAnalysisStatus.ParseFailed
+                analysis.ErrorMessage = parseResult.ErrorMessage
+                Return analysis
+            End If
+
+            analysis.Issues = If(parseResult.Issues, New List(Of ProofreadIssue)())
+            analysis.Status = If(analysis.Issues.Count > 0, ProofreadAnalysisStatus.HasIssues, ProofreadAnalysisStatus.NoIssues)
+            Return analysis
+
+        Catch ex As Exception
+            Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果异常: {ex.Message}")
+            Return New ProofreadAnalysisResult With {
+                .Status = ProofreadAnalysisStatus.ModelFailed,
+                .ErrorMessage = ex.Message,
+                .RawResponsePreview = BuildRawResponsePreview(aiResponse)
+            }
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 解析AI返回的校对结果（兼容旧调用；失败时仍返回空列表）。
+    ''' 新代码应使用 AnalyzeProofreadResponse 区分状态。
     ''' </summary>
     Public Shared Function ParseProofreadResponse(
         aiResponse As String,
         Optional paragraphs As List(Of String) = Nothing) As List(Of ProofreadIssue)
 
-        Try
-            ' 使用新的统一解析器
-            Dim parseResult = ProofreadJsonParser.Parse(aiResponse)
-
-            If Not parseResult.Success Then
-                Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果失败: {parseResult.ErrorMessage}")
-                Return New List(Of ProofreadIssue)()
-            End If
-
-            Return parseResult.Issues
-
-        Catch ex As Exception
-            Debug.WriteLine($"[ProofreadPromptBuilder] 解析校对结果异常: {ex.Message}")
+        Dim analysis = AnalyzeProofreadResponse(aiResponse, paragraphs)
+        If analysis Is Nothing OrElse Not analysis.HasIssues Then
             Return New List(Of ProofreadIssue)()
-        End Try
+        End If
+        Return analysis.Issues
+    End Function
+
+    Private Shared Function BuildRawResponsePreview(aiResponse As String) As String
+        If String.IsNullOrWhiteSpace(aiResponse) Then Return ""
+        Dim normalized = aiResponse.Replace(vbCr, " ").Replace(vbLf, " ").Trim()
+        If normalized.Length <= 500 Then Return normalized
+        Return normalized.Substring(0, 500) & "..."
     End Function
 
     ''' <summary>

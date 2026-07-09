@@ -3,6 +3,8 @@
 
 Imports System.Text
 Imports System.Text.RegularExpressions
+Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Converters
 
 Namespace Services
 
@@ -17,6 +19,7 @@ Namespace Services
 
     Public Enum FormattingOperationKind
         FontSizeDelta
+        FontSizeGradeDelta
         FontSizeAbsolute
         FontFamily
         Bold
@@ -39,6 +42,8 @@ Namespace Services
     End Class
 
     Public Class FormattingIntentPlan
+        Private Shared ReadOnly JsonSettings As JsonSerializerSettings = CreateJsonSettings()
+
         Public Property OriginalText As String
         Public Property Source As String = "rules"
         Public Property Confidence As Double = 0
@@ -51,6 +56,39 @@ Namespace Services
                 Return Operations IsNot Nothing AndAlso Operations.Count > 0
             End Get
         End Property
+
+        Public Function ToJson() As String
+            Return JsonConvert.SerializeObject(Me, Formatting.Indented, JsonSettings)
+        End Function
+
+        Public Shared Function FromJson(json As String) As FormattingIntentPlan
+            If String.IsNullOrWhiteSpace(json) Then Return Nothing
+            Return JsonConvert.DeserializeObject(Of FormattingIntentPlan)(json, JsonSettings)
+        End Function
+
+        Public Shared Function TryFromJson(json As String, ByRef plan As FormattingIntentPlan, Optional ByRef errorMessage As String = Nothing) As Boolean
+            Try
+                plan = FromJson(json)
+                If plan Is Nothing Then
+                    errorMessage = "JSON 未生成格式计划"
+                    Return False
+                End If
+                If plan.Operations Is Nothing Then plan.Operations = New List(Of FormattingOperation)()
+                If plan.Notes Is Nothing Then plan.Notes = New List(Of String)()
+                Return True
+            Catch ex As Exception
+                errorMessage = ex.Message
+                plan = Nothing
+                Return False
+            End Try
+        End Function
+
+        Private Shared Function CreateJsonSettings() As JsonSerializerSettings
+            Dim settings As New JsonSerializerSettings()
+            settings.NullValueHandling = NullValueHandling.Ignore
+            settings.Converters.Add(New StringEnumConverter())
+            Return settings
+        End Function
 
         Public Function ToHumanReadableSummary() As String
             If Not HasOperations Then Return "未识别到可执行格式操作"
@@ -80,6 +118,8 @@ Namespace Services
             Select Case op.Kind
                 Case FormattingOperationKind.FontSizeDelta
                     Return $"字号{If(op.NumericValue >= 0, "+", "")}{op.NumericValue}pt"
+                Case FormattingOperationKind.FontSizeGradeDelta
+                    Return $"字号等级{If(op.NumericValue >= 0, "+", "")}{op.NumericValue}"
                 Case FormattingOperationKind.FontSizeAbsolute
                     Return $"字号设为 {op.NumericValue}pt"
                 Case FormattingOperationKind.FontFamily
@@ -174,20 +214,22 @@ Namespace Services
         Private Sub AddFontSizeOperations(plan As FormattingIntentPlan, message As String)
             Dim inc = Regex.Match(message, "(加大|增大|调大|放大|变大|大)\s*([一二两三四五六七八九十\d]+)?\s*(号|磅|pt|点)?", RegexOptions.IgnoreCase)
             If inc.Success Then
+                Dim unit = inc.Groups(3).Value
                 plan.Operations.Add(New FormattingOperation With {
-                    .Kind = FormattingOperationKind.FontSizeDelta,
+                    .Kind = If(IsPointUnit(unit), FormattingOperationKind.FontSizeDelta, FormattingOperationKind.FontSizeGradeDelta),
                     .NumericValue = Math.Max(0.5, ParseAmount(inc.Groups(2).Value, 1)),
-                    .Explanation = "字号增量"
+                    .Explanation = If(IsPointUnit(unit), "字号磅值增量", "中文字号等级增量")
                 })
                 Return
             End If
 
             Dim dec = Regex.Match(message, "(减小|缩小|调小|变小|小)\s*([一二两三四五六七八九十\d]+)?\s*(号|磅|pt|点)?", RegexOptions.IgnoreCase)
             If dec.Success Then
+                Dim unit = dec.Groups(3).Value
                 plan.Operations.Add(New FormattingOperation With {
-                    .Kind = FormattingOperationKind.FontSizeDelta,
+                    .Kind = If(IsPointUnit(unit), FormattingOperationKind.FontSizeDelta, FormattingOperationKind.FontSizeGradeDelta),
                     .NumericValue = -Math.Max(0.5, ParseAmount(dec.Groups(2).Value, 1)),
-                    .Explanation = "字号减量"
+                    .Explanation = If(IsPointUnit(unit), "字号磅值减量", "中文字号等级减量")
                 })
                 Return
             End If
@@ -298,6 +340,12 @@ Namespace Services
                 Case "十" : Return 10
                 Case Else : Return defaultValue
             End Select
+        End Function
+
+        Private Shared Function IsPointUnit(unit As String) As Boolean
+            If String.IsNullOrWhiteSpace(unit) Then Return False
+            Dim normalized = unit.Trim().ToLowerInvariant()
+            Return normalized = "pt" OrElse normalized = "磅" OrElse normalized = "点"
         End Function
 
         Private Shared Function NamedFontSizeToPoint(sizeName As String) As Double

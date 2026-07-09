@@ -54,6 +54,12 @@ Public Class ReformatPreviewPlan
     Public Property NeedsAITagging As Boolean = True
     ''' <summary>段落类型列表("text"/"image"/"table"/"formula")，用于渲染时跳过非文本段落</summary>
     Public Property ParagraphTypes As List(Of String) = Nothing
+    ''' <summary>用户可读的作用范围摘要，由具体 Office 应用侧填充</summary>
+    Public Property ScopeSummary As String = ""
+    ''' <summary>作用范围类型名称，如 selection/wholeDocument/section</summary>
+    Public Property ScopeKindName As String = ""
+    ''' <summary>文本段落数量，排除图片/表格/公式等特殊元素</summary>
+    Public Property TextParagraphCount As Integer = 0
 
     Public Sub New()
         Changes = New List(Of FormatChange)()
@@ -81,6 +87,9 @@ Public Class ReformatPreviewPlan
         json("standard") = StandardName
         json("totalChanges") = TotalChanges
         json("sectionCount") = SectionCount
+        json("scopeSummary") = ScopeSummary
+        json("scopeKind") = ScopeKindName
+        json("textParagraphCount") = TextParagraphCount
         Dim changesArray As New JArray()
         If Changes IsNot Nothing Then
             For Each c In Changes
@@ -360,6 +369,78 @@ Public Class SmartFormattingOrchestrator
         Return plan
     End Function
 
+    ''' <summary>
+    ''' 生成备选排版方案。用于“换一种”，按候选标准循环，而不是重复返回同一推荐。
+    ''' </summary>
+    Public Function GenerateAlternativePlan(paragraphTexts As List(Of String),
+                                            paragraphStyles As List(Of String),
+                                            paragraphFontSizes As List(Of Single),
+                                            paragraphIsBold As List(Of Boolean),
+                                            currentStandardName As String,
+                                            variantIndex As Integer) As ReformatPreviewPlan
+        If paragraphTexts Is Nothing OrElse paragraphTexts.Count = 0 Then
+            Return New ReformatPreviewPlan()
+        End If
+
+        Dim analysis = _analyzer.Analyze(paragraphTexts, paragraphStyles, paragraphFontSizes, paragraphIsBold)
+        Dim candidates = GetAlternativeStandardCandidates(analysis, currentStandardName)
+        If candidates.Count = 0 Then
+            Return AnalyzeAndRecommend(paragraphTexts, paragraphStyles, paragraphFontSizes, paragraphIsBold)
+        End If
+
+        Dim safeIndex = Math.Abs(variantIndex) Mod candidates.Count
+        Dim selected = candidates(safeIndex)
+        Dim plan = GeneratePreviewPlan(analysis, selected.Standard, paragraphTexts)
+        plan.DocumentTypeName = GetDocumentTypeName(plan.DetectedType)
+        plan.StandardDescription = BuildAlternativeDescription(selected, safeIndex + 1, candidates.Count)
+        _refinementContext.Update(analysis, plan.SemanticMapping, selected.Standard, plan)
+        Return plan
+    End Function
+
+    Private Function GetAlternativeStandardCandidates(analysis As DocumentAnalysisResult,
+                                                      currentStandardName As String) As List(Of FormattingStandardCandidate)
+        Dim docTypeName = If(analysis Is Nothing, DocumentType.GeneralDocument.ToString(), analysis.DocumentType.ToString())
+        Dim allCandidates = _standardRegistry.GetAllCandidates().
+            Where(Function(c) c IsNot Nothing AndAlso
+                              c.Standard IsNot Nothing AndAlso
+                              c.Standard.IsActive).
+            Where(Function(c) Not String.Equals(c.Standard.Name, currentStandardName, StringComparison.OrdinalIgnoreCase)).
+            ToList()
+
+        Dim sameType = allCandidates.
+            Where(Function(c) c.Standard.ApplicableDocumentTypes IsNot Nothing AndAlso
+                              c.Standard.ApplicableDocumentTypes.Contains(docTypeName)).
+            OrderByDescending(Function(c) c.Confidence).
+            ToList()
+
+        Dim general = allCandidates.
+            Where(Function(c) c.Standard.ApplicableDocumentTypes IsNot Nothing AndAlso
+                              c.Standard.ApplicableDocumentTypes.Contains(DocumentType.GeneralDocument.ToString())).
+            OrderByDescending(Function(c) c.Confidence).
+            ToList()
+
+        Dim merged As New List(Of FormattingStandardCandidate)()
+        For Each candidate In sameType.Concat(general).Concat(allCandidates.OrderByDescending(Function(c) c.Confidence))
+            If Not merged.Any(Function(x) String.Equals(x.Standard.Name, candidate.Standard.Name, StringComparison.OrdinalIgnoreCase)) Then
+                merged.Add(candidate)
+            End If
+        Next
+
+        Return merged
+    End Function
+
+    Private Shared Function BuildAlternativeDescription(candidate As FormattingStandardCandidate,
+                                                        displayIndex As Integer,
+                                                        totalCount As Integer) As String
+        If candidate Is Nothing OrElse candidate.Standard Is Nothing Then Return ""
+
+        Dim parts As New List(Of String)()
+        parts.Add($"备选方案 {displayIndex}/{totalCount}")
+        If Not String.IsNullOrWhiteSpace(candidate.Reason) Then parts.Add(candidate.Reason)
+        If Not String.IsNullOrWhiteSpace(candidate.Standard.Description) Then parts.Add(candidate.Standard.Description)
+        Return String.Join("；", parts)
+    End Function
+
     ' ============================================================
     '  模式B：对话式排版 —— 自然语言指令解析
     ' ============================================================
@@ -513,12 +594,18 @@ Public Class SmartFormattingOrchestrator
         plan.StandardName = standard.Name
         plan.StandardDescription = standard.Description
         plan.TotalParagraphs = analysis.ParagraphCount
+        If standard.SemanticMapping Is Nothing Then standard.SemanticMapping = New SemanticStyleMapping()
+        standard.SemanticMapping.EnsureBaselineTags()
         plan.SemanticMapping = standard.SemanticMapping
         plan.PageSettings = standard.SemanticMapping.PageConfig
 
         ' --- 标题变更 ---
         Dim headingChanges = BuildHeadingChanges(analysis, standard, paragraphTexts)
         plan.Changes.AddRange(headingChanges)
+
+        ' --- 标题/编号兜底：分析器保守时，仍按常见编号形态生成结构候选 ---
+        Dim structuralHeadingChanges = BuildHeuristicHeadingChanges(analysis, standard, paragraphTexts)
+        plan.Changes.AddRange(structuralHeadingChanges)
 
         ' --- 正文变更（跳过已处理的标题段落） ---
         Dim bodyChanges = BuildBodyChanges(analysis, standard, paragraphTexts)
@@ -705,6 +792,7 @@ Public Class SmartFormattingOrchestrator
         ' 解析用户意图
         Dim analysis = If(_refinementContext.CurrentAnalysis, New DocumentAnalysisResult())
         Dim intent = ParseUserIntent(userMessage, analysis)
+        NormalizeStructuralIntent(userMessage, intent)
 
         Dim plan As ReformatPreviewPlan
 
@@ -776,6 +864,7 @@ Public Class SmartFormattingOrchestrator
         If intent Is Nothing Then
             intent = ParseUserIntent(userMessage, analysis)
         End If
+        NormalizeStructuralIntent(userMessage, intent)
 
         Dim plan As ReformatPreviewPlan
 
@@ -829,6 +918,20 @@ Public Class SmartFormattingOrchestrator
             Case Else : Return "未知"
         End Select
     End Function
+
+    Private Shared Sub NormalizeStructuralIntent(userMessage As String, intent As FormatIntent)
+        If intent Is Nothing OrElse Not IsHeadingNumberingRequest(userMessage) Then Return
+
+        If intent.IntentType = IntentType.SpecificTweak Then
+            intent.IntentType = IntentType.AutoFormat
+        End If
+        If intent.TargetDocumentType = DocumentType.Unknown Then
+            intent.TargetDocumentType = DocumentType.GeneralDocument
+        End If
+        If Not intent.SpecificRequests.Contains("rebuild_heading_numbering") Then
+            intent.SpecificRequests.Add("rebuild_heading_numbering")
+        End If
+    End Sub
 
     Public Sub ResetRefinement()
         _refinementContext.Clear()
@@ -1007,6 +1110,64 @@ Public Class SmartFormattingOrchestrator
         Next
 
         Return changes
+    End Function
+
+    ''' <summary>在分析器没有识别出标题时，用编号/标题文本形态补充结构候选。</summary>
+    Private Function BuildHeuristicHeadingChanges(
+        analysis As DocumentAnalysisResult,
+        standard As FormattingStandard,
+        paragraphTexts As List(Of String)) As List(Of FormatChange)
+
+        Dim changes As New List(Of FormatChange)()
+        If paragraphTexts Is Nothing OrElse paragraphTexts.Count = 0 Then Return changes
+
+        Dim existingIndices As New HashSet(Of Integer)()
+        If analysis?.DocStructure IsNot Nothing Then
+            For Each h In analysis.DocStructure.Headings
+                existingIndices.Add(h.ParagraphIndex)
+            Next
+        End If
+
+        For i = 0 To paragraphTexts.Count - 1
+            If existingIndices.Contains(i) Then Continue For
+
+            Dim text = If(paragraphTexts(i), "")
+            Dim level = InferHeadingLevelFromText(text, standard)
+            If level <= 0 Then Continue For
+
+            Dim change As New FormatChange()
+            change.ParagraphIndex = i
+            change.ParagraphPreview = TruncateText(text.Trim(), 50)
+            change.OldTag = "body.normal"
+            change.NewTag = GetStandardTagForHeading(level, standard)
+
+            Dim semanticTag = standard?.SemanticMapping?.FindTag(change.NewTag)
+            If semanticTag IsNot Nothing Then
+                ResolveChangeFromTag(change, semanticTag)
+            End If
+
+            changes.Add(change)
+        Next
+
+        Return changes
+    End Function
+
+    Private Shared Function InferHeadingLevelFromText(text As String, standard As FormattingStandard) As Integer
+        If String.IsNullOrWhiteSpace(text) Then Return 0
+
+        Dim trimmed = text.Trim()
+        If trimmed.Length <= 1 OrElse trimmed.Length > 100 Then Return 0
+
+        If Regex.IsMatch(trimmed, "^第[一二三四五六七八九十百千万\d]+[章节篇条]\s*") Then Return 1
+        If Regex.IsMatch(trimmed, "^[一二三四五六七八九十]+[、.．]\s*\S+") Then Return 1
+        If Regex.IsMatch(trimmed, "^[（(][一二三四五六七八九十\d]+[）)]\s*\S+") Then Return 2
+        If Regex.IsMatch(trimmed, "^\d+[.．]\d+[.．]\d+\s*\S*") Then Return 3
+        If Regex.IsMatch(trimmed, "^\d+[.．]\d+\s*\S*") Then Return 2
+        If Regex.IsMatch(trimmed, "^\d+[.．、]\s*\S+") Then
+            Return If(IsOfficialDocumentStandard(standard), 3, 1)
+        End If
+
+        Return 0
     End Function
 
     ''' <summary>将语义标签的格式信息填入 FormatChange</summary>
@@ -1297,6 +1458,15 @@ Public Class SmartFormattingOrchestrator
             End If
         Next
         Return False
+    End Function
+
+    Private Shared Function IsHeadingNumberingRequest(message As String) As Boolean
+        If String.IsNullOrWhiteSpace(message) Then Return False
+
+        Dim hasStructureVerb = ContainsAny(message, {"重构", "整理", "规范", "优化", "调整", "梳理", "统一"})
+        Dim hasStructureTarget = ContainsAny(message, {"序号", "编号", "标题", "层级", "章节"})
+
+        Return hasStructureVerb AndAlso hasStructureTarget
     End Function
 
     Private Shared Function ParseFontDeltaAmount(value As String) As Double

@@ -423,6 +423,12 @@ Public Class ChatFormatterAgent
         sb.AppendLine("  <div class=""formatting-card-body"">")
 
         ' 文档类型与标准
+        If Not String.IsNullOrWhiteSpace(plan.ScopeSummary) Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">作用范围: <strong>{System.Web.HttpUtility.HtmlEncode(plan.ScopeSummary)}</strong></div>")
+        End If
+        If plan.TextParagraphCount > 0 AndAlso plan.TextParagraphCount <> plan.TotalParagraphs Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">文本段落: <strong>{plan.TextParagraphCount}</strong> / 总段落 {plan.TotalParagraphs}</div>")
+        End If
         If ShouldShowDocumentType(plan) Then
             sb.AppendLine($"    <div class=""formatting-info-row"">文档类型: <strong>{GetDocumentTypeLabel(plan)}</strong> (置信度{Math.Round(plan.TypeConfidence * 100)}%)</div>")
         End If
@@ -556,25 +562,35 @@ Public Class ChatFormatterAgent
         If Not String.IsNullOrEmpty(plan.StandardName) Then
             sb.AppendLine($"    <div class=""formatting-info-row"">推荐标准: <strong>{plan.StandardName}</strong></div>")
         End If
+        If Not String.IsNullOrWhiteSpace(plan.StandardDescription) Then
+            sb.AppendLine($"    <div class=""formatting-info-row"">方案说明: <strong>{System.Web.HttpUtility.HtmlEncode(plan.StandardDescription)}</strong></div>")
+        End If
 
-        ' 变更列表 — 按NewTag分组显示
+        ' 变更列表 — 按NewTag分组显示，面向用户展示语义名称而不是技术标签。
         sb.AppendLine("    <div class=""formatting-changes"">")
         sb.AppendLine("      <div class=""formatting-changes-title"">即将修改:</div>")
 
         ' 按NewTag分组
         Dim grouped = plan.Changes.GroupBy(Function(c) If(String.IsNullOrEmpty(c.NewTag), "__pending__", c.NewTag)).ToList()
-        For Each group In grouped
-            Dim tagName = If(group.Key = "__pending__", "AI待标注", group.Key)
-            Dim count = group.Count()
-            Dim sampleDesc = group.FirstOrDefault()?.ChangeDescription
-            sb.AppendLine($"      <div class=""formatting-change-item"">")
-            sb.AppendLine($"        <span class=""formatting-change-section"">{System.Web.HttpUtility.HtmlEncode(tagName)}</span>")
-            sb.AppendLine($"        <span class=""formatting-change-count"">({count}处)</span>")
-            If Not String.IsNullOrEmpty(sampleDesc) Then
-                sb.AppendLine($"        <span class=""formatting-change-desc"">: {System.Web.HttpUtility.HtmlEncode(sampleDesc)}</span>")
-            End If
-            sb.AppendLine($"      </div>")
-        Next
+        If grouped.Count = 0 Then
+            sb.AppendLine("      <div class=""formatting-change-item"">")
+            sb.AppendLine("        <span class=""formatting-change-section"">已完成文档结构分析</span>")
+            sb.AppendLine("        <span class=""formatting-change-desc"">: 暂未发现需要立即调整的样式区，可继续微调或换一种方案。</span>")
+            sb.AppendLine("      </div>")
+        Else
+            For Each group In grouped
+                Dim tagName = If(group.Key = "__pending__", "AI待标注", GetTagDisplayName(group.Key, plan.SemanticMapping))
+                Dim count = group.Count()
+                Dim sampleDesc = group.FirstOrDefault()?.ChangeDescription
+                sb.AppendLine($"      <div class=""formatting-change-item"">")
+                sb.AppendLine($"        <span class=""formatting-change-section"">{System.Web.HttpUtility.HtmlEncode(tagName)}</span>")
+                sb.AppendLine($"        <span class=""formatting-change-count"">({count}处)</span>")
+                If Not String.IsNullOrEmpty(sampleDesc) Then
+                    sb.AppendLine($"        <span class=""formatting-change-desc"">: {System.Web.HttpUtility.HtmlEncode(sampleDesc)}</span>")
+                End If
+                sb.AppendLine($"      </div>")
+            Next
+        End If
 
         sb.AppendLine($"      <div class=""formatting-change-summary"">合计: {plan.TotalChanges}处段落, {grouped.Count}个样式区</div>")
         sb.AppendLine("    </div>")
