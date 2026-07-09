@@ -100,7 +100,6 @@ Public Class ResourceExtractor
                 {"history_manager", "history-manager.js"},
                 {"autocomplete", "autocomplete.js"},
                 {"ralph_loop", "ralph-loop.js"},
-                {"ralph_agent", "ralph-agent.js"},
                 {"agent_protocol", "agent-protocol.js"},
                 {"agent_card", "agent-card.js"},
                 {"model_switcher", "model-switcher.js"},

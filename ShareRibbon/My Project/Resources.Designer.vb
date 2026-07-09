@@ -483,36 +483,6 @@ Namespace My.Resources
         End Property
         
         '''<summary>
-        '''  查找类似 /**
-        ''' * ralph-agent.js - Ralph Agent 前端控制
-        ''' * 类似Cursor的自动化Agent，嵌入聊天流，自动执行步骤
-        ''' */
-        '''
-        '''// Agent 状态
-        '''window.ralphAgentState = {
-        '''    active: false,
-        '''    session: null,
-        '''    locked: false  // 锁定聊天输入
-        '''};
-        '''
-        '''/**
-        ''' * 锁定聊天输入（Agent执行期间）
-        ''' */
-        '''function lockChatInput() {
-        '''    window.ralphAgentState.locked = true;
-        '''    const smartInput = document.getElementById(&apos;smart-input&apos;);
-        '''    const sendBtn = document.getElementById(&apos;send-button&apos;);
-        '''    const chatInput = document.getElementById(&apos;chat-input&apos;);
-        '''    
-        '''    if (smartI [字符串的其余部分被截断]&quot;; 的本地化字符串。
-        '''</summary>
-        Public ReadOnly Property ralph_agent() As String
-            Get
-                Return ResourceManager.GetString("ralph_agent", resourceCulture)
-            End Get
-        End Property
-
-        '''<summary>
         '''  查找类似 agent-protocol.js 的本地化字符串。
         '''</summary>
         Public ReadOnly Property agent_protocol() As String

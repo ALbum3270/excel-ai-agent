@@ -1,6 +1,6 @@
 /**
  * agent-card.js - 统一 Agent UI 组件
- * 合并 ralph-agent.js + ralph-loop.js 为单一 AgentCard
+ * 统一展示 Agent 计划、执行步骤、审批和执行解释
  * 支持 ReAct 循环展示：Think → Action → Observation
  */
 

@@ -1109,20 +1109,22 @@ Public Class SmartFormattingOrchestrator
 
         For Each tag In targetTags
             ' ---- 字号 ----
-            If Regex.IsMatch(command, "(大|增大|加大|放大).{0,6}(点|一些|一点|字号|字体)") OrElse
+            Dim increaseMatch = Regex.Match(command, "(大|增大|加大|放大|调大)\s*([一二两三四五六七八九十\d]+)?\s*(号|磅|pt|点|一些|一点|字号|字体)?")
+            If increaseMatch.Success OrElse
                (isRepeat AndAlso Regex.IsMatch(command, "大.{0,3}(点|一些)")) Then
-                tag.Font.FontSize = Math.Min(tag.Font.FontSize + 1, 72)
+                tag.Font.FontSize = Math.Min(tag.Font.FontSize + ParseFontDeltaAmount(increaseMatch.Groups(2).Value), 72)
             End If
 
-            If Regex.IsMatch(command, "(小|减小|缩小|调小).{0,6}(点|一些|一点|字号|字体)") OrElse
+            Dim decreaseMatch = Regex.Match(command, "(小|减小|缩小|调小)\s*([一二两三四五六七八九十\d]+)?\s*(号|磅|pt|点|一些|一点|字号|字体)?")
+            If decreaseMatch.Success OrElse
                (isRepeat AndAlso Regex.IsMatch(command, "小.{0,3}(点|一些)")) Then
-                tag.Font.FontSize = Math.Max(tag.Font.FontSize - 1, 8)
+                tag.Font.FontSize = Math.Max(tag.Font.FontSize - ParseFontDeltaAmount(decreaseMatch.Groups(2).Value), 8)
             End If
 
             ' 直接指定字号
-            Dim sizeMatch = Regex.Match(command, "(\d+)\s*(pt|磅|号)")
+            Dim sizeMatch = Regex.Match(command, "(设为|设置为|改为|改成|统一为).{0,8}(\d+)\s*(pt|磅|点)")
             If sizeMatch.Success Then
-                tag.Font.FontSize = Double.Parse(sizeMatch.Groups(1).Value)
+                tag.Font.FontSize = Double.Parse(sizeMatch.Groups(2).Value)
             End If
 
             ' ---- 颜色 ----
@@ -1297,10 +1299,31 @@ Public Class SmartFormattingOrchestrator
         Return False
     End Function
 
+    Private Shared Function ParseFontDeltaAmount(value As String) As Double
+        If String.IsNullOrWhiteSpace(value) Then Return 1
+
+        Dim numeric As Double
+        If Double.TryParse(value, numeric) Then Return Math.Max(0.5, numeric)
+
+        Select Case value.Trim()
+            Case "一" : Return 1
+            Case "二", "两" : Return 2
+            Case "三" : Return 3
+            Case "四" : Return 4
+            Case "五" : Return 5
+            Case "六" : Return 6
+            Case "七" : Return 7
+            Case "八" : Return 8
+            Case "九" : Return 9
+            Case "十" : Return 10
+            Case Else : Return 1
+        End Select
+    End Function
+
     ''' <summary>判断消息是否表达微调意图</summary>
     Private Shared Function HasTweakIntent(message As String) As Boolean
         Return Regex.IsMatch(message, "(再|更|调|改|设|换).{0,4}(大|小|颜色|字体|行距|对齐|加粗|缩进)") OrElse
-               Regex.IsMatch(message, "(大|小|颜色|字体|行距|对齐|加粗|缩进).{0,4}(点|一些|一点)") OrElse
+               Regex.IsMatch(message, "(大|小|加大|增大|减小|缩小|颜色|字体|字号|行距|对齐|加粗|缩进).{0,6}(号|磅|pt|点|一些|一点)") OrElse
                ContainsAny(message, {"红色", "蓝色", "黑色", "居中", "加粗"})
     End Function
 

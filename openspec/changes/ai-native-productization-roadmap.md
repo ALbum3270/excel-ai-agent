@@ -240,28 +240,39 @@ git diff --check
 - 2026-07-08：Word `DataAnalysis` 改为自动启动 Agent；保留已有网页采集、校对专注模式、排版、翻译、续写和模板能力。
 - 2026-07-08：`rg` 检查三端 `Ribbon1.vb` 不再包含“正在开发中 / 暂未实现 / 未实现 / 暂不支持”占位文案；`node --check` 检查 `message-sender.js` 与 `agent-card.js` 通过；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过；`git diff --check` 通过，仅有 LF/CRLF 提示。
 - 2026-07-08：补齐 `ExcelDirectOperationService` 中 `DataAnalysis(type=pivot/groupby/ranking)` 基础实现，透视表复用 Excel 原生 PivotTable，分组汇总和排名分析生成可读结果区域。
+- 2026-07-09：Word 排版新增 `FormattingIntentCompiler`，将“字体统一加大2号”等自然语言格式命令编译为结构化 `FormattingIntentPlan`，并由 `SmartFormatter` 在 WordAi 内执行，支持全文/选区/当前段落/标题/正文范围。
+- 2026-07-09：Word 排版新增 `FormattingExecutionResult`，Chat 回显执行摘要、应用范围数量和操作数量；旧 intent 路由改为计划化排版流程，无选区时优先尝试当前文档直接格式计划，不再直接要求用户人工选中。
+- 2026-07-09：Word 校对新增 `ProofreadIntentCompiler`，将“校对全文 / 只检查标点 / 自动修正明显错别字”等命令编译为 `ProofreadIntentPlan`；`ExecuteProofreadAsync` 支持全文、选区、当前段落范围，并把校对计划注入 Prompt。
+- 2026-07-09：修复 `SmartFormattingOrchestrator` 中“加大2号”被误判为绝对 `2pt` 的微调解析问题；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过。
 
 ## 阶段 9：清理无用 VB / JS / CSS
 
-状态：`[ ]`
+状态：`[x]`
 
 目标：瘦身、降复杂度、减少维护负担。
 
 执行方式：
 
-- [ ] 生成 VB 候选清单：未引用类、旧 Chat、旧 Agent、重复服务。
-- [ ] 生成 JS 候选清单：未被 HTML 引用、未被 `window.*` 暴露、未被 VB 调用的函数。
-- [ ] 生成 CSS 候选清单：未被 HTML/JS 使用的 class 和旧样式。
-- [ ] 分批删除候选项，每批删除后立即构建和检查。
-- [ ] 删除后更新本文件验证记录。
+- [x] 生成 VB 候选清单：未引用类、旧 Chat、旧 Agent、重复服务。
+- [x] 生成 JS 候选清单：未被 HTML 引用、未被 `window.*` 暴露、未被 VB 调用的函数。
+- [x] 生成 CSS 候选清单：未被 HTML/JS 使用的 class 和旧样式。
+- [x] 分批删除候选项，每批删除后立即构建和检查。
+- [x] 删除后更新本文件验证记录。
 
 验收标准：
 
-- [ ] 每次删除都有调用证据。
-- [ ] 删除后完整 Rebuild 通过。
-- [ ] 前端主要页面无脚本错误。
+- [x] 每次删除都有调用证据。
+- [x] 删除后完整 Rebuild 通过。
+- [x] 前端主要页面无脚本错误。
 
 验证记录：
 
 - 2026-07-08：生成 CSS 候选清单后删除旧 `intent-preview.js` 对应的孤立 CSS：`.intent-preview-*`、`.intent-btn-*`、`intentSlideIn/intentSpin`、旧 `.execution-step` 图标样式等。
 - 2026-07-08：`rg` 检查 `intent-preview`、`intent-btn`、`intentSlideIn`、`intentSpin` 不再出现在运行资源中；`node --check` 检查 `message-sender.js` 与 `agent-card.js` 通过；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过；`git diff --check` 通过，仅有 LF/CRLF 提示。
+- 2026-07-09：生成 VB 候选清单并小批删除 `WordAi.Services.SmartFormatter` 中被 `FormattingIntentCompiler` 替代的旧解析函数：`ResolveTargetRange`、`ApplyFontSizeCommand`、`ParseFontSizeDelta`、`ParseAbsoluteFontSize`、`ApplyFontFamilyCommand`、`ApplyBasicStyleCommand`、`ApplyParagraphCommand`、旧 `ParseAmount`、旧 `NamedFontSizeToPoint`；`rg` 复查候选函数不再存在。
+- 2026-07-09：本批只修改 VB 和 roadmap，未修改 JS，跳过 `node --check`；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过。
+- 2026-07-09：生成 JS 候选清单并删除旧 `ralph-agent.js`：后端真实调用 `showAgentPlanCard`，统一实现已在 `agent-card.js`；旧文件只剩 HTML 加载、资源注册和自身暴露，会覆盖统一 Agent UI。已同步移除 HTML script、`ResourceExtractor`、`.vbproj`、`.resx` 和 `Resources.Designer.vb` 中的注册。
+- 2026-07-09：生成 CSS 候选清单并删除 `ralph-agent.js` 对应孤立样式：`.ralph-agent-container`、`.ralph-agent-dialog`；`rg` 复查 `ralph-agent`、`ralph_agent`、`ralphAgentState`、`.ralph-agent-*` 不再出现在运行资源中；`node --check .\ShareRibbon\Resources\js\agent-card.js` 通过；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过。
+- 2026-07-09：删除 `ralph-agent.js` 遗留的孤立 Agent 对话框 CSS：`.agent-dialog-overlay`、`.agent-dialog-content`、`.agent-dialog-header`、`.agent-dialog-close`、`.agent-dialog-body`、`.agent-dialog-desc`、`.agent-request-input`、`.agent-dialog-actions` 等；`rg` 复查这些 class 仅有定义、无 HTML/JS/VB 使用。
+- 2026-07-09：删除无引用备份文件 `ShareRibbon/ShareRibbon.vbproj.bak`、`OfficeAgent/OfficeAgent.vdproj.bak`；未修改真实 `.vdproj`。`rg --files` 复查 `.bak/.old/.orig`、`intent-preview`、`ralph-agent` 不再存在；主 HTML 引用覆盖当前 `Resources\js` 下全部运行 JS。
+- 2026-07-09：阶段 9 最终验证：`node --check .\ShareRibbon\Resources\js\message-sender.js` 通过；`node --check .\ShareRibbon\Resources\js\agent-card.js` 通过；`devenv.com .\AiHelper.sln /Rebuild Debug` 通过，结果：4 成功，0 失败，0 跳过；`git diff --check` 通过，仅有 LF/CRLF 提示。

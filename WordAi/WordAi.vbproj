@@ -304,6 +304,8 @@
     </Compile>
     <Compile Include="Context\WordContextProvider.vb" />
     <Compile Include="Services\ContentLocator.vb" />
+    <Compile Include="Services\FormattingIntentCompiler.vb" />
+    <Compile Include="Services\ProofreadIntentCompiler.vb" />
     <Compile Include="Services\SmartFormatter.vb" />
     <Compile Include="Services\ParagraphService.vb" />
     <Compile Include="Services\Reformat\WordTemplateParser.vb" />

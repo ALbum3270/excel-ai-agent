@@ -13,11 +13,25 @@ Namespace Services
 
         Private ReadOnly _app As Word.Application
         Private ReadOnly _locator As ContentLocator
+        Private _lastPlan As FormattingIntentPlan
+        Private _lastResult As FormattingExecutionResult
 
         Public Sub New(app As Word.Application)
             _app = app
             _locator = New ContentLocator(app)
         End Sub
+
+        Public ReadOnly Property LastPlan As FormattingIntentPlan
+            Get
+                Return _lastPlan
+            End Get
+        End Property
+
+        Public ReadOnly Property LastResult As FormattingExecutionResult
+            Get
+                Return _lastResult
+            End Get
+        End Property
 
         ''' <summary>
         ''' 根据查询设置格式
@@ -211,6 +225,246 @@ Namespace Services
                 Debug.WriteLine($"[SmartFormatter] ApplyFormatToSelection 失败: {ex.Message}")
                 Return False
             End Try
+        End Function
+
+        ''' <summary>
+        ''' 判断是否是可直接执行的 Word 格式命令。
+        ''' </summary>
+        Public Shared Function LooksLikeDirectFormattingCommand(message As String) As Boolean
+            Return FormattingIntentCompiler.LooksLikeDirectFormattingCommand(message)
+        End Function
+
+        ''' <summary>
+        ''' 直接执行自然语言格式命令，如“字体统一加大2号”。
+        ''' </summary>
+        Public Function ApplyNaturalLanguageFormat(command As String) As Boolean
+            Dim result = ApplyNaturalLanguageFormatDetailed(command)
+            Return result IsNot Nothing AndAlso result.Success
+        End Function
+
+        ''' <summary>
+        ''' 直接执行自然语言格式命令，并返回结构化执行结果。
+        ''' </summary>
+        Public Function ApplyNaturalLanguageFormatDetailed(command As String) As FormattingExecutionResult
+            Dim result As New FormattingExecutionResult()
+            _lastResult = result
+
+            If String.IsNullOrWhiteSpace(command) Then
+                result.ErrorMessage = "格式指令为空"
+                Return result
+            End If
+
+            Dim compiler As New FormattingIntentCompiler()
+            Dim plan = compiler.Compile(command, HasUsableSelection())
+            _lastPlan = plan
+            result.Plan = plan
+            If plan Is Nothing OrElse Not plan.HasOperations Then
+                result.ErrorMessage = "未识别到可执行格式操作"
+                Return result
+            End If
+
+            Dim undoStarted As Boolean = False
+            Try
+                Try
+                    If _app.UndoRecord IsNot Nothing Then
+                        _app.UndoRecord.StartCustomRecord("AI格式调整")
+                        undoStarted = True
+                    End If
+                Catch ex As Exception
+                    Debug.WriteLine($"[SmartFormatter] UndoRecord start failed: {ex.Message}")
+                End Try
+
+                result = ApplyPlanDetailed(plan)
+                _lastResult = result
+
+                If result.Success Then
+                    Debug.WriteLine($"[SmartFormatter] 已执行格式计划: {plan.ToHumanReadableSummary()}")
+                Else
+                    Debug.WriteLine($"[SmartFormatter] 格式计划无可应用目标: {command}")
+                End If
+
+                Return result
+            Catch ex As Exception
+                Debug.WriteLine($"[SmartFormatter] ApplyNaturalLanguageFormat 失败: {ex.Message}")
+                result.Success = False
+                result.ErrorMessage = ex.Message
+                _lastResult = result
+                Return result
+            Finally
+                If undoStarted Then
+                    Try
+                        _app.UndoRecord.EndCustomRecord()
+                    Catch ex As Exception
+                        Debug.WriteLine($"[SmartFormatter] UndoRecord end failed: {ex.Message}")
+                    End Try
+                End If
+            End Try
+        End Function
+
+        Private Function HasUsableSelection() As Boolean
+            Try
+                Dim sel = _app.Selection
+                If sel Is Nothing OrElse sel.Range Is Nothing Then Return False
+                Dim selectedText = If(sel.Range.Text, "").Replace(vbCr, "").Replace(vbLf, "").Replace(ChrW(7), "").Trim()
+                Return selectedText.Length > 0
+            Catch
+                Return False
+            End Try
+        End Function
+
+        Private Function ApplyPlan(plan As FormattingIntentPlan) As Boolean
+            Dim result = ApplyPlanDetailed(plan)
+            Return result IsNot Nothing AndAlso result.Success
+        End Function
+
+        Private Function ApplyPlanDetailed(plan As FormattingIntentPlan) As FormattingExecutionResult
+            Dim result As New FormattingExecutionResult With {
+                .Plan = plan
+            }
+
+            Dim ranges = ResolveTargetRanges(plan.Scope)
+            If ranges Is Nothing OrElse ranges.Count = 0 Then
+                result.ErrorMessage = "没有解析到目标范围"
+                Return result
+            End If
+
+            Dim changed As Boolean = False
+            For Each rng In ranges
+                If rng Is Nothing Then Continue For
+                Dim rangeChanged As Boolean = False
+                For Each op In plan.Operations
+                    If ApplyOperationToRange(rng, op) Then
+                        rangeChanged = True
+                        result.AppliedOperationCount += 1
+                    End If
+                Next
+                If rangeChanged Then result.AppliedRangeCount += 1
+                changed = rangeChanged OrElse changed
+            Next
+            result.Success = changed
+            If Not changed Then result.ErrorMessage = "目标范围存在，但没有操作被成功应用"
+            Return result
+        End Function
+
+        Private Function ResolveTargetRanges(scope As FormattingTargetScope) As List(Of Word.Range)
+            Dim result As New List(Of Word.Range)()
+            Dim doc = _app.ActiveDocument
+            If doc Is Nothing Then Return result
+
+            Select Case scope
+                Case FormattingTargetScope.Selection
+                    If HasUsableSelection() Then result.Add(_app.Selection.Range)
+                Case FormattingTargetScope.CurrentParagraph
+                    If _app.Selection IsNot Nothing AndAlso _app.Selection.Paragraphs.Count > 0 Then
+                        result.Add(_app.Selection.Paragraphs(1).Range)
+                    End If
+                Case FormattingTargetScope.Headings
+                    For Each para As Word.Paragraph In doc.Paragraphs
+                        If IsHeadingParagraph(para) Then result.Add(para.Range)
+                    Next
+                Case FormattingTargetScope.Body
+                    For Each para As Word.Paragraph In doc.Paragraphs
+                        If Not IsHeadingParagraph(para) Then result.Add(para.Range)
+                    Next
+                Case Else
+                    result.Add(doc.Content)
+            End Select
+
+            If result.Count = 0 Then result.Add(doc.Content)
+            Return result
+        End Function
+
+        Private Function IsHeadingParagraph(para As Word.Paragraph) As Boolean
+            Try
+                If para.OutlineLevel <> Word.WdOutlineLevel.wdOutlineLevelBodyText Then Return True
+                Dim styleName = para.Style?.NameLocal?.ToString()
+                If Not String.IsNullOrWhiteSpace(styleName) AndAlso
+                   (styleName.Contains("标题") OrElse styleName.IndexOf("Heading", StringComparison.OrdinalIgnoreCase) >= 0) Then
+                    Return True
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"[SmartFormatter] IsHeadingParagraph failed: {ex.Message}")
+            End Try
+            Return False
+        End Function
+
+        Private Function ApplyOperationToRange(targetRange As Word.Range, op As FormattingOperation) As Boolean
+            Select Case op.Kind
+                Case FormattingOperationKind.FontSizeDelta
+                    ApplyFontSizeDelta(targetRange, op.NumericValue)
+                Case FormattingOperationKind.FontSizeAbsolute
+                    targetRange.Font.Size = CSng(op.NumericValue)
+                Case FormattingOperationKind.FontFamily
+                    targetRange.Font.Name = op.TextValue
+                    targetRange.Font.NameFarEast = op.TextValue
+                Case FormattingOperationKind.Bold
+                    targetRange.Font.Bold = If(op.BooleanValue, -1, 0)
+                Case FormattingOperationKind.Italic
+                    targetRange.Font.Italic = If(op.BooleanValue, -1, 0)
+                Case FormattingOperationKind.Underline
+                    targetRange.Font.Underline = Word.WdUnderline.wdUnderlineSingle
+                Case FormattingOperationKind.FontColor
+                    ApplyFontColor(targetRange, op.TextValue)
+                Case FormattingOperationKind.Alignment
+                    ApplyAlignment(targetRange, op.TextValue)
+                Case FormattingOperationKind.LineSpacing
+                    targetRange.ParagraphFormat.LineSpacingRule = Word.WdLineSpacing.wdLineSpaceMultiple
+                    targetRange.ParagraphFormat.LineSpacing = CSng(12 * op.NumericValue)
+                Case FormattingOperationKind.FirstLineIndent
+                    targetRange.ParagraphFormat.FirstLineIndent = CSng(op.NumericValue * targetRange.Font.Size)
+                Case Else
+                    Return False
+            End Select
+            Return True
+        End Function
+
+        Private Sub ApplyFontColor(targetRange As Word.Range, colorName As String)
+            Select Case If(colorName, "").ToLowerInvariant()
+                Case "red"
+                    targetRange.Font.Color = Word.WdColor.wdColorRed
+                Case "blue"
+                    targetRange.Font.Color = Word.WdColor.wdColorBlue
+                Case "green"
+                    targetRange.Font.Color = Word.WdColor.wdColorGreen
+                Case Else
+                    targetRange.Font.Color = Word.WdColor.wdColorBlack
+            End Select
+        End Sub
+
+        Private Sub ApplyAlignment(targetRange As Word.Range, alignment As String)
+            Select Case If(alignment, "").ToLowerInvariant()
+                Case "center"
+                    targetRange.ParagraphFormat.Alignment = Word.WdParagraphAlignment.wdAlignParagraphCenter
+                Case "right"
+                    targetRange.ParagraphFormat.Alignment = Word.WdParagraphAlignment.wdAlignParagraphRight
+                Case "justify"
+                    targetRange.ParagraphFormat.Alignment = Word.WdParagraphAlignment.wdAlignParagraphJustify
+                Case Else
+                    targetRange.ParagraphFormat.Alignment = Word.WdParagraphAlignment.wdAlignParagraphLeft
+            End Select
+        End Sub
+
+        Private Sub ApplyFontSizeDelta(targetRange As Word.Range, delta As Double)
+            Try
+                If targetRange.Paragraphs IsNot Nothing AndAlso targetRange.Paragraphs.Count > 0 Then
+                    For Each para As Word.Paragraph In targetRange.Paragraphs
+                        Dim rng = para.Range
+                        Dim current = NormalizeFontSize(rng.Font.Size)
+                        rng.Font.Size = CSng(Math.Max(8, Math.Min(72, current + delta)))
+                    Next
+                Else
+                    Dim current = NormalizeFontSize(targetRange.Font.Size)
+                    targetRange.Font.Size = CSng(Math.Max(8, Math.Min(72, current + delta)))
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"[SmartFormatter] ApplyFontSizeDelta 失败: {ex.Message}")
+                Throw
+            End Try
+        End Sub
+
+        Private Function NormalizeFontSize(value As Single) As Double
+            If value > 0 AndAlso value < 200 Then Return value
+            Return 12
         End Function
 
     End Class

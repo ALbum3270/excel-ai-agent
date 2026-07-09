@@ -817,6 +817,18 @@ Public Class ChatControl
         End If
         Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] question='{question}', IsExplicit={IsExplicitFormattingRequest(question)}")
 
+        If Services.ProofreadIntentCompiler.LooksLikeProofreadCommand(question) Then
+            Debug.WriteLine("[DEBUG WordAi.HandleSendMessage] routing to HandleProofreadCommand")
+            HandleProofreadCommand(question, jsonDoc)
+            Return
+        End If
+
+        If Services.SmartFormatter.LooksLikeDirectFormattingCommand(question) Then
+            Debug.WriteLine("[DEBUG WordAi.HandleSendMessage] routing to HandleDirectFormattingCommand")
+            HandleDirectFormattingCommand(question, jsonDoc)
+            Return
+        End If
+
         ' 仅拦截明确的排版指令（严格匹配），避免误截日常对话
         If Not String.IsNullOrEmpty(question) AndAlso IsExplicitFormattingRequest(question) Then
             Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] routing to HandleChatDrivenReformat")
@@ -829,6 +841,148 @@ Public Class ChatControl
         Debug.WriteLine($"[DEBUG WordAi.HandleSendMessage] routing to MyBase.HandleSendMessage")
         MyBase.HandleSendMessage(jsonDoc)
     End Sub
+
+    Private Async Sub HandleDirectFormattingCommand(userMessage As String, originalJsonDoc As JObject)
+        Try
+            Dim applied = Await ExecuteDirectFormattingCommandAsync(userMessage, True)
+            If Not applied Then
+                If originalJsonDoc IsNot Nothing Then
+                    MyBase.HandleSendMessage(originalJsonDoc)
+                Else
+                    Await Send(userMessage, "", True, "")
+                End If
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"HandleDirectFormattingCommand error: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"格式调整失败: {ex.Message}")
+            Try
+                If originalJsonDoc IsNot Nothing Then
+                    MyBase.HandleSendMessage(originalJsonDoc)
+                Else
+                    SendChatMessage(userMessage)
+                End If
+            Catch fallbackEx As Exception
+                Debug.WriteLine($"HandleDirectFormattingCommand fallback error: {fallbackEx.Message}")
+            End Try
+        End Try
+    End Sub
+
+    Private Async Function ExecuteDirectFormattingCommandAsync(userMessage As String,
+                                                               showUserMessage As Boolean) As Task(Of Boolean)
+        Try
+            If showUserMessage Then
+                Dim userMsgUuid = Guid.NewGuid().ToString()
+                Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
+                Await ExecuteJavaScriptAsyncJS($"document.getElementById('content-{userMsgUuid}').innerHTML = '<p>{EscapeHtmlForInline(userMessage)}</p>';")
+            End If
+
+            Dim formatter As New Services.SmartFormatter(Globals.ThisAddIn.Application)
+            Dim result = formatter.ApplyNaturalLanguageFormatDetailed(userMessage)
+
+            If result Is Nothing OrElse Not result.Success Then
+                Dim reason = If(result Is Nothing, "未生成执行结果", result.ToHumanReadableSummary())
+                Debug.WriteLine($"[Word] 直接格式调整未执行: {reason}")
+                Return False
+            End If
+
+            Dim responseUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('AI排版助手', formatDateTime(new Date()), '{responseUuid}');")
+            Dim escapedSummary = result.ToHumanReadableSummary().Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
+            Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}','已应用格式调整：{escapedSummary}');")
+            GlobalStatusStrip.ShowSuccess("格式调整已应用")
+            Return True
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteDirectFormattingCommandAsync error: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"格式调整失败: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    Private Async Function SendWithIntentPromptAsync(message As String, intent As IntentResult) As Task
+        Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
+        Await Send(message, optimizedPrompt, True, "")
+    End Function
+
+    Private Async Function RouteProofreadIntentAsync(message As String, intent As IntentResult) As Task
+        Dim fallbackNeeded As Boolean = False
+        Try
+            Dim compiler As New Services.ProofreadIntentCompiler()
+            Dim plan = compiler.Compile(If(String.IsNullOrWhiteSpace(message), "校对", message),
+                                        HasUsableProofreadSelection(Globals.ThisAddIn.Application))
+            Await ExecuteProofreadAsync(plan, message)
+        Catch ex As Exception
+            Debug.WriteLine($"[Word] 校对路由失败: {ex.Message}")
+            fallbackNeeded = True
+        End Try
+
+        If fallbackNeeded Then
+            Await SendWithIntentPromptAsync(message, intent)
+        End If
+    End Function
+
+    Private Async Function RouteFormattingIntentAsync(message As String, intent As IntentResult) As Task
+        Dim fallbackNeeded As Boolean = False
+        Dim directAttempted As Boolean = False
+        Try
+            If Services.SmartFormatter.LooksLikeDirectFormattingCommand(message) Then
+                directAttempted = True
+                Dim applied = Await ExecuteDirectFormattingCommandAsync(message, True)
+                If applied Then Return
+            End If
+
+            Dim wordApp = Globals.ThisAddIn.Application
+            Dim hasSelection As Boolean = False
+            Try
+                If wordApp IsNot Nothing AndAlso wordApp.Selection IsNot Nothing AndAlso wordApp.Selection.Range IsNot Nothing Then
+                    hasSelection = Not String.IsNullOrWhiteSpace(wordApp.Selection.Range.Text)
+                End If
+            Catch
+            End Try
+
+            If hasSelection Then
+                Await TriggerSmartReformat()
+            Else
+                Dim applied = Await ExecuteDirectFormattingCommandAsync(message, Not directAttempted)
+                If Not applied Then
+                    GlobalStatusStrip.ShowWarning("未能自动生成可执行排版计划，已转为普通对话。")
+                    fallbackNeeded = True
+                End If
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[Word] 排版路由失败: {ex.Message}")
+            fallbackNeeded = True
+        End Try
+
+        If fallbackNeeded Then
+            Await SendWithIntentPromptAsync(message, intent)
+        End If
+    End Function
+
+    Private Async Sub HandleProofreadCommand(userMessage As String, originalJsonDoc As JObject)
+        Try
+            Dim userMsgUuid = Guid.NewGuid().ToString()
+            Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
+            Await ExecuteJavaScriptAsyncJS($"document.getElementById('content-{userMsgUuid}').innerHTML = '<p>{EscapeHtmlForInline(userMessage)}</p>';")
+
+            Dim wordApp = Globals.ThisAddIn.Application
+            Dim compiler As New Services.ProofreadIntentCompiler()
+            Dim plan = compiler.Compile(userMessage, HasUsableProofreadSelection(wordApp))
+            Await ExecuteProofreadAsync(plan, userMessage)
+        Catch ex As Exception
+            Debug.WriteLine($"HandleProofreadCommand error: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"校对启动失败: {ex.Message}")
+            Try
+                MyBase.HandleSendMessage(originalJsonDoc)
+            Catch fallbackEx As Exception
+                Debug.WriteLine($"HandleProofreadCommand fallback error: {fallbackEx.Message}")
+            End Try
+        End Try
+    End Sub
+
+    Private Function EscapeHtmlForInline(value As String) As String
+        If value Is Nothing Then Return ""
+        Return WebUtility.HtmlEncode(value).Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "<br>")
+    End Function
 
     ''' <summary>
     ''' 判断是否为明确的排版指令（比IsFormattingRelated更严格）
@@ -1054,15 +1208,20 @@ Public Class ChatControl
     ''' <summary>
     ''' 执行校对分析（由Ribbon按钮调用）
     ''' </summary>
-    Public Async Function ExecuteProofreadAsync() As Task
+    Public Async Function ExecuteProofreadAsync(Optional plan As Services.ProofreadIntentPlan = Nothing,
+                                                 Optional userRequest As String = "") As Task
         Try
             Dim wordApp = Globals.ThisAddIn.Application
             If wordApp Is Nothing Then Return
 
-            ' 获取选中内容
-            Dim selRange = wordApp.Selection.Range
-            If selRange Is Nothing OrElse String.IsNullOrWhiteSpace(selRange.Text) Then
-                GlobalStatusStrip.ShowWarning("请先选中需要校对的文本内容。")
+            If plan Is Nothing Then
+                Dim compiler As New Services.ProofreadIntentCompiler()
+                plan = compiler.Compile(If(String.IsNullOrWhiteSpace(userRequest), "校对", userRequest), HasUsableProofreadSelection(wordApp))
+            End If
+
+            Dim selRange = ResolveProofreadRange(wordApp, plan)
+            If selRange Is Nothing OrElse String.IsNullOrWhiteSpace(If(selRange.Text, "")) Then
+                GlobalStatusStrip.ShowWarning("当前文档没有可校对的文本内容。")
                 Return
             End If
 
@@ -1070,6 +1229,8 @@ Public Class ChatControl
             Dim paragraphs As New List(Of String)()
             Dim sb As New StringBuilder()
             sb.AppendLine("以下是需要校对的内容（按段落编号）：")
+            sb.AppendLine("校对计划：" & plan.ToHumanReadableSummary())
+            sb.AppendLine()
 
             For Each p In selRange.Paragraphs
                 Dim paraText As String = If(p.Range.Text IsNot Nothing, p.Range.Text.ToString().TrimEnd(vbCr, vbLf), String.Empty)
@@ -1103,10 +1264,11 @@ Public Class ChatControl
 
             ' 显示加载中提示
             Await ExecuteJavaScriptAsyncJS("showProofreadModeIndicator(); showProofreadLoading();")
-            GlobalStatusStrip.ShowInfo("正在校对，请稍候...")
+            GlobalStatusStrip.ShowInfo("正在校对，请稍候... " & plan.ToHumanReadableSummary())
 
             ' 构建校对提示词
-            Dim systemPrompt = ProofreadPromptBuilder.BuildFullDocumentPrompt(paragraphs)
+            Dim systemPrompt = ProofreadPromptBuilder.BuildFullDocumentPrompt(paragraphs) &
+                vbCrLf & BuildProofreadPlanInstruction(plan)
 
             ' 发送校对请求
             Await Send(sb.ToString(), systemPrompt, False, "proofread")
@@ -1115,6 +1277,56 @@ Public Class ChatControl
             Debug.WriteLine($"ExecuteProofreadAsync 出错: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"校对失败: {ex.Message}")
         End Try
+    End Function
+
+    Private Function HasUsableProofreadSelection(wordApp As Object) As Boolean
+        Try
+            If wordApp Is Nothing OrElse wordApp.Selection Is Nothing OrElse wordApp.Selection.Range Is Nothing Then Return False
+            Dim text = If(wordApp.Selection.Range.Text, "").Replace(vbCr, "").Replace(vbLf, "").Replace(ChrW(7), "").Trim()
+            Return text.Length > 0
+        Catch
+            Return False
+        End Try
+    End Function
+
+    Private Function ResolveProofreadRange(wordApp As Object, plan As Services.ProofreadIntentPlan) As Microsoft.Office.Interop.Word.Range
+        Try
+            If wordApp Is Nothing OrElse wordApp.ActiveDocument Is Nothing Then Return Nothing
+
+            Select Case plan.Scope
+                Case Services.ProofreadTargetScope.Selection
+                    If HasUsableProofreadSelection(wordApp) Then Return wordApp.Selection.Range
+                    Return wordApp.ActiveDocument.Content
+
+                Case Services.ProofreadTargetScope.CurrentParagraph
+                    If wordApp.Selection IsNot Nothing AndAlso wordApp.Selection.Paragraphs.Count > 0 Then
+                        Return wordApp.Selection.Paragraphs(1).Range
+                    End If
+                    Return wordApp.ActiveDocument.Content
+
+                Case Services.ProofreadTargetScope.Document
+                    Return wordApp.ActiveDocument.Content
+
+                Case Else
+                    If HasUsableProofreadSelection(wordApp) Then Return wordApp.Selection.Range
+                    Return wordApp.ActiveDocument.Content
+            End Select
+        Catch ex As Exception
+            Debug.WriteLine($"ResolveProofreadRange error: {ex.Message}")
+            Return Nothing
+        End Try
+    End Function
+
+    Private Function BuildProofreadPlanInstruction(plan As Services.ProofreadIntentPlan) As String
+        Dim sb As New StringBuilder()
+        sb.AppendLine()
+        sb.AppendLine("【本次校对计划】")
+        sb.AppendLine(plan.ToHumanReadableSummary())
+        sb.AppendLine("请严格只检查计划中列出的类型；如果计划类型为全部问题，则执行完整校对。")
+        If plan.ApplyMode = Services.ProofreadApplyMode.AutoApplyHighConfidence Then
+            sb.AppendLine("对于高置信、低风险的错别字/标点问题，请在 JSON 中标记 severity=high；其他建议保留为 medium/low 供用户确认。")
+        End If
+        Return sb.ToString()
     End Function
 
     ''' <summary>
@@ -1437,18 +1649,7 @@ Public Class ChatControl
             If intent.OfficeIntent = OfficeIntentType.PROOFREAD Then
                 Debug.WriteLine("[Word] 检测到校对意图，路由到ExecuteProofreadAsync")
                 Task.Run(Async Function()
-                             Dim fallbackNeeded As Boolean = False
-                             Try
-                                 Await ExecuteProofreadAsync()
-                             Catch ex As Exception
-                                 Debug.WriteLine($"[Word] 校对路由失败: {ex.Message}")
-                                 fallbackNeeded = True
-                             End Try
-                             ' 降级到普通聊天（移出Catch块避免BC36943）
-                             If fallbackNeeded Then
-                                 Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
-                                 Await Send(message, optimizedPrompt, True, "")
-                             End If
+                             Await RouteProofreadIntentAsync(message, intent)
                          End Function)
                 Return
             End If
@@ -1456,36 +1657,9 @@ Public Class ChatControl
             ' 拦截排版意图 → 路由到智能排版流程
             If intent.OfficeIntent = OfficeIntentType.FORMAT_STYLE OrElse
                intent.OfficeIntent = OfficeIntentType.TEXT_FORMAT Then
-                Debug.WriteLine("[Word] 检测到排版意图，路由到TriggerSmartReformat")
+                Debug.WriteLine("[Word] 检测到排版意图，路由到计划化排版流程")
                 Task.Run(Async Function()
-                             Dim fallbackNeeded As Boolean = False
-                             Try
-                                 ' 检查是否有选中内容
-                                 Dim wordApp = Globals.ThisAddIn.Application
-                                 Dim hasSelection As Boolean = False
-                                 Try
-                                     If wordApp?.Selection?.Range IsNot Nothing Then
-                                         hasSelection = Not String.IsNullOrWhiteSpace(wordApp.Selection.Range.Text)
-                                     End If
-                                 Catch
-                                 End Try
-
-                                 If hasSelection Then
-                                     Await TriggerSmartReformat()
-                                 Else
-                                     ' 没有选中内容，提示用户并走普通聊天
-                                     GlobalStatusStrip.ShowWarning("请先选中需要排版的文本内容")
-                                     fallbackNeeded = True
-                                 End If
-                             Catch ex As Exception
-                                 Debug.WriteLine($"[Word] 排版路由失败: {ex.Message}")
-                                 fallbackNeeded = True
-                             End Try
-                             ' 降级到普通聊天（移出Catch块避免BC36943）
-                             If fallbackNeeded Then
-                                 Dim optimizedPrompt = IntentService.GetOptimizedSystemPrompt(intent)
-                                 Await Send(message, optimizedPrompt, True, "")
-                             End If
+                             Await RouteFormattingIntentAsync(message, intent)
                          End Function)
                 Return
             End If

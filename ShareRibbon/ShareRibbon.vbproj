@@ -573,7 +573,6 @@
     <None Include="Resources\js\revision-manager.js" />
     <None Include="Resources\js\history-manager.js" />
     <None Include="Resources\js\ralph-loop.js" />
-    <None Include="Resources\js\ralph-agent.js" />
     <None Include="Resources\js\agent-protocol.js" />
     <None Include="Resources\js\agent-card.js" />
     <None Include="Resources\js\autocomplete.js" />

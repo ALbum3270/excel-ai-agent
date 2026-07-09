@@ -2493,12 +2493,7 @@ input:checked + .mcp-toggle-slider:before {
     font-weight: normal;
 }
 
-/* ====== Ralph Agent 样式 ====== */
-
-/* Agent 容器 */
-.ralph-agent-container {
-    border-left: 3px solid #2563eb;
-}
+/* ====== Agent Card 样式 ====== */
 
 .agent-badge {
     display: inline-block;
@@ -2767,103 +2762,6 @@ input:checked + .mcp-toggle-slider:before {
 .agent-status-bar.status-aborted {
     background: #e9ecef;
     color: #6c757d;
-}
-
-/* Agent 对话框 */
-.ralph-agent-dialog {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.agent-dialog-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.5);
-}
-
-.agent-dialog-content {
-    position: relative;
-    background: white;
-    border-radius: 10px;
-    width: 90%;
-    max-width: 450px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.2);
-    overflow: hidden;
-}
-
-.agent-dialog-header {
-    background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
-    color: white;
-    padding: 14px 18px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 500;
-    font-size: 15px;
-}
-
-.agent-icon {
-    font-size: 20px;
-}
-
-.agent-dialog-close {
-    margin-left: auto;
-    background: transparent;
-    border: none;
-    color: white;
-    font-size: 22px;
-    cursor: pointer;
-    opacity: 0.8;
-}
-
-.agent-dialog-close:hover {
-    opacity: 1;
-}
-
-.agent-dialog-body {
-    padding: 18px;
-}
-
-.agent-dialog-desc {
-    font-size: 12px;
-    color: #666;
-    margin: 0 0 14px 0;
-    line-height: 1.5;
-}
-
-.agent-request-input {
-    width: 100%;
-    border: 1px solid #dee2e6;
-    border-radius: 8px;
-    padding: 12px;
-    font-size: 13px;
-    resize: none;
-    box-sizing: border-box;
-    line-height: 1.5;
-}
-
-.agent-request-input:focus {
-    outline: none;
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(108,92,231,0.15);
-}
-
-.agent-dialog-actions {
-    padding: 14px 18px;
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    border-top: 1px solid #eee;
 }
 
 /* 输入框锁定状态 */
