@@ -923,8 +923,8 @@ Public Class ExcelDirectOperationService
                 Return False
             End If
 
-            Dim ws As Worksheet = _excelApp.ActiveSheet
-            Dim source As Range = ws.Range(sourceRange)
+            Dim source As Range = ResolveExcelRange(sourceRange, fallbackToSelection:=True)
+            If source Is Nothing Then Return False
 
             Select Case analysisType?.ToLower()
                 Case "summary"
@@ -965,13 +965,13 @@ Public Class ExcelDirectOperationService
                 Return False
             End If
 
-            Dim ws As Worksheet = _excelApp.ActiveSheet
-            Dim source As Range = ws.Range(sourceRange)
+            Dim source As Range = ResolveExcelRange(sourceRange, fallbackToSelection:=True)
+            If source Is Nothing Then Return False
 
             Select Case operation?.ToLower()
                 Case "transpose"
                     ' 转置数据
-                    Dim target As Range = ws.Range(If(targetRange, "A1"))
+                    Dim target As Range = ResolveTargetRange(source, targetRange, 2)
                     source.Copy()
                     target.PasteSpecial(Paste:=XlPasteType.xlPasteAll, Operation:=XlPasteSpecialOperation.xlPasteSpecialOperationNone, Transpose:=True)
                     _excelApp.CutCopyMode = False
@@ -1012,8 +1012,8 @@ Public Class ExcelDirectOperationService
                 Return False
             End If
 
-            Dim sourceWs As Worksheet = _excelApp.ActiveSheet
-            Dim source As Range = sourceWs.Range(sourceRange)
+            Dim source As Range = ResolveExcelRange(sourceRange, fallbackToSelection:=True)
+            If source Is Nothing Then Return False
 
             ' 创建或获取目标工作表
             Dim targetWs As Worksheet
@@ -1832,14 +1832,8 @@ Public Class ExcelDirectOperationService
     ''' </summary>
     Private Function GenerateSummary(source As Range, targetRange As String) As Boolean
         Try
-            Dim ws As Worksheet = _excelApp.ActiveSheet
             Dim target As Range
-
-            If Not String.IsNullOrEmpty(targetRange) Then
-                target = ws.Range(targetRange)
-            Else
-                target = source.Offset(0, source.Columns.Count + 2)
-            End If
+            target = ResolveTargetRange(source, targetRange, 2)
 
             ' 添加摘要标题
             target.Value = "数据摘要"
@@ -2016,9 +2010,52 @@ Public Class ExcelDirectOperationService
     End Function
 
     Private Function ResolveAnalysisTarget(source As Range, targetRange As String, title As String) As Range
-        Dim ws As Worksheet = source.Worksheet
-        If Not String.IsNullOrWhiteSpace(targetRange) Then Return ws.Range(targetRange)
-        Return source.Offset(0, source.Columns.Count + 2)
+        Return ResolveTargetRange(source, targetRange, 2)
+    End Function
+
+    Private Function ResolveExcelRange(address As String, Optional fallbackToSelection As Boolean = False) As Range
+        Try
+            Dim normalized = If(address, "").Trim()
+            Dim lowered = normalized.Trim("{"c, "}"c).ToLowerInvariant()
+
+            If String.IsNullOrWhiteSpace(normalized) OrElse
+               lowered = "selection" OrElse lowered = "selectedrange" OrElse lowered = "currentselection" Then
+                If fallbackToSelection Then
+                    Dim selectedRange = TryCast(_excelApp.Selection, Range)
+                    If selectedRange IsNot Nothing Then Return selectedRange
+                End If
+            End If
+
+            Dim activeWs As Worksheet = TryCast(_excelApp.ActiveSheet, Worksheet)
+            If lowered = "usedrange" OrElse lowered = "currenttable" Then
+                If activeWs IsNot Nothing Then Return activeWs.UsedRange
+            End If
+
+            If String.IsNullOrWhiteSpace(normalized) Then Return Nothing
+
+            If normalized.Contains("!") Then
+                Dim bangIndex = normalized.LastIndexOf("!"c)
+                Dim sheetName = normalized.Substring(0, bangIndex).Trim().Trim("'"c)
+                Dim cellAddress = normalized.Substring(bangIndex + 1).Trim()
+                Dim sheet As Worksheet = TryCast(_excelApp.Worksheets(sheetName), Worksheet)
+                If sheet IsNot Nothing Then Return sheet.Range(cellAddress)
+            End If
+
+            If activeWs IsNot Nothing Then Return activeWs.Range(normalized)
+        Catch ex As Exception
+            Debug.WriteLine($"ResolveExcelRange 失败: {address}, {ex.Message}")
+        End Try
+
+        Return Nothing
+    End Function
+
+    Private Function ResolveTargetRange(source As Range, targetRange As String, defaultColumnOffset As Integer) As Range
+        If Not String.IsNullOrWhiteSpace(targetRange) Then
+            Dim explicitTarget = ResolveExcelRange(targetRange, fallbackToSelection:=False)
+            If explicitTarget IsNot Nothing Then Return explicitTarget
+        End If
+
+        Return source.Offset(0, source.Columns.Count + defaultColumnOffset)
     End Function
 
     Private Function ResolveHeaderColumn(source As Range, fieldName As String, defaultColumn As Integer) As Integer
@@ -2049,15 +2086,9 @@ Public Class ExcelDirectOperationService
     ''' </summary>
     Private Function MergeColumns(source As Range, targetRange As String, params As JToken) As Boolean
         Try
-            Dim ws As Worksheet = _excelApp.ActiveSheet
             Dim delimiter = If(params("delimiter")?.ToString(), " ")
             Dim target As Range
-
-            If Not String.IsNullOrEmpty(targetRange) Then
-                target = ws.Range(targetRange)
-            Else
-                target = source.Offset(0, source.Columns.Count + 1)
-            End If
+            target = ResolveTargetRange(source, targetRange, 1)
 
             ' 构建CONCAT公式
             For row = 1 To source.Rows.Count
