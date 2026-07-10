@@ -5,6 +5,7 @@ Imports System.IO
 Imports System.Collections.Generic
 Imports System.Linq
 Imports System.Diagnostics
+Imports System.Reflection
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
 
@@ -150,6 +151,27 @@ Public Class SkillsDirectoryService
     End Function
 
     ''' <summary>
+    ''' 获取所有 Skill 搜索根目录。用户目录用于安装个人 Skill，程序集 Skills 目录用于内置 Skill。
+    ''' </summary>
+    Public Shared Function GetSkillsDirectories() As List(Of String)
+        Dim dirs As New List(Of String)()
+        Dim userDir = GetSkillsDirectory()
+        If Not String.IsNullOrWhiteSpace(userDir) Then dirs.Add(userDir)
+
+        Try
+            Dim baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+            If Not String.IsNullOrWhiteSpace(baseDir) Then
+                Dim bundledDir = Path.Combine(baseDir, "Skills")
+                If Not dirs.Any(Function(d) SamePath(d, bundledDir)) Then dirs.Add(bundledDir)
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[SkillsDirectoryService] 获取内置 Skills 目录失败: {ex.Message}")
+        End Try
+
+        Return dirs
+    End Function
+
+    ''' <summary>
     ''' 设置Skills目录路径
     ''' </summary>
     Public Shared Sub SetSkillsDirectory(path As String)
@@ -200,36 +222,9 @@ Public Class SkillsDirectoryService
     Public Shared Sub RefreshSkills()
         _cachedSkills.Clear()
 
-        Dim dir = GetSkillsDirectory()
-        If Not Directory.Exists(dir) Then
-            _lastRefreshTime = DateTime.Now
-            Return
-        End If
-
-        ' 读取所有目录（每个目录是一个Skill）
-        Dim skillDirs = Directory.GetDirectories(dir)
-        For Each skillDir In skillDirs
-            Try
-                Dim skill = ParseSkillDirectory(skillDir, includeDetails:=True)
-                If skill IsNot Nothing Then
-                    _cachedSkills.Add(skill)
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"[SkillsDirectoryService] 解析目录失败: {skillDir}, 错误: {ex.Message}")
-            End Try
-        Next
-
-        ' 也读取根目录下的JSON文件（兼容旧格式）
-        Dim jsonFiles = Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly)
-        For Each file In jsonFiles
-            Try
-                Dim skill = ParseSkillJsonFile(file, includeDetails:=True)
-                If skill IsNot Nothing Then
-                    _cachedSkills.Add(skill)
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"[SkillsDirectoryService] 解析JSON文件失败: {file}, 错误: {ex.Message}")
-            End Try
+        For Each skillsRoot In GetSkillsDirectories()
+            If Not Directory.Exists(skillsRoot) Then Continue For
+            LoadSkillsFromRoot(skillsRoot, includeDetails:=True, target:=_cachedSkills)
         Next
 
         _lastRefreshTime = DateTime.Now
@@ -241,31 +236,44 @@ Public Class SkillsDirectoryService
     Public Shared Sub RefreshSkillCatalog()
         _cachedSkillCatalog.Clear()
 
-        Dim dir = GetSkillsDirectory()
-        If Not Directory.Exists(dir) Then
-            _lastCatalogRefreshTime = DateTime.Now
-            Return
-        End If
-
-        For Each skillDir In Directory.GetDirectories(dir)
-            Try
-                Dim skill = ParseSkillDirectory(skillDir, includeDetails:=False)
-                If skill IsNot Nothing Then _cachedSkillCatalog.Add(skill)
-            Catch ex As Exception
-                Debug.WriteLine($"[SkillsDirectoryService] 解析元数据目录失败: {skillDir}, 错误: {ex.Message}")
-            End Try
-        Next
-
-        For Each file In Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly)
-            Try
-                Dim skill = ParseSkillJsonFile(file, includeDetails:=False)
-                If skill IsNot Nothing Then _cachedSkillCatalog.Add(skill)
-            Catch ex As Exception
-                Debug.WriteLine($"[SkillsDirectoryService] 解析JSON元数据失败: {file}, 错误: {ex.Message}")
-            End Try
+        For Each skillsRoot In GetSkillsDirectories()
+            If Not Directory.Exists(skillsRoot) Then Continue For
+            LoadSkillsFromRoot(skillsRoot, includeDetails:=False, target:=_cachedSkillCatalog)
         Next
 
         _lastCatalogRefreshTime = DateTime.Now
+    End Sub
+
+    Private Shared Sub LoadSkillsFromRoot(rootDir As String, includeDetails As Boolean, target As List(Of SkillFileDefinition))
+        For Each skillDir In Directory.GetDirectories(rootDir)
+            Try
+                Dim skill = ParseSkillDirectory(skillDir, includeDetails)
+                AddOrReplaceSkill(target, skill)
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsDirectoryService] 解析目录失败: {skillDir}, 错误: {ex.Message}")
+            End Try
+        Next
+
+        For Each file In Directory.GetFiles(rootDir, "*.json", SearchOption.TopDirectoryOnly)
+            Try
+                Dim skill = ParseSkillJsonFile(file, includeDetails)
+                AddOrReplaceSkill(target, skill)
+            Catch ex As Exception
+                Debug.WriteLine($"[SkillsDirectoryService] 解析JSON文件失败: {file}, 错误: {ex.Message}")
+            End Try
+        Next
+    End Sub
+
+    Private Shared Sub AddOrReplaceSkill(target As List(Of SkillFileDefinition), skill As SkillFileDefinition)
+        If skill Is Nothing OrElse String.IsNullOrWhiteSpace(skill.Name) Then Return
+
+        Dim existingIndex = target.FindIndex(Function(s) String.Equals(s.Name, skill.Name, StringComparison.OrdinalIgnoreCase))
+        If existingIndex >= 0 Then
+            ' 用户目录先被扫描，内置目录不覆盖同名用户 Skill。
+            Return
+        End If
+
+        target.Add(skill)
     End Sub
 
     ''' <summary>
@@ -330,6 +338,14 @@ Public Class SkillsDirectoryService
             Dim refPath = Path.Combine(dirPath, "reference.md")
             If File.Exists(refPath) Then
                 skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & vbCrLf & File.ReadAllText(refPath)
+            End If
+
+            ' 支持官方 Skills 风格的 references/ 目录，命中后才二次加载。
+            Dim referencesDir = Path.Combine(dirPath, "references")
+            If Directory.Exists(referencesDir) Then
+                For Each refFile In Directory.GetFiles(referencesDir, "*.md", SearchOption.TopDirectoryOnly).OrderBy(Function(p) p)
+                    skill.Content &= vbCrLf & vbCrLf & "---" & vbCrLf & $"# references/{Path.GetFileName(refFile)}" & vbCrLf & vbCrLf & File.ReadAllText(refFile)
+                Next
             End If
 
             ' 尝试读取examples.md
@@ -546,10 +562,8 @@ Public Class SkillsDirectoryService
                         skill.License = value
                     Case "compatibility"
                         skill.Compatibility = value
-                    Case "allowed-tools"
-                        If Not String.IsNullOrWhiteSpace(value) Then
-                            skill.AllowedTools = value.Split({","c}, StringSplitOptions.RemoveEmptyEntries).Select(Function(s) s.Trim()).ToList()
-                        End If
+                    Case "allowed-tools", "allowed_tools", "tools"
+                        skill.AllowedTools = ParseListValue(value)
                     Case "argument-hint"
                         skill.ArgumentHint = value
                     Case "disable-model-invocation"
@@ -569,17 +583,35 @@ Public Class SkillsDirectoryService
                     Case "agent"
                         skill.Agent = value
                     Case "tags"
-                        ' 支持逗号分隔的标签列表
-                        If Not String.IsNullOrWhiteSpace(value) Then
-                            skill.Tags = value.Split({","c}, StringSplitOptions.RemoveEmptyEntries).
-                                Select(Function(s) s.Trim()).Where(Function(s) Not String.IsNullOrWhiteSpace(s)).ToList()
-                        End If
+                        skill.Tags = ParseListValue(value)
+                    Case "application", "app", "app-scope", "app_scope"
+                        skill.Application = value
+                    Case "intent", "intents", "intent-type", "intent_type", "intent_types"
+                        If skill.Metadata Is Nothing Then skill.Metadata = New Dictionary(Of String, Object)()
+                        skill.Metadata("intent_types") = value
                     Case "default-script"
                         skill.DefaultScript = value
                 End Select
             End If
         Next
     End Sub
+
+    Private Shared Function ParseListValue(value As String) As List(Of String)
+        Dim result As New List(Of String)()
+        If String.IsNullOrWhiteSpace(value) Then Return result
+
+        Dim text = value.Trim()
+        If text.StartsWith("[") AndAlso text.EndsWith("]") Then
+            text = text.Substring(1, text.Length - 2)
+        End If
+
+        For Each part In text.Split({","c, "|"c, ";"c, "；"c, "，"c}, StringSplitOptions.RemoveEmptyEntries)
+            Dim item = part.Trim().Trim(""""c).Trim("'"c)
+            If Not String.IsNullOrWhiteSpace(item) Then result.Add(item)
+        Next
+
+        Return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+    End Function
 
     ''' <summary>
     ''' 解析单个Skill JSON文件（兼容旧格式）
@@ -595,6 +627,32 @@ Public Class SkillsDirectoryService
         ' 读取基本信息
         skill.Name = If(jo("name")?.ToString(), Path.GetFileNameWithoutExtension(filePath))
         skill.Description = If(jo("description")?.ToString(), "")
+        skill.Application = If(jo("application")?.ToString(), If(jo("appType")?.ToString(), ""))
+
+        Dim allowedTools = TryCast(jo("allowedTools"), JArray)
+        If allowedTools Is Nothing Then allowedTools = TryCast(jo("requiredTools"), JArray)
+        If allowedTools IsNot Nothing Then
+            skill.AllowedTools = allowedTools.Select(Function(t) t.ToString()).Where(Function(s) Not String.IsNullOrWhiteSpace(s)).ToList()
+        End If
+
+        Dim tags = TryCast(jo("tags"), JArray)
+        If tags IsNot Nothing Then
+            skill.Tags = tags.Select(Function(t) t.ToString()).Where(Function(s) Not String.IsNullOrWhiteSpace(s)).ToList()
+        End If
+
+        Dim triggerPatterns = TryCast(jo("triggerPatterns"), JArray)
+        If triggerPatterns IsNot Nothing Then
+            For Each token In triggerPatterns
+                Dim tag = token.ToString()
+                If Not String.IsNullOrWhiteSpace(tag) AndAlso Not skill.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase) Then
+                    skill.Tags.Add(tag)
+                End If
+            Next
+        End If
+
+        If skill.Metadata Is Nothing Then skill.Metadata = New Dictionary(Of String, Object)()
+        If jo("intent_types") IsNot Nothing Then skill.Metadata("intent_types") = jo("intent_types").ToString()
+        If triggerPatterns IsNot Nothing Then skill.Metadata("triggers") = String.Join(",", skill.Tags)
 
         ' 读取keywords兼容
         Dim keywordsToken = jo("keywords")

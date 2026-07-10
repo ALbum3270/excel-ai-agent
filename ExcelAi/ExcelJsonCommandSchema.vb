@@ -41,6 +41,9 @@ Public Class ExcelJsonCommandSchema
         "DeleteRowCol",
         "HideRowCol",
         "ProtectSheet",
+        "TransformData",
+        "DataAnalysis",
+        "GenerateReport",
         "ExecuteVBA"
     }
 
@@ -116,8 +119,13 @@ Public Class ExcelJsonCommandSchema
 20. HideRowCol: type(必需:row/column), position(必需), unhide(可选,true则取消隐藏)
 21. ProtectSheet: sheetName(可选,默认当前), password(可选), unprotect(可选,true则取消保护)
 
+=== Agent能力 (3个) ===
+22. TransformData: sourceRange(必需), operation(必需:transpose/split/merge), targetRange(可选), delimiter(可选)
+23. DataAnalysis: sourceRange(必需), type(必需:summary/pivot/groupby/ranking), targetRange(可选), groupBy/valueField/aggregate/topN(按需)
+24. GenerateReport: sourceRange(必需), targetSheet(可选), title(可选), includeChart(可选)
+
 === VBA回退 (1个) ===
-22. ExecuteVBA: code(必需,完整的VBA Sub或Function代码)
+25. ExecuteVBA: code(必需,完整的VBA Sub或Function代码)
    - 当以上命令无法满足需求时使用此命令
    - 代码必须是有效的VBA语法
    - 示例: {""command"": ""ExecuteVBA"", ""params"": {""code"": ""Sub Test()\nRange(\""A1\"").Value = \""Hello\""\nEnd Sub""}}
@@ -411,6 +419,12 @@ Public Class ExcelJsonCommandSchema
                     Return ValidateHideRowCol(params, errorMessage)
                 Case "protectsheet"
                     Return ValidateProtectSheet(params, errorMessage)
+                Case "transformdata"
+                    Return ValidateTransformData(params, errorMessage)
+                Case "dataanalysis"
+                    Return ValidateDataAnalysis(params, errorMessage)
+                Case "generatereport"
+                    Return ValidateGenerateReport(params, errorMessage)
                 ' === VBA回退 ===
                 Case "executevba"
                     Return ValidateExecuteVBA(params, errorMessage)
@@ -823,6 +837,48 @@ Public Class ExcelJsonCommandSchema
     ''' </summary>
     Private Shared Function ValidateProtectSheet(params As JToken, ByRef errorMessage As String) As Boolean
         ' ProtectSheet所有参数都是可选的
+        Return True
+    End Function
+
+    Private Shared Function ValidateTransformData(params As JToken, ByRef errorMessage As String) As Boolean
+        Dim sourceRange = params("sourceRange")?.ToString()
+        If String.IsNullOrEmpty(sourceRange) Then
+            errorMessage = "TransformData缺少sourceRange参数"
+            Return False
+        End If
+
+        Dim operation = params("operation")?.ToString()
+        If String.IsNullOrEmpty(operation) Then
+            errorMessage = "TransformData缺少operation参数(transpose/split/merge)"
+            Return False
+        End If
+
+        Return True
+    End Function
+
+    Private Shared Function ValidateDataAnalysis(params As JToken, ByRef errorMessage As String) As Boolean
+        Dim sourceRange = params("sourceRange")?.ToString()
+        If String.IsNullOrEmpty(sourceRange) Then
+            errorMessage = "DataAnalysis缺少sourceRange参数"
+            Return False
+        End If
+
+        Dim analysisType = params("type")?.ToString()
+        If String.IsNullOrEmpty(analysisType) Then
+            errorMessage = "DataAnalysis缺少type参数(summary/pivot/groupby/ranking)"
+            Return False
+        End If
+
+        Return True
+    End Function
+
+    Private Shared Function ValidateGenerateReport(params As JToken, ByRef errorMessage As String) As Boolean
+        Dim sourceRange = params("sourceRange")?.ToString()
+        If String.IsNullOrEmpty(sourceRange) Then
+            errorMessage = "GenerateReport缺少sourceRange参数"
+            Return False
+        End If
+
         Return True
     End Function
 

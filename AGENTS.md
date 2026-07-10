@@ -159,6 +159,49 @@ AiHelper/
 6. repair loop：失败时让 AI 根据观察结果修复计划。
 7. explanation：向用户解释“准备改什么、已经改什么、哪里需要确认”。
 
+## Skills Official Authoring Rules
+
+Skill 是 Office Agent 能力发现和扩展的核心入口，不是关键词路由表。新增 Excel/Word/PowerPoint 智能能力时，应优先落成目录型 Skill，并由 harness/agent 根据当前 Office 上下文选择、加载和执行。
+
+### 目录结构
+
+目录型 Skill 必须使用如下结构：
+
+```text
+ShareRibbon/Skills/<skill-name>/
+├── SKILL.md
+├── references/        # 可选：长说明、领域规则、示例，命中后再加载
+├── scripts/           # 可选：可执行辅助脚本
+└── assets/            # 可选：模板、示例或静态资源
+```
+
+`SKILL.md` 必须以简洁 front matter 开头，至少包含：
+
+```yaml
+---
+name: excel-table-agent
+description: Use when Excel needs table understanding, calculation, charting, cleanup, or multi-step spreadsheet automation.
+---
+```
+
+本项目推荐补充：
+
+```yaml
+application: Excel
+tags: excel, formula, chart
+allowed-tools: ApplyFormula, CreateChart, TransformData
+intent_types: data_analysis, formula, chart
+```
+
+### 运行时要求
+
+- 第一阶段只加载 Skill 目录和 front matter 元数据，用于低成本召回；不要把完整长文档全部塞进系统提示词。
+- 第二阶段只对命中的 Skill 加载 `SKILL.md` 正文、`references/`、`scripts/` 和 `assets/`。
+- `allowed-tools` 是工具边界，agent 只能在声明的工具集合中规划动作；需要新执行能力时先补 Tool schema 和 executor。
+- `application` 用于隔离宿主范围。Excel Skill 不得假设 Word/PPT COM 能力，Word/PPT 同理。
+- Skill 文档描述“何时使用、如何判断、如何计划、如何观察、如何修复”，不要写成用户话术关键词列表。
+- 可确定的兜底规则可以存在，但只能服务于安全、成本和失败恢复，不能替代 Skill 选择与 Agent Loop。
+
 ## Common Agent Mistakes
 
 修改本仓库时重点避免：
