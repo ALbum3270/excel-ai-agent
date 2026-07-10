@@ -14,6 +14,7 @@ Public Class ConfigPromptForm
     ' UI控件
     Private tabControl As TabControl
     Private tabBasic As TabPage
+    Private tabAgentProfile As TabPage
     Private tabAdvanced As TabPage
     Private tabQuickQuestions As TabPage
 
@@ -98,6 +99,11 @@ Public Class ConfigPromptForm
         tabBasic = New TabPage("聊天提示词")
         InitializeBasicTab()
         tabControl.TabPages.Add(tabBasic)
+
+        ' Agent 提示词层配置说明
+        tabAgentProfile = New TabPage("Agent 提示词层")
+        InitializeAgentProfileTab()
+        tabControl.TabPages.Add(tabAgentProfile)
 
         ' 高级配置页
         tabAdvanced = New TabPage("JSON格式约束")
@@ -245,6 +251,151 @@ Public Class ConfigPromptForm
 
         ' 加载数据到列表
         RefreshPromptList()
+    End Sub
+
+    Private Sub InitializeAgentProfileTab()
+        Dim externalPromptDir = Agent.PromptProfileService.GetExternalPromptDirectory()
+        Dim appScenario = GetCurrentPromptScenario()
+
+        Dim lblDesc As New Label() With {
+            .Text = "Agent 会按固定层级组装提示词：系统协议 -> Office上下文 -> 工具/Skill -> 用户偏好 -> 记忆。用户偏好不能覆盖工具协议。",
+            .Location = New Point(10, 10),
+            .Size = New Size(530, 36),
+            .ForeColor = Color.DimGray
+        }
+        tabAgentProfile.Controls.Add(lblDesc)
+
+        Dim lblSelected As New Label() With {
+            .Text = "当前聊天提示词：",
+            .Location = New Point(10, 55),
+            .AutoSize = True,
+            .Font = New Font("Microsoft YaHei UI", 9, FontStyle.Bold)
+        }
+        tabAgentProfile.Controls.Add(lblSelected)
+
+        Dim lblSelectedValue As New Label() With {
+            .Text = If(String.IsNullOrEmpty(ConfigSettings.propmtName), "(未设置)", ConfigSettings.propmtName),
+            .Location = New Point(120, 55),
+            .Size = New Size(420, 20),
+            .ForeColor = Color.FromArgb(70, 130, 180)
+        }
+        tabAgentProfile.Controls.Add(lblSelectedValue)
+
+        Dim lblFolder As New Label() With {
+            .Text = "外接提示词目录：",
+            .Location = New Point(10, 90),
+            .AutoSize = True,
+            .Font = New Font("Microsoft YaHei UI", 9, FontStyle.Bold)
+        }
+        tabAgentProfile.Controls.Add(lblFolder)
+
+        Dim txtFolder As New TextBox() With {
+            .Location = New Point(10, 112),
+            .Size = New Size(430, 25),
+            .Text = externalPromptDir,
+            .ReadOnly = True
+        }
+        tabAgentProfile.Controls.Add(txtFolder)
+
+        Dim btnOpenFolder As New Button() With {
+            .Text = "打开目录",
+            .Location = New Point(450, 110),
+            .Size = New Size(90, 28),
+            .FlatStyle = FlatStyle.Flat
+        }
+        AddHandler btnOpenFolder.Click, Sub(s, e) OpenExternalPromptDirectory(externalPromptDir)
+        tabAgentProfile.Controls.Add(btnOpenFolder)
+
+        Dim lblFiles As New Label() With {
+            .Text = "支持文件：" & Environment.NewLine &
+                    $"common.md / common.txt / common.json：所有 Office 共用" & Environment.NewLine &
+                    $"{appScenario}.md / {appScenario}.txt / {appScenario}.json：当前应用专用" & Environment.NewLine &
+                    $"common\*.md|*.txt|*.json 与 {appScenario}\*.md|*.txt|*.json：可拆分多个领域文件",
+            .Location = New Point(10, 150),
+            .Size = New Size(530, 78),
+            .ForeColor = Color.DimGray
+        }
+        tabAgentProfile.Controls.Add(lblFiles)
+
+        Dim lblJson As New Label() With {
+            .Text = "JSON 文件可选字段：enabled、application/appType、content/prompt。示例：" & Environment.NewLine &
+                    "{""enabled"":true,""application"":""" & appScenario & """,""content"":""用简洁、可执行、少追问的风格回答。""}",
+            .Location = New Point(10, 235),
+            .Size = New Size(530, 48),
+            .ForeColor = Color.DimGray
+        }
+        tabAgentProfile.Controls.Add(lblJson)
+
+        Dim lblPriority As New Label() With {
+            .Text = "优先级说明：本页的个人风格、外接提示词和用户画像只影响表达风格、业务偏好和领域背景；不会覆盖 Harness、Agent Loop、工具 schema、应用边界与执行协议。",
+            .Location = New Point(10, 295),
+            .Size = New Size(530, 48),
+            .ForeColor = Color.FromArgb(120, 80, 20),
+            .Font = New Font("Microsoft YaHei UI", 9, FontStyle.Italic)
+        }
+        tabAgentProfile.Controls.Add(lblPriority)
+
+        Dim btnCreateExample As New Button() With {
+            .Text = "生成示例 common.md",
+            .Location = New Point(10, 350),
+            .Size = New Size(140, 30),
+            .BackColor = Color.FromArgb(60, 179, 113),
+            .ForeColor = Color.White,
+            .FlatStyle = FlatStyle.Flat
+        }
+        AddHandler btnCreateExample.Click, Sub(s, e) CreateExternalPromptExample(externalPromptDir)
+        tabAgentProfile.Controls.Add(btnCreateExample)
+    End Sub
+
+    Private Function GetCurrentPromptScenario() As String
+        Select Case _applicationInfo.Type
+            Case OfficeApplicationType.Word
+                Return "word"
+            Case OfficeApplicationType.PowerPoint
+                Return "ppt"
+            Case Else
+                Return "excel"
+        End Select
+    End Function
+
+    Private Sub OpenExternalPromptDirectory(folderPath As String)
+        Try
+            If Not Directory.Exists(folderPath) Then
+                Directory.CreateDirectory(folderPath)
+            End If
+            System.Diagnostics.Process.Start(folderPath)
+        Catch ex As Exception
+            GlobalStatusStrip.ShowWarning($"打开目录失败: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub CreateExternalPromptExample(folderPath As String)
+        Try
+            If Not Directory.Exists(folderPath) Then
+                Directory.CreateDirectory(folderPath)
+            End If
+
+            Dim examplePath = Path.Combine(folderPath, "common.md")
+            If File.Exists(examplePath) Then
+                If MessageBox.Show("common.md 已存在，是否覆盖示例内容？", "确认覆盖", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then
+                    Return
+                End If
+            End If
+
+            Dim sb As New StringBuilder()
+            sb.AppendLine("# Office Agent 个人偏好示例")
+            sb.AppendLine()
+            sb.AppendLine("- 回答优先给出可执行结论，减少泛泛解释。")
+            sb.AppendLine("- 用户提出明确 Office 操作时，优先形成计划、预览和执行，不反复询问可观察信息。")
+            sb.AppendLine("- 输出语气保持专业、简洁，必要时解释做了哪些假设。")
+            sb.AppendLine("- 这些偏好不能覆盖工具 schema、应用边界、Agent Loop 和安全约束。")
+
+            File.WriteAllText(examplePath, sb.ToString(), Encoding.UTF8)
+            GlobalStatusStrip.ShowInfo("已生成外接提示词示例 common.md")
+            OpenExternalPromptDirectory(folderPath)
+        Catch ex As Exception
+            GlobalStatusStrip.ShowWarning($"生成示例失败: {ex.Message}")
+        End Try
     End Sub
 
     Private Sub InitializeAdvancedTab()

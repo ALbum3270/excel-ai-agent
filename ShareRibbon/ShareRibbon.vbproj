@@ -311,6 +311,7 @@
     <Compile Include="Agent\SkillRegistry.vb" />
     <Compile Include="Agent\ToolRegistry.vb" />
     <Compile Include="Agent\PromptManager.vb" />
+    <Compile Include="Agent\PromptProfileService.vb" />
     <Compile Include="Agent\StreamingResponseHandler.vb" />
     <Compile Include="Agent\Context\IContextProvider.vb" />
     <Compile Include="Agent\Context\OfficeContext.vb" />
