@@ -19,6 +19,15 @@ Namespace Services
         Public Property Reason As String = ""
         Public Property Intent As IntentResult
         Public Property FormattingPlan As FormattingIntentPlan
+        Public Property ProofreadPlan As ProofreadIntentPlan
+        Public Property Capability As WordCapabilityDescriptor
+
+        Public ReadOnly Property CapabilitySummary As String
+            Get
+                If Capability Is Nothing Then Return ""
+                Return Capability.ToHumanReadableSummary()
+            End Get
+        End Property
 
         Public ReadOnly Property ShouldHandle As Boolean
             Get
@@ -46,52 +55,85 @@ Namespace Services
             Dim formattingCompiler As New FormattingIntentCompiler()
             Dim formattingPlan = formattingCompiler.Compile(userMessage, hasSelection)
             result.FormattingPlan = formattingPlan
+            If ProofreadIntentCompiler.LooksLikeProofreadCommand(userMessage) Then
+                Dim proofreadCompiler As New ProofreadIntentCompiler()
+                Dim proofreadPlan = proofreadCompiler.Compile(userMessage, hasSelection)
+                result.ProofreadPlan = proofreadPlan
+                AssignCapability(result,
+                                 WordActionKind.Proofread,
+                                 Math.Max(0.86, proofreadPlan.Confidence),
+                                 "已生成可执行 ProofreadIntentPlan")
+                Return result
+            End If
 
             If ShouldRouteToNumbering(userMessage) Then
-                result.Kind = WordActionKind.Numbering
-                result.Confidence = 0.92
-                result.Reason = "匹配到 Word 自动编号连续化 capability"
+                AssignCapability(result,
+                                 WordActionKind.Numbering,
+                                 0.92,
+                                 "匹配到 Word 自动编号连续化 capability")
                 Return result
             End If
 
             If formattingPlan IsNot Nothing AndAlso formattingPlan.HasOperations Then
-                result.Kind = WordActionKind.DirectFormatting
-                result.Confidence = Math.Max(0.82, formattingPlan.Confidence)
-                result.Reason = "已生成可执行 FormattingIntentPlan"
+                AssignCapability(result,
+                                 WordActionKind.DirectFormatting,
+                                 Math.Max(0.82, formattingPlan.Confidence),
+                                 "已生成可执行 FormattingIntentPlan")
                 Return result
             End If
 
             If intent IsNot Nothing Then
                 Select Case intent.OfficeIntent
                     Case OfficeIntentType.PROOFREAD
-                        result.Kind = WordActionKind.Proofread
-                        result.Confidence = Math.Max(0.72, intent.Confidence)
-                        result.Reason = "意图识别为校对"
+                        AssignCapability(result,
+                                         WordActionKind.Proofread,
+                                         Math.Max(0.72, intent.Confidence),
+                                         "意图识别为校对")
                         Return result
 
                     Case OfficeIntentType.TEXT_FORMAT
-                        result.Kind = WordActionKind.DirectFormatting
-                        result.Confidence = Math.Max(0.62, intent.Confidence)
-                        result.Reason = "意图识别为文本格式调整，交给排版执行器尝试"
+                        AssignCapability(result,
+                                         WordActionKind.DirectFormatting,
+                                         Math.Max(0.62, intent.Confidence),
+                                         "意图识别为文本格式调整，交给排版执行器尝试")
                         Return result
 
                     Case OfficeIntentType.FORMAT_STYLE
-                        result.Kind = WordActionKind.SemanticReformat
-                        result.Confidence = Math.Max(0.66, intent.Confidence)
-                        result.Reason = "意图识别为样式/排版调整"
+                        AssignCapability(result,
+                                         WordActionKind.SemanticReformat,
+                                         Math.Max(0.66, intent.Confidence),
+                                         "意图识别为样式/排版调整")
                         Return result
                 End Select
             End If
 
             If LooksLikeStructuralReformat(userMessage) Then
-                result.Kind = WordActionKind.SemanticReformat
-                result.Confidence = 0.7
-                result.Reason = "匹配到结构化排版/标题/编号整理请求"
+                AssignCapability(result,
+                                 WordActionKind.SemanticReformat,
+                                 0.7,
+                                 "匹配到结构化排版/标题/编号整理请求")
                 Return result
             End If
 
             Return result
         End Function
+
+        Private Shared Sub AssignCapability(plan As WordActionPlan,
+                                            kind As WordActionKind,
+                                            confidence As Double,
+                                            reason As String)
+            If plan Is Nothing Then Return
+            plan.Kind = kind
+            plan.Confidence = confidence
+            plan.Capability = WordCapabilityRegistry.Require(kind)
+
+            Dim reasonParts As New List(Of String)()
+            If Not String.IsNullOrWhiteSpace(reason) Then reasonParts.Add(reason)
+            If plan.Capability IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(plan.Capability.DisplayName) Then
+                reasonParts.Add("capability=" & plan.Capability.DisplayName)
+            End If
+            plan.Reason = String.Join("；", reasonParts)
+        End Sub
 
         Private Function ShouldRouteToNumbering(message As String) As Boolean
             If WordNumberingAgent.LooksLikeSequentialNumberingCommand(message) Then Return True

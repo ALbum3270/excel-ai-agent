@@ -195,14 +195,9 @@ Public Class WebDataCapturePane
 
             ' 使用ThreadPool进行异步下载
             ThreadPool.QueueUserWorkItem(
-                Sub(state)
+                Async Sub(state)
                     Try
-                        Dim client = HttpClientPool.GetClient(imageUrl)
-                        Using request As New HttpRequestMessage(HttpMethod.Get, imageUrl)
-                            Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
-                                Using response = client.SendAsync(request, timeoutCts.Token).Result
-                                    response.EnsureSuccessStatusCode()
-                                    Dim imageData = response.Content.ReadAsByteArrayAsync().Result
+                        Dim imageData = Await DownloadBytesAsync(imageUrl, TimeSpan.FromSeconds(30))
 
                             ' 创建临时文件
                             Dim tempPath = Path.GetTempFileName()
@@ -253,9 +248,6 @@ Public Class WebDataCapturePane
                                               MessageBox.Show($"插入图片失败: {ex.Message}", "错误")
                                           End Try
                                       End Sub)
-                                End Using
-                            End Using
-                        End Using
                     Catch ex As Exception
                         Me.Invoke(Sub()
                                       MessageBox.Show($"下载图片失败: {ex.Message}", "错误")
@@ -351,14 +343,9 @@ Public Class WebDataCapturePane
 
                 ' 异步下载预览图
                 ThreadPool.QueueUserWorkItem(
-                Sub(state)
+                Async Sub(state)
                     Try
-                        Dim client = HttpClientPool.GetClient(posterUrl)
-                        Using request As New HttpRequestMessage(HttpMethod.Get, posterUrl)
-                            Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
-                                Using response = client.SendAsync(request, timeoutCts.Token).Result
-                                    response.EnsureSuccessStatusCode()
-                                    Dim imageData = response.Content.ReadAsByteArrayAsync().Result
+                        Dim imageData = Await DownloadBytesAsync(posterUrl, TimeSpan.FromSeconds(30))
 
                             Dim tempPath = Path.GetTempFileName()
                             Dim extension = Path.GetExtension(New Uri(posterUrl).LocalPath)
@@ -415,9 +402,6 @@ Public Class WebDataCapturePane
                                               Debug.WriteLine($"插入预览图失败: {ex.Message}")
                                           End Try
                                       End Sub)
-                                End Using
-                            End Using
-                        End Using
                     Catch ex As Exception
                         Debug.WriteLine($"下载预览图失败: {ex.Message}")
                     End Try
@@ -644,7 +628,7 @@ Public Class WebDataCapturePane
     ' 下载容器中的图片
     Private Sub DownloadContainerImages(containedMedia As JArray, selection As Microsoft.Office.Interop.Word.Selection)
         ThreadPool.QueueUserWorkItem(
-        Sub(state)
+        Async Sub(state)
             Dim imageCount = 0
             For Each mediaObj In containedMedia
                 Dim media = DirectCast(mediaObj, JObject)
@@ -661,12 +645,7 @@ Public Class WebDataCapturePane
                                 imageUrl = New Uri(baseUri, src).ToString()
                             End If
 
-                            Dim client = HttpClientPool.GetClient(imageUrl)
-                            Using request As New HttpRequestMessage(HttpMethod.Get, imageUrl)
-                                Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(30))
-                                    Using response = client.SendAsync(request, timeoutCts.Token).Result
-                                        response.EnsureSuccessStatusCode()
-                                        Dim imageData = response.Content.ReadAsByteArrayAsync().Result
+                            Dim imageData = Await DownloadBytesAsync(imageUrl, TimeSpan.FromSeconds(30))
 
                                 Dim tempPath = Path.GetTempFileName()
                                 Dim extension = Path.GetExtension(New Uri(imageUrl).LocalPath)
@@ -747,9 +726,6 @@ Public Class WebDataCapturePane
                                                   MessageBox.Show($"插入图片失败: {ex.Message}", "错误")
                                           End Try
                                       End Sub)
-                                    End Using
-                                End Using
-                            End Using
                         End If
                     Catch ex As Exception
                         Debug.WriteLine($"下载图片失败: {ex.Message}")
@@ -765,6 +741,18 @@ Public Class WebDataCapturePane
                       End Sub)
         End Sub)
     End Sub
+
+    Private Shared Async Function DownloadBytesAsync(url As String, timeout As TimeSpan) As System.Threading.Tasks.Task(Of Byte())
+        Dim client = HttpClientPool.GetClient(url)
+        Using request As New HttpRequestMessage(HttpMethod.Get, url)
+            Using timeoutCts As New CancellationTokenSource(timeout)
+                Using response = Await client.SendAsync(request, timeoutCts.Token).ConfigureAwait(False)
+                    response.EnsureSuccessStatusCode()
+                    Return Await response.Content.ReadAsByteArrayAsync().ConfigureAwait(False)
+                End Using
+            End Using
+        End Using
+    End Function
 
     ' 添加视图销毁处理
     Protected Overrides Sub OnHandleDestroyed(e As EventArgs)

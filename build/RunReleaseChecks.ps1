@@ -20,9 +20,33 @@ function Invoke-Step {
 }
 
 function Get-MSBuildPath {
-    $knownPath = 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe'
-    if (Test-Path -LiteralPath $knownPath) {
-        return $knownPath
+    $candidates = @(
+        'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\MSBuild\Current\Bin\MSBuild.exe',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\MSBuild\Current\Bin\MSBuild.exe'
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere) {
+        $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+        if (-not [string]::IsNullOrWhiteSpace($installPath)) {
+            $msbuild = Join-Path $installPath 'MSBuild\Current\Bin\MSBuild.exe'
+            if (Test-Path -LiteralPath $msbuild) {
+                return $msbuild
+            }
+        }
     }
 
     $cmd = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
@@ -46,6 +70,7 @@ Invoke-Step 'Installer Release audit' {
 if (-not $SkipBuild) {
     $msbuild = Get-MSBuildPath
     $projects = @(
+        'ShareRibbon\ShareRibbon.vbproj',
         'WordAi\WordAi.vbproj',
         'ExcelAi\ExcelAi.vbproj',
         'PowerPointAi\PowerPointAi.vbproj'
@@ -61,8 +86,14 @@ if (-not $SkipBuild) {
     }
 }
 
+Invoke-Step 'Installer input audit' {
+    & (Join-Path $repoRoot 'build\AuditInstallerInputs.ps1')
+}
+
 if (-not $SkipSmoke) {
     $smokeScripts = @(
+        'scripts\smoke-ai-gateway-provider.ps1',
+        'scripts\smoke-word-capability-registry.ps1',
         'scripts\smoke-memory-pipeline.ps1',
         'scripts\smoke-skills-registry.ps1',
         'scripts\smoke-db-schema-drift.ps1'

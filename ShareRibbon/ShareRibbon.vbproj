@@ -415,6 +415,7 @@
     <Compile Include="Controls\Services\AutocompleteService.vb" />
     <Compile Include="Controls\Services\ChatFormatterAgent.vb" />
     <Compile Include="Controls\Services\ChatSystemPromptResolver.vb" />
+    <Compile Include="Controls\Services\ChatRequestOrchestrator.vb" />
     <Compile Include="Controls\Services\ChatSendValidator.vb" />
     <Compile Include="Controls\Services\MemoryTurnRecorder.vb" />
     <Compile Include="Controls\Services\ReformatService.vb" />

@@ -50,9 +50,8 @@ Public Class AiGateway
         If String.IsNullOrWhiteSpace(options.ApiKey) Then Return Fail("ApiKey is required.")
         If String.IsNullOrWhiteSpace(options.ModelName) Then Return Fail("ModelName is required.")
 
-        Dim requestObj = BuildOpenAiCompatibleRequest(options)
         Dim isAnthropic = IsAnthropicEndpoint(options.ApiUrl)
-        Dim requestBody = If(isAnthropic, ConvertToAnthropicRequest(requestObj), requestObj)
+        Dim requestBody = BuildProviderRequest(options)
         Dim timeoutSeconds = If(options.TimeoutSeconds > 0, options.TimeoutSeconds, 60)
 
         Try
@@ -110,6 +109,17 @@ Public Class AiGateway
             options.ModelName,
             options.Platform,
             options.ApiUrl)
+
+        Return requestObj
+    End Function
+
+    Public Shared Function BuildProviderRequest(options As AiRequestOptions) As JObject
+        If options Is Nothing Then Throw New ArgumentNullException(NameOf(options))
+
+        Dim requestObj = BuildOpenAiCompatibleRequest(options)
+        If IsAnthropicEndpoint(options.ApiUrl) Then
+            Return ConvertToAnthropicRequest(requestObj)
+        End If
 
         Return requestObj
     End Function

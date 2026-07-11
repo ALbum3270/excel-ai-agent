@@ -36,6 +36,7 @@ Public MustInherit Class BaseChatControl
     Private _sendValidator As ChatSendValidator = Nothing
     Private _memoryTurnRecorder As MemoryTurnRecorder = Nothing
     Private _aiNativeRuntime As Agent.IAiNativeRuntime = Nothing
+    Private _chatRequestOrchestrator As ChatRequestOrchestrator = Nothing
 
     Private ReadOnly Property CommandRouter As ChatCommandRouter
         Get
@@ -102,6 +103,21 @@ Public MustInherit Class BaseChatControl
                     New McpToolBroker())
             End If
             Return _conversationRuntime
+        End Get
+    End Property
+
+    Private ReadOnly Property ChatRequestOrchestrator As ChatRequestOrchestrator
+        Get
+            If _chatRequestOrchestrator Is Nothing Then
+                _chatRequestOrchestrator = New ChatRequestOrchestrator(
+                    ConversationRuntime,
+                    _chatStateService,
+                    systemHistoryMessageData,
+                    _selectionPendingMap,
+                    AddressOf GetApplication,
+                    AddressOf ManageHistoryMessageSize)
+            End If
+            Return _chatRequestOrchestrator
         End Get
     End Property
 
@@ -2798,45 +2814,7 @@ Public MustInherit Class BaseChatControl
 
 
     Private Function CreateRequestBody(uuid As String, question As String, systemPrompt As String, addHistory As Boolean, ByRef ragCountOut As Integer, ByRef contextTraceOut As ChatContextTrace) As String
-        Dim context As New ChatRequestContext With {
-            .RequestUuid = uuid,
-            .Question = question,
-            .SystemPrompt = systemPrompt,
-            .AddHistory = addHistory,
-            .ModelName = ConfigSettings.ModelName,
-            .Platform = ConfigSettings.platform,
-            .ApiUrl = ConfigSettings.ApiUrl,
-            .ReasoningMode = ConfigSettings.ReasoningMode,
-            .Stream = True,
-            .AppInfo = GetApplication(),
-            .HistoryMessages = systemHistoryMessageData,
-            .SelectionPendingMap = _selectionPendingMap,
-            .UseContextBuilder = MemoryConfig.UseContextBuilder,
-            .EnableMemory = MemoryConfig.EnableUserProfile OrElse MemoryConfig.RagTopN > 0
-        }
-
-        Dim buildResult = ConversationRuntime.BuildRequest(context)
-        ragCountOut = buildResult.RagCount
-        contextTraceOut = buildResult.Trace
-
-        If addHistory Then
-            Dim existingSystem = systemHistoryMessageData.FirstOrDefault(Function(m) m.role = "system")
-            If existingSystem IsNot Nothing Then systemHistoryMessageData.Remove(existingSystem)
-
-            systemHistoryMessageData.Insert(0, New HistoryMessage With {
-                .role = "system",
-                .content = systemPrompt
-            })
-            systemHistoryMessageData.Add(New HistoryMessage With {
-                .role = "user",
-                .content = question
-            })
-            ManageHistoryMessageSize()
-            _chatStateService.AddMessage("user", question)
-        End If
-
-        Debug.WriteLine($"[CreateRequestBody] Runtime build complete, UsedContextBuilder={buildResult.UsedContextBuilder}, RagCount={ragCountOut}")
-        Return buildResult.RequestBody
+        Return ChatRequestOrchestrator.CreateRequestBody(uuid, question, systemPrompt, addHistory, ragCountOut, contextTraceOut)
     End Function
 
 
@@ -2880,15 +2858,7 @@ Public MustInherit Class BaseChatControl
                     If Not String.IsNullOrWhiteSpace(aiResponse) Then
                         Dim expectedFormat = If(mode = "proofread", InstructionFormat.ProofreadJson, InstructionFormat.DslJson)
                         Dim execContext = New ExecutionContext()
-                        Dim validation = SelfCheckLoopController.PostFlushValidateAsync(aiResponse, expectedFormat, execContext).Result
-                        If Not validation.IsValid Then
-                            Debug.WriteLine($"[SelfCheck] PostFlush校验失败: {String.Join(";", validation.Errors.Select(Function(e) e.Message))}")
-                            If validation.Errors.Any(Function(e) e.Level = ErrorLevel.Critical) Then
-                                GlobalStatusStrip.ShowWarning($"AI响应格式校验未通过，可能存在指令错误")
-                            End If
-                        Else
-                            Debug.WriteLine($"[SelfCheck] PostFlush校验通过，解析到 {validation.ParsedInstructions.Count} 条指令")
-                        End If
+                        Dim ignored = RunPostFlushValidationAsync(aiResponse, expectedFormat, execContext)
                     End If
                 End If
             End If
@@ -2897,6 +2867,22 @@ Public MustInherit Class BaseChatControl
         End Try
 
     End Sub
+
+    Private Async Function RunPostFlushValidationAsync(aiResponse As String, expectedFormat As InstructionFormat, execContext As ExecutionContext) As Task
+        Try
+            Dim validation = Await SelfCheckLoopController.PostFlushValidateAsync(aiResponse, expectedFormat, execContext)
+            If Not validation.IsValid Then
+                Debug.WriteLine($"[SelfCheck] PostFlush校验失败: {String.Join(";", validation.Errors.Select(Function(e) e.Message))}")
+                If validation.Errors.Any(Function(e) e.Level = ErrorLevel.Critical) Then
+                    GlobalStatusStrip.ShowWarning($"AI响应格式校验未通过，可能存在指令错误")
+                End If
+            Else
+                Debug.WriteLine($"[SelfCheck] PostFlush校验通过，解析到 {validation.ParsedInstructions.Count} 条指令")
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"[SelfCheck] PostFlush校验异常: {ex.Message}")
+        End Try
+    End Function
 
 
     ' 执行js脚本的异步方法

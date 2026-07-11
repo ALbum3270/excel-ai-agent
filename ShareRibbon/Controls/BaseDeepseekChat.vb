@@ -738,74 +738,37 @@ Protected Overloads Async Function InitializeWebView2() As Task
     ' 修改Cookie处理，去除重复项
     Private Async Function GetCookiesAsync(url As String) As Task(Of String)
         Try
-            If ChatBrowser.InvokeRequired Then
-                ' 在UI线程执行
-                Dim resultCookies As String = ""
-                Dim taskCompletionSource = New TaskCompletionSource(Of String)()
+            Return Await UiDispatcher.InvokeAsync(Of String)(ChatBrowser,
+                Async Function()
+                    If ChatBrowser.CoreWebView2 Is Nothing Then Return String.Empty
 
-                ChatBrowser.Invoke(Sub()
-                                       Try
-                                           ' 在UI线程获取Cookies
-                                           Dim cookieManager = ChatBrowser.CoreWebView2.CookieManager
-
-                                           ' 使用同步版本避免嵌套异步
-                                           Dim task = cookieManager.GetCookiesAsync(url)
-                                           task.Wait() ' 同步等待结果
-                                           Dim cookies = task.Result
-
-                                           If cookies IsNot Nothing AndAlso cookies.Count > 0 Then
-                                               ' 使用字典去重
-                                               Dim cookieDict As New Dictionary(Of String, String)
-
-                                               For Each cookie In cookies
-                                                   cookieDict(cookie.Name) = cookie.Value
-                                               Next
-
-                                               ' 构建Cookie字符串
-                                               Dim cookiePairs = New List(Of String)
-                                               For Each pair In cookieDict
-                                                   cookiePairs.Add($"{pair.Key}={pair.Value}")
-                                               Next
-
-                                               resultCookies = String.Join("; ", cookiePairs)
-                                           End If
-
-                                           taskCompletionSource.SetResult(resultCookies)
-                                       Catch ex As Exception
-                                           Debug.WriteLine($"获取Cookies时出错: {ex.Message}")
-                                           taskCompletionSource.SetResult("")
-                                       End Try
-                                   End Sub)
-
-                Return Await taskCompletionSource.Task
-            Else
-                ' 在当前线程执行
-                Dim cookieManager = ChatBrowser.CoreWebView2.CookieManager
-                Dim cookies = Await cookieManager.GetCookiesAsync(url)
-
-                If cookies IsNot Nothing AndAlso cookies.Count > 0 Then
-                    ' 使用字典去重
-                    Dim cookieDict As New Dictionary(Of String, String)
-
-                    For Each cookie In cookies
-                        cookieDict(cookie.Name) = cookie.Value
-                    Next
-
-                    ' 构建Cookie字符串
-                    Dim cookiePairs = New List(Of String)
-                    For Each pair In cookieDict
-                        cookiePairs.Add($"{pair.Key}={pair.Value}")
-                    Next
-
-                    Return String.Join("; ", cookiePairs)
-                End If
-            End If
-
-            Return String.Empty
+                    ' 在UI线程执行 WebView2 CookieManager，并保持真正异步等待。
+                    Dim cookieManager = ChatBrowser.CoreWebView2.CookieManager
+                    Dim cookies = Await cookieManager.GetCookiesAsync(url)
+                    Return FormatCookieHeader(cookies)
+                End Function)
         Catch ex As Exception
             Debug.WriteLine($"获取Cookies时出错: {ex.Message}")
             Return String.Empty
         End Try
+    End Function
+
+    Private Function FormatCookieHeader(cookies As IEnumerable(Of CoreWebView2Cookie)) As String
+        If cookies Is Nothing Then Return String.Empty
+
+        Dim cookieDict As New Dictionary(Of String, String)
+        For Each cookie In cookies
+            cookieDict(cookie.Name) = cookie.Value
+        Next
+
+        If cookieDict.Count = 0 Then Return String.Empty
+
+        Dim cookiePairs = New List(Of String)
+        For Each pair In cookieDict
+            cookiePairs.Add($"{pair.Key}={pair.Value}")
+        Next
+
+        Return String.Join("; ", cookiePairs)
     End Function
 
     ' 改进令牌注入方法
@@ -853,21 +816,11 @@ Protected Overloads Async Function InitializeWebView2() As Task
             injectAuthToken();
         "
 
-            ' 确保在UI线程执行
-            If ChatBrowser.InvokeRequired Then
-                Await Task.Run(Sub()
-                                   ChatBrowser.Invoke(Sub()
-                                                          Try
-                                                              Dim task = ChatBrowser.CoreWebView2.ExecuteScriptAsync(script)
-                                                              task.Wait() ' 同步等待完成
-                                                          Catch ex As Exception
-                                                              Debug.WriteLine($"执行脚本时出错: {ex.Message}")
-                                                          End Try
-                                                      End Sub)
-                               End Sub)
-            Else
-                Await ChatBrowser.CoreWebView2.ExecuteScriptAsync(script)
-            End If
+            Await UiDispatcher.InvokeAsync(ChatBrowser,
+                Async Function()
+                    If ChatBrowser.CoreWebView2 Is Nothing Then Return
+                    Await ChatBrowser.CoreWebView2.ExecuteScriptAsync(script)
+                End Function)
         Catch ex As Exception
             Debug.WriteLine($"注入授权令牌时出错: {ex.Message}")
         End Try

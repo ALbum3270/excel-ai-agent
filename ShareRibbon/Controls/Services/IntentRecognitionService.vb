@@ -3,8 +3,6 @@
 
 Imports System.Diagnostics
 Imports System.Linq
-Imports System.Net.Http
-Imports System.Net.Http.Headers
 Imports System.Text
 Imports System.Text.RegularExpressions
 Imports System.Threading.Tasks
@@ -565,29 +563,22 @@ Public Class IntentRecognitionService
 
             messages.Add(New JObject From {{"role", "user"}, {"content", userMessage}})
 
-            Dim requestBody As New JObject()
-            requestBody("model") = modelName
-            requestBody("messages") = messages
-            requestBody("temperature") = 0.3
-            requestBody("max_tokens") = 500
-            requestBody("stream") = False
+            Dim gatewayResponse = Await AiGateway.SendChatAsync(New AiRequestOptions With {
+                .ApiUrl = apiUrl,
+                .ApiKey = apiKey,
+                .ModelName = modelName,
+                .Platform = cfg.platform,
+                .Messages = messages,
+                .Temperature = 0.3R,
+                .MaxTokens = 500,
+                .TimeoutSeconds = 30
+            })
 
-            ' 发送请求
-            Dim client = HttpClientPool.GetClient(apiUrl)
-
-            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
-                request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
-                request.Content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
-
-                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30))
-                    Using response = Await client.SendAsync(request, timeoutCts.Token)
-                        If response.IsSuccessStatusCode Then
-                            Dim responseContent = Await response.Content.ReadAsStringAsync()
-                            result = ParseLLMIntentResponse(responseContent, question)
-                        End If
-                    End Using
-                End Using
-            End Using
+            If gatewayResponse IsNot Nothing AndAlso gatewayResponse.Success Then
+                result = ParseLLMIntentResponse(gatewayResponse.Content, question)
+            Else
+                Debug.WriteLine($"IdentifyIntentWithLLMAsync API失败: {If(gatewayResponse Is Nothing, "empty response", gatewayResponse.ErrorMessage)}")
+            End If
 
         Catch ex As Exception
             Debug.WriteLine($"IdentifyIntentWithLLMAsync 出错: {ex.Message}")
@@ -900,11 +891,7 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
         result.OriginalInput = originalQuestion
 
         Try
-            Dim responseJson = JObject.Parse(responseContent)
-            Dim choices = responseJson("choices")
-            If choices Is Nothing OrElse choices.Count = 0 Then Return result
-
-            Dim content = choices(0)("message")?("content")?.ToString()
+            Dim content = ExtractAssistantContentOrRaw(responseContent)
             If String.IsNullOrEmpty(content) Then Return result
 
             ' 提取JSON部分
@@ -1985,29 +1972,22 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
             messages.Add(New JObject From {{"role", "system"}, {"content", systemPrompt}})
             messages.Add(New JObject From {{"role", "user"}, {"content", userMessage}})
 
-            Dim requestBody As New JObject()
-            requestBody("model") = modelName
-            requestBody("messages") = messages
-            requestBody("temperature") = 0.2
-            requestBody("max_tokens") = 100
-            requestBody("stream") = False
+            Dim gatewayResponse = Await AiGateway.SendChatAsync(New AiRequestOptions With {
+                .ApiUrl = apiUrl,
+                .ApiKey = apiKey,
+                .ModelName = modelName,
+                .Platform = cfg.platform,
+                .Messages = messages,
+                .Temperature = 0.2R,
+                .MaxTokens = 100,
+                .TimeoutSeconds = 15
+            })
 
-            ' 发送请求
-            Dim client = HttpClientPool.GetClient(apiUrl)
+            If gatewayResponse IsNot Nothing AndAlso gatewayResponse.Success Then
+                Return ParseFollowUpResponse(gatewayResponse.Content)
+            End If
 
-            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
-                request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
-                request.Content = New StringContent(requestBody.ToString(), Encoding.UTF8, "application/json")
-
-                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15))
-                    Using response = Await client.SendAsync(request, timeoutCts.Token)
-                        If response.IsSuccessStatusCode Then
-                            Dim responseContent = Await response.Content.ReadAsStringAsync()
-                            Return ParseFollowUpResponse(responseContent)
-                        End If
-                    End Using
-                End Using
-            End Using
+            Debug.WriteLine($"IsFollowUpQuestionAsync API失败: {If(gatewayResponse Is Nothing, "empty response", gatewayResponse.ErrorMessage)}")
 
         Catch ex As Exception
             Debug.WriteLine($"IsFollowUpQuestionAsync 出错: {ex.Message}")
@@ -2022,11 +2002,7 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
     ''' </summary>
     Private Function ParseFollowUpResponse(responseContent As String) As Boolean
         Try
-            Dim responseJson = JObject.Parse(responseContent)
-            Dim choices = responseJson("choices")
-            If choices Is Nothing OrElse choices.Count = 0 Then Return True
-
-            Dim content = choices(0)("message")?("content")?.ToString()
+            Dim content = ExtractAssistantContentOrRaw(responseContent)
             If String.IsNullOrEmpty(content) Then Return True
 
             ' 提取JSON部分
@@ -2046,6 +2022,22 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
             Debug.WriteLine($"ParseFollowUpResponse 出错: {ex.Message}")
             Return True ' 默认认为相关
         End Try
+    End Function
+
+    Private Function ExtractAssistantContentOrRaw(responseContent As String) As String
+        If String.IsNullOrWhiteSpace(responseContent) Then Return ""
+
+        Try
+            Dim responseJson = JObject.Parse(responseContent)
+            Dim choices = responseJson("choices")
+            If choices IsNot Nothing AndAlso choices.Count > 0 Then
+                Dim content = choices(0)("message")?("content")?.ToString()
+                If Not String.IsNullOrEmpty(content) Then Return content
+            End If
+        Catch
+        End Try
+
+        Return responseContent
     End Function
 
 #End Region

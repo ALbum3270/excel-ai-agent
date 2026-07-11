@@ -1643,6 +1643,10 @@ Public Class ChatControl
     ''' 需要在UI线程执行以安全操作Word COM对象
     ''' </summary>
     Public Sub ProcessProofreadResult(aiResponse As String, paragraphs As List(Of String))
+        Dim ignored = ProcessProofreadResultAsync(aiResponse, paragraphs)
+    End Sub
+
+    Private Async Function ProcessProofreadResultAsync(aiResponse As String, paragraphs As List(Of String)) As Task
         Try
             Dim proofreadMode = GetProofreadFocusMode()
             If proofreadMode Is Nothing Then Return
@@ -1658,20 +1662,17 @@ Public Class ChatControl
                 selStartOffset = 0
             End Try
 
-            ' 在UI线程执行校对分析（避免COM跨线程异常）
-            If Me.InvokeRequired Then
-                Me.Invoke(Sub()
-                              proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset).Wait()
-                          End Sub)
-            Else
-                proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset).Wait()
-            End If
+            ' 在UI线程异步执行校对分析，避免阻塞消息循环或跨线程访问COM对象。
+            Await UiDispatcher.InvokeAsync(Me,
+                Async Function()
+                    Await proofreadMode.AnalyzeAsync(aiResponse, paragraphs, Globals.ThisAddIn.Application, selStartOffset)
+                End Function)
 
             StartPendingPostProofreadFormatting()
         Catch ex As Exception
             Debug.WriteLine($"ProcessProofreadResult 出错: {ex.Message}")
         End Try
-    End Sub
+    End Function
 
     Private Sub StartPendingPostProofreadFormatting()
         Dim request = _pendingPostProofreadFormattingRequest

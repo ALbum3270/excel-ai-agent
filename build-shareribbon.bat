@@ -1,2 +1,3 @@
 @echo off
-"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" "F:\ai\code\AiHelper\ShareRibbon\ShareRibbon.vbproj" /t:Build /p:Configuration=Debug /v:minimal /nologo
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-code-projects.ps1" -Configuration Debug -Projects "ShareRibbon\ShareRibbon.vbproj"
+exit /b %ERRORLEVEL%

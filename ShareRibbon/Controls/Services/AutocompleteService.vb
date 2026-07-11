@@ -204,80 +204,66 @@ Public Class AutocompleteService
             userContent.AppendLine()
             userContent.AppendLine("请给出补全建议（JSON格式）。")
 
-            Dim requestObj As New JObject()
-            requestObj("model") = modelName
-            requestObj("stream") = False
-            requestObj("temperature") = 0.3
             Dim messages As New JArray()
             messages.Add(New JObject() From {{"role", "system"}, {"content", systemPrompt}})
             messages.Add(New JObject() From {{"role", "user"}, {"content", userContent.ToString()}})
-            requestObj("messages") = messages
-            Dim requestBody = requestObj.ToString(Newtonsoft.Json.Formatting.None)
 
-            Dim client = HttpClientPool.GetClient(apiUrl)
-            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
-                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
-                request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
+            Dim gatewayResponse = Await AiGateway.SendChatAsync(New AiRequestOptions With {
+                .ApiUrl = apiUrl,
+                .ApiKey = apiKey,
+                .ModelName = modelName,
+                .Platform = cfg.platform,
+                .ReasoningMode = ReasoningRequestHelper.ReasoningDisabled,
+                .Messages = messages,
+                .Temperature = 0.3R,
+                .TimeoutSeconds = 10
+            })
 
-                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10))
-                    Using response = Await client.SendAsync(request, timeoutCts.Token)
-                        response.EnsureSuccessStatusCode()
-                        Dim responseBody = Await response.Content.ReadAsStringAsync()
+            If gatewayResponse Is Nothing OrElse Not gatewayResponse.Success Then
+                Debug.WriteLine($"RequestCompletionsWithChat API失败: {If(gatewayResponse Is Nothing, "empty response", gatewayResponse.ErrorMessage)}")
+                Return completions
+            End If
 
-                Dim jObj As JObject = Nothing
-                Try
-                    jObj = JObject.Parse(responseBody)
-                Catch apiParseEx As Exception
-                    Debug.WriteLine($"解析API响应失败: {apiParseEx.Message}")
-                    Return completions
-                End Try
-
-                Dim msg As String = Nothing
-                Try
-                    msg = jObj("choices")?(0)?("message")?("content")?.ToString()
-                Catch
-                    msg = jObj("message")?.ToString()
-                End Try
-
-                If Not String.IsNullOrEmpty(msg) Then
-                    Try
-                        Dim cleanedMsg = msg.Trim()
-                        If cleanedMsg.StartsWith("```") Then
-                            Dim firstNewLine = cleanedMsg.IndexOf(vbLf)
-                            If firstNewLine > 0 Then cleanedMsg = cleanedMsg.Substring(firstNewLine + 1)
-                        End If
-                        If cleanedMsg.EndsWith("```") Then
-                            cleanedMsg = cleanedMsg.Substring(0, cleanedMsg.Length - 3)
-                        End If
-                        cleanedMsg = cleanedMsg.Trim()
-                        Dim jsonStart = cleanedMsg.IndexOf("{")
-                        Dim jsonEnd = cleanedMsg.LastIndexOf("}")
-                        If jsonStart >= 0 AndAlso jsonEnd > jsonStart Then
-                            cleanedMsg = cleanedMsg.Substring(jsonStart, jsonEnd - jsonStart + 1)
-                        End If
-                        Dim resultObj = JObject.Parse(cleanedMsg)
-                        Dim completionsArray = resultObj("completions")
-                        If completionsArray IsNot Nothing Then
-                            For Each item In completionsArray
-                                Dim c = item.ToString().Trim()
-                                If Not String.IsNullOrWhiteSpace(c) Then completions.Add(c)
-                            Next
-                        End If
-                    Catch parseEx As Exception
-                        Debug.WriteLine($"解析补全JSON失败: {parseEx.Message}")
-                        If Not String.IsNullOrWhiteSpace(msg) AndAlso msg.Length < 50 Then
-                            completions.Add(msg.Trim())
-                        End If
-                    End Try
-                End If
-                    End Using
-                End Using
-            End Using
+            AddCompletionsFromMessage(gatewayResponse.Content, completions)
         Catch ex As Exception
             Debug.WriteLine($"RequestCompletionsWithChat 出错: {ex.Message}")
         End Try
         Return completions
     End Function
+
+    Private Sub AddCompletionsFromMessage(msg As String, completions As List(Of String))
+        If String.IsNullOrEmpty(msg) OrElse completions Is Nothing Then Return
+
+        Try
+            Dim cleanedMsg = msg.Trim()
+            If cleanedMsg.StartsWith("```") Then
+                Dim firstNewLine = cleanedMsg.IndexOf(vbLf)
+                If firstNewLine > 0 Then cleanedMsg = cleanedMsg.Substring(firstNewLine + 1)
+            End If
+            If cleanedMsg.EndsWith("```") Then
+                cleanedMsg = cleanedMsg.Substring(0, cleanedMsg.Length - 3)
+            End If
+            cleanedMsg = cleanedMsg.Trim()
+            Dim jsonStart = cleanedMsg.IndexOf("{")
+            Dim jsonEnd = cleanedMsg.LastIndexOf("}")
+            If jsonStart >= 0 AndAlso jsonEnd > jsonStart Then
+                cleanedMsg = cleanedMsg.Substring(jsonStart, jsonEnd - jsonStart + 1)
+            End If
+            Dim resultObj = JObject.Parse(cleanedMsg)
+            Dim completionsArray = resultObj("completions")
+            If completionsArray IsNot Nothing Then
+                For Each item In completionsArray
+                    Dim c = item.ToString().Trim()
+                    If Not String.IsNullOrWhiteSpace(c) Then completions.Add(c)
+                Next
+            End If
+        Catch parseEx As Exception
+            Debug.WriteLine($"解析补全JSON失败: {parseEx.Message}")
+            If Not String.IsNullOrWhiteSpace(msg) AndAlso msg.Length < 50 Then
+                completions.Add(msg.Trim())
+            End If
+        End Try
+    End Sub
 
     ''' <summary>
     ''' 记录补全历史
