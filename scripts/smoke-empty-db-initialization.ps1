@@ -67,8 +67,8 @@ try {
         $cmd = $conn.CreateCommand()
         $cmd.CommandText = "SELECT version FROM schema_version LIMIT 1"
         $version = [int]$cmd.ExecuteScalar()
-        if ($version -ne 10) {
-            throw "Expected schema version 10, got $version"
+        if ($version -ne 11) {
+            throw "Expected schema version 11, got $version"
         }
 
         $requiredTables = @(
@@ -79,6 +79,8 @@ try {
             "memory_embedding",
             "memory_job",
             "skills_registry",
+            "agent_run",
+            "agent_run_step",
             "data_migration_marker"
         )
 
@@ -100,8 +102,8 @@ try {
 
     [pscustomobject]@{
         Database = [ShareRibbon.OfficeAiDatabase]::GetDatabasePath()
-        SchemaVersion = 10
-        RequiredTables = 8
+        SchemaVersion = 11
+        RequiredTables = 10
         EmptyInitialization = $true
     } | Format-List
 }

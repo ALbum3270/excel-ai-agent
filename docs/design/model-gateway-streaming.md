@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：`AiGateway` 非流式、`HttpStreamService` 流式和 provider smoke 已存在；统一 `IModelClient`、流式 Pump 化、ReAct/MCP 上移到 Harness 仍未完成。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.8 |
 | 现有 | `AiGateway`（非流式）、`HttpStreamService`（流式+部分 MCP/ReAct）、`ReasoningRequestHelper`、`DefaultConversationRuntime`、`LLMUtil`、翻译等旁路 HTTP |
 | 关联 | Harness Planner/Loop、Safety 超时、AppLogger 脱敏、smoke-ai-gateway-provider |

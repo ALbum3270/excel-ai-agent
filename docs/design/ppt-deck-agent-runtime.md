@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：PPT 已有工具 JSON、生成 Handler、翻译/续写服务和 ChatControl 命令分发；尚无统一 `PptActionHarness`、幻灯片级 Observation/Diff、删除/结构变更审批闭环。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.3 |
 | Skill | `Skills/powerpoint-deck-agent/SKILL.md` |
 | 现有 | Tools/ppt（22）、生成 Handler、ChatControl 命令分发、翻译/续写服务 |
@@ -15,16 +16,16 @@
 
 ### 1.1 目标
 
-1. 定义 PPT 从 **大纲 → 版式 → 填内容 → 美化 → 备注** 的标准管道。  
-2. 对标「一句话生成演示」体验，同时保持工具级可观察与可撤销。  
-3. 设计 `PptActionHarness` 与 Capability 地图。  
-4. 消灭「暂不支持的 PPT 命令」式死胡同，改为 repair/换工具。  
+1. 定义 PPT 从 **大纲 → 版式 → 填内容 → 美化 → 备注** 的标准管道。
+2. 对标「一句话生成演示」体验，同时保持工具级可观察与可撤销。
+3. 设计 `PptActionHarness` 与 Capability 地图。
+4. 消灭「暂不支持的 PPT 命令」式死胡同，改为 repair/换工具。
 
 ### 1.2 非目标
 
-- v1 不做设计师级自动配色网络模型训练。  
-- 不做嵌入式视频智能剪辑。  
-- 不保证跨主题模板像素级还原。  
+- v1 不做设计师级自动配色网络模型训练。
+- 不做嵌入式视频智能剪辑。
+- 不保证跨主题模板像素级还原。
 
 ---
 
@@ -128,7 +129,7 @@ UserTurn (PowerPoint)
 | 子目标 | 观察 |
 |---|---|
 | 标题字号 > 正文字号 | 抽样 shape 字号 |
-| 同级要点缩进一致 | | 
+| 同级要点缩进一致 | |
 | 左右边距不过密 | 形状 Left/Width 相对 slide |
 | 主题一致 | ApplyTheme 一次 |
 | 过渡不过度 | 仅切换，不默认狂乱动画 |
@@ -197,8 +198,8 @@ UserTurn (PowerPoint)
 
 ### 8.1 全局
 
-- slideCount before/after  
-- 标题列表 hash  
+- slideCount before/after
+- 标题列表 hash
 
 ### 8.2 页级
 
@@ -238,9 +239,9 @@ UserTurn (PowerPoint)
 
 ## 10. 内容安全与风格
 
-- 默认商务简报语体；用户可 Memory 偏好。  
-- 每页要点建议 ≤ 5 条，每条 ≤ 40 字（生成时约束）。  
-- 敏感删页/清稿：Safety RequireApproval。  
+- 默认商务简报语体；用户可 Memory 偏好。
+- 每页要点建议 ≤ 5 条，每条 ≤ 40 字（生成时约束）。
+- 敏感删页/清稿：Safety RequireApproval。
 
 ---
 
@@ -282,24 +283,24 @@ UserTurn (PowerPoint)
 
 ## 14. 决策摘要（评审）
 
-- [x] 同意 DeckModel 为一等公民  
-- [x] 同意 generate 管道与页数 clamp 3..30  
-- [x] 同意 DeleteSlide **risky + 审批**  
-- [x] 同意动画默认不添加  
-- [x] 同意禁止「暂不支持」死胡同，改为 replan/换工具  
-- [x] 同意快路径同样写 Trace（**D9**）  
+- [x] 同意 DeckModel 为一等公民
+- [x] 同意 generate 管道与页数 clamp 3..30
+- [x] 同意 DeleteSlide **risky + 审批**
+- [x] 同意动画默认不添加
+- [x] 同意禁止「暂不支持」死胡同，改为 replan/换工具
+- [x] 同意快路径同样写 Trace（**D9**）
 
 ---
 
 ## 15. 落地顺序
 
-1. Context 目录 + 当前页快照  
-2. generate 管道（小页数）+ Observe  
-3. Safety 删页  
-4. beautify/notes  
-5. visual  
-6. ActionHarness 快路径  
-7. 未知命令路径清理  
+1. Context 目录 + 当前页快照
+2. generate 管道（小页数）+ Observe
+3. Safety 删页
+4. beautify/notes
+5. visual
+6. ActionHarness 快路径
+7. 未知命令路径清理
 
 ---
 

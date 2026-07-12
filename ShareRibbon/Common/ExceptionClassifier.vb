@@ -23,6 +23,11 @@ Public NotInheritable Class ExceptionClassifier
     Public Const CodeJson As String = "JSON_ERROR"
     Public Const CodeArgument As String = "ARGUMENT_ERROR"
     Public Const CodeNotFound As String = "NOT_FOUND"
+    Public Const CodeToolNotAllowed As String = "TOOL_NOT_ALLOWED"
+    Public Const CodeHostUnsupported As String = "HOST_UNSUPPORTED"
+    Public Const CodeSafetyBlocked As String = "SAFETY_BLOCKED"
+    Public Const CodeSafetyNeedsApproval As String = "SAFETY_NEEDS_APPROVAL"
+    Public Const CodeVbaDisabled As String = "VBA_DISABLED"
     Public Const CodeCancelled As String = "CANCELLED"
     Public Const CodeIo As String = "IO_ERROR"
 

@@ -1,13 +1,14 @@
 # Office AI Agent · AI Native Harness 详细设计方案
 
-> **文档类型**：产品 + 架构设计（对标规划）  
-> **状态**：设计基线（基于 2026-07 代码实态与 P0 治理后现状）  
-> **目标读者**：产品、架构、Agent 平台、Word/Excel/PPT 执行层开发  
-> **相关文档**：  
-> - `openspec/changes/ai-native-productization-roadmap.md`（已落地阶段跟踪）  
-> - `openspec/changes/global-architecture-hardening-plan.md`（工程硬化）  
-> - `docs/project-issues-and-optimization-audit.md`（问题与优化审计）  
-> - `docs/build-and-installer.md` / `docs/signing-and-certificates.md`  
+> **文档类型**：产品 + 架构设计（目标态基线）
+> **状态**：目标设计基线；不等同当前代码已全部实现
+> **落地设计**：[`ai-native-harness-implementation-design.md`](./ai-native-harness-implementation-design.md) 是后续编码的执行入口
+> **目标读者**：产品、架构、Agent 平台、Word/Excel/PPT 执行层开发
+> **相关文档**：
+> - `openspec/changes/ai-native-productization-roadmap.md`（已落地阶段跟踪）
+> - `openspec/changes/global-architecture-hardening-plan.md`（工程硬化）
+> - `docs/project-issues-and-optimization-audit.md`（问题与优化审计）
+> - `docs/build-and-installer.md` / `docs/signing-and-certificates.md`
 > - 根目录 `AGENTS.md` / `CLAUDE.md`（AI Native 硬规则）
 
 ---
@@ -37,10 +38,10 @@
 
 ### 1.2 我们不可让渡的差异化
 
-1. **本地真实执行**：直接操作用户打开的 `.docx/.xlsx/.pptx`，不是只吐草稿。  
-2. **三端统一 Harness，宿主分离 Executor**：共享 Loop/Skill/Tool 契约，COM 永不进入 `ShareRibbon`。  
-3. **用户可控模型与密钥**：兼容 OpenAI/Anthropic 等，不锁死单一云。  
-4. **可解释、可撤销、可预览**：对标 Cursor 的 diff/explain，落到 Office Undo 与任务窗格。  
+1. **本地真实执行**：直接操作用户打开的 `.docx/.xlsx/.pptx`，不是只吐草稿。
+2. **三端统一 Harness，宿主分离 Executor**：共享 Loop/Skill/Tool 契约，COM 永不进入 `ShareRibbon`。
+3. **用户可控模型与密钥**：兼容 OpenAI/Anthropic 等，不锁死单一云。
+4. **可解释、可撤销、可预览**：对标 Cursor 的 diff/explain，落到 Office Undo 与任务窗格。
 5. **AI Native 硬约束**：入口不堆关键词 `if/else`；能读上下文就不问用户；明确目标默认执行/预览。
 
 ### 1.3 不对标（明确非目标）
@@ -55,6 +56,8 @@
 ---
 
 ## 2. 当前已实现能力盘点（设计起点）
+
+> 本章只描述当前代码事实。后文的 `IOfficeHarness`、`ContextPack`、`RunTrace`、`DocumentDiff`、`allowed-tools` 硬拒绝等是目标合同或部分实现项；具体落地顺序以 [`ai-native-harness-implementation-design.md`](./ai-native-harness-implementation-design.md) 为准。
 
 ### 2.1 已具备的平台骨架
 
@@ -81,14 +84,14 @@ ChatRoutingOrchestrator  ──► AiNativeRuntime.AnalyzeAsync
 | ReAct Loop | `LoopEngine` | ★★★☆ 有 repair/replan；0 工具迭代不再误报成功，观察结构化仍需扩展 |
 | Self-check Loop | `SelfCheckLoopController` + DSL 校验 | ★★☆☆ 与主 Loop 并存，场景偏排版 |
 | Tools | `ShareRibbon/Tools/**` ~72 | ★★★☆ Schema 全，执行质量与 observe 不均 |
-| Skills | 4 目录 Skill + 5 旧 JSON | ★★☆☆ 双格式；工具存在性/宿主可用性已硬校验，Skill `allowed-tools` 仍需按命中 Skill 收紧 |
+| Skills | 4 目录 Skill + 5 旧 JSON | ★★★☆ 双格式；工具存在性/宿主可用性已硬校验，Skill `allowed-tools` 已按命中 Skill 收紧，门禁 Trace 待补 |
 | Memory | atomic + memory_item + embedding + 晋升 | ★★★☆ 产品化有基础，双模型待收敛 |
 | MCP | StreamJsonRpc client + 配置 UI | ★★★☆ 可用，健康度/超时需统一 |
 | Word Capability | `WordActionHarness` / `WordCapabilityRegistry` / 排版校对编号 | ★★★★ Word 最强样板；四类 fast-path 已有结构化结果或启动结果回灌 |
 | Excel 执行 | `ExcelDirectOperationService` + ExcelDna | ★★★☆ 命令强，Harness 弱 |
 | PPT 执行 | ChatControl 命令分发 | ★★☆☆ 工具多，闭环弱 |
 | 上下文 UI | 上下文控制台 / Agent 卡片 | ★★★☆ 可解释雏形 |
-| 工程 | smoke、code/installer 二分、AppLogger、ToolResult 契约、P0 guardrails、code-only CI | ★★★☆ P0 治理后可继续产品化 |
+| 工程 | smoke、code/installer 二分、AppLogger、ToolResult 错误契约、P0 guardrails、code-only CI | ★★★☆ P0 治理后可继续产品化 |
 | 网关 | `AiGateway` 非流式 + `HttpStreamService` 流式 | ★★☆☆ 双轨 |
 
 ### 2.2 与「完全 Harness」的差距（总览）
@@ -165,7 +168,9 @@ ChatRoutingOrchestrator  ──► AiNativeRuntime.AnalyzeAsync
 | Observe | `ToolResult` / FormatObservation | 强制文档差分 + 错误契约 |
 | Explain | Agent 卡片 / ExecutionExplanation | 统一用户可见时间线 |
 
-### 3.3 唯一主路径（产品硬规则）
+### 3.3 唯一主路径（目标硬规则）
+
+当前代码的主路径是 `ChatRoutingOrchestrator` → `AgentKernelService` → `OfficeHarness.RunAsync` → `AgentKernel` → `LoopEngine`。`IOfficeHarness` 第一版 adapter 已落地并进入主路径；后续继续补完整状态机、控制 API 和 ContextHub，不做推倒式重构。
 
 ```text
 UserTurn
@@ -184,11 +189,11 @@ UserTurn
   → Surface 渲染结果 / 撤销入口
 ```
 
-**禁止**（新代码零容忍）：
+**禁止**（新代码零容忍；老路径按阶段迁移）：
 
-- 在 `ChatControl` 用 `Select Case` 关键词决定业务主路径  
-- 自然语言直接 `ExecuteJsonCommand` 而不经 ToolBroker  
-- Skill 未声明工具却被调用  
+- 在 `ChatControl` 用 `Select Case` 关键词决定业务主路径
+- 自然语言直接 `ExecuteJsonCommand` 而不经 ToolBroker
+- Skill 未声明工具却被调用
 - 空 `OfficeContext` 进入生产 Loop（仅测试夹具允许）
 
 ---
@@ -253,15 +258,15 @@ UserTurn
 
 已扩展字段需成为全链路强制：
 
-- `Success`, `Message`, `Data`  
-- `ErrorCode`, `UserMessage`, `DebugDetail`, `Recoverable`  
-- `ElapsedMs`, `ToolId`  
-- **新增建议**：`Observation`（文档差分摘要）、`UndoPointId`、`Artifacts[]`
+- `Success`, `Message`, `Data`
+- `ErrorCode`, `UserMessage`, `DebugDetail`, `Recoverable`
+- `ElapsedMs`, `ToolId`
+- `Observation`（文档差分摘要）、`UndoPointId`、`Artifacts[]`：字段已加入；Word 基础写工具已填 before/after/diff Observation，并通过 `ExecutionExplanation` 进入 Agent 卡片和 RunTrace。完整 Undo 绑定、Excel/PPT Diff 待后续。
 
-### 4.6 RunTrace（可回放）
+### 4.6 RunTrace（轻量落库已实现，完整回放待补）
 
-整轮：`UserTurn → ContextPack 摘要 → Spec → Plan → Steps[] → ToolResults[] → FinalExplain → MemoryWrites`  
-落库：`conversation_event` / 专用 `agent_run` 表（**细化项**）。
+整轮：`UserTurn → ContextPack 摘要 → Spec → Plan → Steps[] → ToolResults[] → FinalExplain → MemoryWrites`
+落库：当前已有 `agent_run` / `agent_run_step` 轻量表，由 `OfficeHarness` 通过 `SqliteRunTraceStore` 写入。`agent_run_event`、审批事件、回放 UI、崩溃 orphan 清理仍按落地设计后续补齐。
 
 ---
 
@@ -275,9 +280,9 @@ UserTurn
 
 #### 已有
 
-- `OfficeContext` + 三端 `CaptureOfficeContext`  
-- `ChatContextBuilder` 记忆注入  
-- 上下文控制台 UI  
+- `OfficeContext` + 三端 `CaptureOfficeContext`
+- `ChatContextBuilder` 记忆注入
+- 上下文控制台 UI
 
 #### 必须细化
 
@@ -309,9 +314,9 @@ IHostContextReader（Word/Excel/PPT 实现）
 
 #### 已有
 
-- `IntentRecognitionService`（大）  
-- `AiNativeRuntime` 产 TaskSpec  
-- Loop 内 GeneratePlan  
+- `IntentRecognitionService`（大）
+- `AiNativeRuntime` 产 TaskSpec
+- Loop 内 GeneratePlan
 
 #### 必须细化
 
@@ -327,10 +332,10 @@ IHostContextReader（Word/Excel/PPT 实现）
 
 #### 规划提示原则（写入 Prompt Profile）
 
-1. 先观察后修改。  
-2. 优先原生 Tool，VBA 最后。  
-3. 写操作说明预期文档变化。  
-4. 不确定范围时用选区 → UsedRange → 询问（仅阻塞时）。  
+1. 先观察后修改。
+2. 优先原生 Tool，VBA 最后。
+3. 写操作说明预期文档变化。
+4. 不确定范围时用选区 → UsedRange → 询问（仅阻塞时）。
 5. 成功标准必须可被 Observe 验证。
 
 ---
@@ -343,9 +348,9 @@ IHostContextReader（Word/Excel/PPT 实现）
 
 #### 已有
 
-- 目录型：`excel-table-agent` / `word-document-agent` / `powerpoint-deck-agent` / `office-skill-authoring`  
-- 旧 JSON skills  
-- Skills 索引与 usage registry  
+- 目录型：`excel-table-agent` / `word-document-agent` / `powerpoint-deck-agent` / `office-skill-authoring`
+- 旧 JSON skills
+- Skills 索引与 usage registry
 
 #### 必须细化
 
@@ -382,11 +387,11 @@ Front matter 必备：`name`, `description`, `application`, `allowed-tools`, `in
 
 #### 已有
 
-- 72 个 Tools JSON（excel/word/ppt/common）  
-- `ToolRegistry.ExecuteToolAsync`  
-- MCP 工具前缀 `mcp.*`  
-- memory.*  
-- WordCapabilityRegistry / ActionHarness  
+- 72 个 Tools JSON（excel/word/ppt/common）
+- `ToolRegistry.ExecuteToolAsync`
+- MCP 工具前缀 `mcp.*`
+- memory.*
+- WordCapabilityRegistry / ActionHarness
 
 #### 必须细化
 
@@ -415,9 +420,9 @@ Discover → Filter(app, skill, safety) → Model sees schema
 
 `WordActionHarness` 当前是 **高置信快路径**。目标形态：
 
-1. Harness 仍统一入口；  
-2. Planner 可直接选择 `word.proofread` / `word.numbering` Capability；  
-3. 快路径结果 **必须** 写成 ToolResult 并进入 Trace/Memory；  
+1. Harness 仍统一入口；
+2. Planner 可直接选择 `word.proofread` / `word.numbering` Capability；
+3. 快路径结果 **必须** 写成 ToolResult 并进入 Trace/Memory；
 4. Excel/PPT 实现 `ExcelActionHarness` / `PptActionHarness` 同构。
 
 ---
@@ -438,9 +443,9 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 #### 已有
 
-- `LoopEngine`：MaxIterations=15，修复 3 次，重规划 2 次  
-- 风险工具日志  
-- 结构化 ToolResult 摘要开始接入  
+- `LoopEngine`：MaxIterations=15，修复 3 次，重规划 2 次
+- 风险工具日志
+- 结构化 ToolResult 摘要开始接入
 
 #### 必须细化
 
@@ -459,10 +464,10 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 每次写工具后至少返回：
 
-- 变更范围（段落号 / 单元格地址 / 幻灯片索引）  
-- 前后指纹或抽样文本  
-- 错误码（若失败）  
-- 是否可 Undo  
+- 变更范围（段落号 / 单元格地址 / 幻灯片索引）
+- 前后指纹或抽样文本
+- 错误码（若失败）
+- 是否可 Undo
 
 ---
 
@@ -498,9 +503,9 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 #### 已有
 
-- 长短期、晋升、过期、冲突边  
-- Agent 主动 `memory.search`  
-- embedding  
+- 长短期、晋升、过期、冲突边
+- Agent 主动 `memory.search`
+- embedding
 
 #### 必须细化
 
@@ -519,9 +524,9 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 #### 已有
 
-- `AiGateway` 非流式  
-- `HttpStreamService` 流式主聊天  
-- Provider 转换 smoke  
+- `AiGateway` 非流式
+- `HttpStreamService` 流式主聊天
+- Provider 转换 smoke
 
 #### 必须细化
 
@@ -539,7 +544,7 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 #### 已有
 
-- WebView2 Chat、上下文控制台、Agent 卡片、校对/排版 UI  
+- WebView2 Chat、上下文控制台、Agent 卡片、校对/排版 UI
 
 #### 必须细化
 
@@ -554,7 +559,7 @@ Idle → Analyzing → Planning → AwaitingApproval?
 | UX-7 | **多会话 / 任务历史** | 可回放 RunTrace | P2 |
 | UX-8 | 收敛 Deepseek/Doubao 双入口或明确场景 | 降低分叉 | P2 |
 
-**原则**：Surface **永不**实现业务路由；只调 `IOfficeHarness`。
+**目标原则**：Surface **永不**实现业务路由；只调 `IOfficeHarness`。当前过渡期允许 `BaseChatControl` 调 `ChatRoutingOrchestrator`，但不得继续新增业务分支。
 
 ---
 
@@ -622,10 +627,10 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 ### 7.2 体验原则（写入产品宪法）
 
-1. **默认行动**：可逆则先预览或直接做；不可逆则确认。  
-2. **最小提问**：只问阻塞执行的问题。  
-3. **可见推理**：展示依据（上下文/Skill/工具），不展示无用思维链刷屏。  
-4. **失败可恢复**：repair → 换工具 → 降级说明，而不是「暂不支持」。  
+1. **默认行动**：可逆则先预览或直接做；不可逆则确认。
+2. **最小提问**：只问阻塞执行的问题。
+3. **可见推理**：展示依据（上下文/Skill/工具），不展示无用思维链刷屏。
+4. **失败可恢复**：repair → 换工具 → 降级说明，而不是「暂不支持」。
 5. **宿主诚实**：做不到的 COM 能力明确边界，给替代路径。
 
 ---
@@ -663,9 +668,9 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 ### 9.2 可观测性
 
-- `AppLogger` + correlation = TurnId  
-- RunTrace 落库  
-- 指标：步数、repair 次数、工具失败码 TopN、Skill 命中率、用户撤销率  
+- `AppLogger` + correlation = TurnId
+- RunTrace 落库
+- 指标：步数、repair 次数、工具失败码 TopN、Skill 命中率、用户撤销率
 
 ### 9.3 性能预算（建议）
 
@@ -678,10 +683,10 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 ### 9.4 线程模型（硬约束）
 
-- UI / WebView2 / COM：UI 线程  
-- LLM / SQLite / embedding：线程池  
-- 禁止 UI 上裸 `.Result`（已用 SyncOverAsync 过渡）  
-- Executor 内部统一 `UiDispatcher.InvokeSync/Async`  
+- UI / WebView2 / COM：UI 线程
+- LLM / SQLite / embedding：线程池
+- 禁止 UI 上裸 `.Result`（已用 SyncOverAsync 过渡）
+- Executor 内部统一 `UiDispatcher.InvokeSync/Async`
 
 ---
 
@@ -693,52 +698,52 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 **目标**：所有新代码只依赖稳定契约。
 
-**当前状态（2026-07-12 复核）**：H0 已启动但未完成。P0 治理已先行落地 `ToolResult` 错误契约、原生 Tool 宿主 Boolean 回灌、VSTO shadow-copy 工具定位、0 迭代失败防误报、code-only CI 与 P0 guardrails；`IOfficeHarness` 正式接口/空壳仍待实现。
+**当前状态**：H0 adapter 已落地，`AgentKernelService.StartAgentAsync` 已经通过 `OfficeHarness` 调用现有 `AgentKernel`；Agent 原生工具主路径已强制 `ToolResult` 回执，不再回退 Boolean 假成功。P0 治理已落地工具定位、0 迭代失败防误报、code-only CI 与 P0 guardrails；轻量 RunTrace 和 Word 基础写工具最小 Diff 已完成，完整 ContextHub/审批控制/事件回放/Excel/PPT Diff 仍待后续。
 
-- 冻结：`UserTurn` / `ContextPack` / `TaskSpec` / `ExecutionPlan` / `ToolResult` / `RunTrace`  
-- `IOfficeHarness` 接口 + 空壳实现转调现有 AgentKernel  
-- Surface 只调 Harness  
-- 文档：本设计 + 契约示例 JSON  
+- 冻结：`UserTurn` / `ContextPack` / `TaskSpec` / `ExecutionPlan` / `ToolResult` / `RunTrace`
+- `IOfficeHarness` 接口 + 空壳实现转调现有 AgentKernel
+- Surface 只调 Harness
+- 文档：本设计 + 契约示例 JSON
 
 **验收**：三端发送路径编译通过；旧路径标 obsolete。
 
 ### Phase H1 —— 主路径硬化（2–3 周）
 
-- ContextHub 三端结构快照 + Diff  
-- ToolBroker allowed-tools 硬门禁  
-- Loop 合并 SelfCheck 钩子；Observe 强制差分字段  
-- Word 全部 Capability 回传 ToolResult  
-- 取消 NL 旁路（除 Safety 允许的快路径且写 Trace）  
+- ContextHub 三端结构快照 + Diff
+- ToolBroker allowed-tools 硬门禁
+- Loop 合并 SelfCheck 钩子；Observe 强制差分字段
+- Word 全部 Capability 回传 ToolResult
+- 取消 NL 旁路（除 Safety 允许的快路径且写 Trace）
 
-**当前进展（2026-07-12）**：工具存在性/宿主可用性已在 `ToolRegistry.TryNormalizeToolCall` 执行前校验；Word Numbering/DirectFormatting/Proofread/SemanticReformat fast-path 已有结构化结果或启动结果回灌；Skill `allowed-tools` 与命中 Skill 的交集硬拒绝、DocumentDiff 仍待实现。
+**当前进展**：工具存在性/宿主可用性已在 `ToolRegistry.TryNormalizeToolCall` 执行前校验；Word Numbering/DirectFormatting/Proofread/SemanticReformat fast-path 已有结构化结果或启动结果回灌；`ToolExecutionContext` 与执行期 Skill `allowed-tools` 硬拒绝已落地；Word `ListParagraphs/GetParagraphInfo` 已回 `Data`；Word `InsertText/FormatText/ReplaceText/DeleteText` 已有 before/after/diff Observation；最小 `SafetyGate` 已在 COM 前阻断 VBA/风险工具；轻量 RunTrace 已写 `agent_run`/`agent_run_step`。门禁事件、完整回放、Excel/PPT Observation 仍待实现。
 
 **验收**：U1/U2/U9 黄金场景；失败可见 ErrorCode。
 
 ### Phase H2 —— Excel Harness 对齐（2–3 周）
 
-- `ExcelActionHarness` + 表探测  
-- 公式/图表/清洗 Skill 实战  
-- 大表分块  
-- 场景 U3  
+- `ExcelActionHarness` + 表探测
+- 公式/图表/清洗 Skill 实战
+- 大表分块
+- 场景 U3
 
 ### Phase H3 —— PPT Harness 对齐（2–3 周）
 
-- `PptActionHarness` + 版式/母版语义  
-- 生成+美化闭环  
-- 场景 U4  
+- `PptActionHarness` + 版式/母版语义
+- 生成+美化闭环
+- 场景 U4
 
 ### Phase H4 —— 体验与记忆产品化（2 周）
 
-- 时间线、撤销本轮、变更高亮  
-- Memory 单写模型、隐私开关  
-- Plan 可编辑  
+- 时间线、撤销本轮、变更高亮
+- Memory 单写模型、隐私开关
+- Plan 可编辑
 
 ### Phase H5 —— 平台化（持续）
 
-- 原生 tool-calling  
-- 企业 Skill 目录  
-- 评测集 CI  
-- 连接器（可选 Graph/MCP 市场）  
+- 原生 tool-calling
+- 企业 Skill 目录
+- 评测集 CI
+- 连接器（可选 Graph/MCP 市场）
 
 ---
 
@@ -748,7 +753,7 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 ### 11.1 已完成（设计草案，评审用）
 
-索引、**评审结论与 Frozen D1–D15**：[`design/README.md`](./design/README.md) / [`design/design-review-record.md`](./design/design-review-record.md)（**v0.5，12 份专项 v0.2**）。
+索引、**设计决策 D1–D15**：[`design/README.md`](./design/README.md) / [`design/design-review-record.md`](./design/design-review-record.md)。这些决策代表目标约束，不代表当前代码已全部实现。
 
 | 专项 | 内容 |
 |---|---|
@@ -773,7 +778,9 @@ Idle → Analyzing → Planning → AwaitingApproval?
 
 ---
 
-## 12. 决策记录（**评审冻结**，详见 `design/design-review-record.md`）
+## 12. 决策记录（**目标设计决策**，详见 `design/design-review-record.md`）
+
+> 下表是后续实现必须收敛到的目标约束。当前未完成项已经在 [`ai-native-harness-implementation-design.md`](./ai-native-harness-implementation-design.md) 拆成可执行任务。
 
 | ID | 议题 | 冻结决策 |
 |---|---|---|
@@ -876,18 +883,17 @@ Await OfficeHarness.RunAsync(turn)
 
 当前项目 **已经站在 AI Native 门槛内**：有 Runtime、Kernel、Loop、Skills、Tools、Memory、Word 样板与工程治理基础。距离「对标 Copilot 体验 + Cursor 执行力」的关键跃迁，不是再堆入口功能，而是：
 
-1. **把 Harness 做成唯一大脑与唯一手**；  
-2. **把观察（文档差分）做成一等公民**；  
-3. **把 Skill/Tool 边界做成硬门禁**；  
-4. **把 Word 样板复制到 Excel/PPT**；  
-5. **用黄金场景评测锁住回归**。  
+1. **把 Harness 做成唯一大脑与唯一手**；
+2. **把观察（文档差分）做成一等公民**；
+3. **把 Skill/Tool 边界做成硬门禁**；
+4. **把 Word 样板复制到 Excel/PPT**；
+5. **用黄金场景评测锁住回归**。
 
 **建议的立即动作（设计落地，非本轮编码）**：
 
-1. 评审并冻结第 4 章契约字段；  
-2. 从第 11 章拆 3 份最急专项：`context-pack-schema`、`tool-result-observation`、`safety-policy`；  
-3. 用 U1–U4 定义黄金文档夹具目录；  
-4. 开 Phase H0 实现 `IOfficeHarness` 外壳，停止在 `ChatControl` 新增业务分支。  
+1. 以 [`ai-native-harness-implementation-design.md`](./ai-native-harness-implementation-design.md) 为唯一落地入口；
+2. H0/H1/H2 的主路径基础已落地：`OfficeHarness` adapter、`ToolExecutionContext`、`allowed-tools` 执行期门禁、Word 读工具 Data 回传、Word 基础写工具 before/after/diff Observation、轻量 RunTrace；
+3. 下一步补 Excel/PPT DocumentDiff、Golden 回归、`agent_run_event` 和回放 UI，避免一口气推倒重构。
 
 ---
 

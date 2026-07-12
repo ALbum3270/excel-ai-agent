@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：`ToolResult` 已有 `ErrorCode/UserMessage/DebugDetail/Recoverable/ToolId/Data/Observation/UndoPointId/Artifacts`；原生 Office tool 已支持 `ToolResult` 回灌；Word `ListParagraphs/GetParagraphInfo` 已回传结构化 `Data`；Word `InsertText/FormatText/ReplaceText/DeleteText` 已返回 before/after/diff Observation；`LoopEngine` 已把 `ObservationJson` 与读工具 `DataSummaryJson` 写入 `ExecutionExplanation`，供 Agent 卡片和 RunTrace step 使用。UndoPoint 稳定绑定、Excel/PPT 写工具 Observation 仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §4.5 / §5.4 / §5.5 |
 | 现有代码 | `Agent/ToolRegistry.ToolResult`、`LoopEngine.FormatObservation`、`ExecutionExplanation`、`ExceptionClassifier`、`AppLogger` |
 | 依赖 | [`context-pack-schema.md`](./context-pack-schema.md) 的 before/after 快照 |
@@ -32,12 +33,12 @@
 
 | 能力 | 现状 | 差距 |
 |---|---|---|
-| ToolResult 基本字段 | Success/Message/Data/Elapsed/Error* | Observation/Undo/Artifacts 未强制 |
-| FormatObservation | 成功/失败字符串 | 无文档差分 |
-| Word 读工具 | ListParagraphs 等 TODO 未回传 AI | 违反读工具契约 |
-| 修复循环 | 有，含 ErrorCode 摘要 | 缺 Diff、缺「重复调用」检测 |
+| ToolResult 基本字段 | Success/Message/Data/Elapsed/Error*/Observation/Undo/Artifacts | Observation 已有字段但未全工具强制 |
+| FormatObservation | 优先摘要，成功时可附 Data；Word 写工具已有最小 diff | Excel/PPT 尚无同构 diff |
+| Word 读工具 | ListParagraphs/GetParagraphInfo 已回传 Data | 仍缺 read observation 与稳定 ref |
+| 修复循环 | 有，含 ErrorCode 摘要；Word 写工具 Observation 可提供 diff 证据 | 缺「重复调用」检测，Excel/PPT 缺 Diff |
 | Undo | UndoManager 存在 | 未与 ToolResult 稳定关联 |
-| 快路径 WordActionHarness | 直接改文档 | 未统一写 ToolResult/Trace |
+| 快路径 WordActionHarness | 部分快路径已有结构化结果/启动结果回灌 | 尚未全部统一写 ToolResult/Trace |
 
 ---
 
@@ -443,12 +444,12 @@ ErrorCode 权威表见 [`design-review-record.md`](./design-review-record.md) §
 
 ## 16. 落地顺序（实现时）
 
-1. 扩展 ToolResult 模型字段（兼容旧调用）  
-2. Diff 服务（先 Word，后 Excel/PPT）  
-3. LoopEngine 强制观察管线  
-4. 修 Word 读工具 Data  
-5. 快路径接入 Trace  
-6. 评测夹具  
+1. 已完成：扩展 ToolResult 模型字段（兼容旧调用）。
+2. 已完成：Word 读工具 Data 回传。
+3. 已完成：Word 基础写工具 before/after/diff Observation。
+4. 已完成：LoopEngine 将 `ObservationJson` / `DataSummaryJson` 写入 `ExecutionExplanation`，轻量 RunTrace 可落 step observation。
+5. 下一步：Excel/PPT 写工具 Observation。
+6. 下一步：快路径接入 Trace 与评测夹具。
 
 ---
 

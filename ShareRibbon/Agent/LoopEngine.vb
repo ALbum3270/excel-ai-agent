@@ -63,6 +63,7 @@ Namespace Agent
 
                 session.Status = AgentStatus.Executing
                 OnStatusChanged?.Invoke($"规划完成（共 {session.Plan.Steps.Count} 步），进入自治执行...")
+                Dim executionContext As ToolExecutionContext = ToolExecutionContext.FromSession(session, skill)
 
                 ' Phase 3: ReAct Loop
                 Dim stepIndex As Integer = 0
@@ -89,7 +90,7 @@ Namespace Agent
                     End If
 
                     Dim normalizeMessage As String = ""
-                    If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, normalizeMessage) Then
+                    If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, executionContext, normalizeMessage) Then
                         noProgressCount += 1
                         planStep.Status = StepStatus.Failed
                         planStep.ErrorMessage = normalizeMessage
@@ -134,10 +135,10 @@ Namespace Agent
                     ' 多轮修复循环
                     While fixAttempt < MaxFixAttempts
                         Dim normalized As String = ""
-                        If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, normalized) Then
+                        If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, executionContext, normalized) Then
                             toolResult = ToolResult.Failed(toolCall.ToolId,
                                                            normalized,
-                                                           New With {.availableTools = BuildAvailableToolHint(session.AppType)},
+                                                           New With {.availableTools = BuildAvailableToolHint(session.AppType, executionContext)},
                                                            ExceptionClassifier.CodeNotFound,
                                                            normalized,
                                                            normalized,
@@ -145,7 +146,7 @@ Namespace Agent
                         Else
                             If Not String.IsNullOrWhiteSpace(normalized) Then Debug.WriteLine($"[LoopEngine] {normalized}")
                             ' 执行工具
-                            toolResult = Await _toolRegistry.ExecuteToolAsync(toolCall.ToolId, toolCall.Parameters)
+                            toolResult = Await _toolRegistry.ExecuteToolAsync(executionContext, toolCall.ToolId, toolCall.Parameters)
                         End If
 
                         If toolResult.Success Then
@@ -177,7 +178,7 @@ Namespace Agent
 原参数: {Newtonsoft.Json.JsonConvert.SerializeObject(toolCall.Parameters)}
 
 当前 {If(session.AppType, "Office")} 可用工具（必须使用原样工具 ID，不要自创 snake_case 或未注册命令）:
-{BuildAvailableToolHint(session.AppType)}
+{BuildAvailableToolHint(session.AppType, executionContext)}
 
 请分析错误原因并返回修正后的工具调用。只返回 JSON，格式：
 ```json
@@ -359,6 +360,8 @@ Namespace Agent
             Dim canUndo = undoPoint IsNot Nothing AndAlso undoPoint.CanUndo
             Dim beforeSummary = $"准备执行步骤 {stepIndex + 1}: {If(planStep?.Description, "")}；工具: {toolId}；参数: {paramsJson}"
             Dim afterSummary = If(observation, message)
+            Dim observationJson = SerializeCompactJson(If(toolResult?.Observation, Nothing), 8192)
+            Dim dataSummaryJson = SerializeCompactJson(BuildDataSummary(toolResult), 4096)
             Dim repairSummary = If(fixAttempts > 0,
                                    If(success, $"AI 自动修复 {fixAttempts} 次后成功", $"AI 自动修复 {fixAttempts} 次后仍失败"),
                                    "")
@@ -377,6 +380,8 @@ Namespace Agent
                 .ElapsedMs = elapsedMs,
                 .BeforeSummary = beforeSummary,
                 .AfterSummary = afterSummary,
+                .ObservationJson = observationJson,
+                .DataSummaryJson = dataSummaryJson,
                 .Success = success,
                 .Message = message,
                 .SkillName = skillName,
@@ -391,6 +396,81 @@ Namespace Agent
                 .FixAttempts = fixAttempts,
                 .ExplanationText = text
             }
+        End Function
+
+        Private Function BuildDataSummary(toolResult As ToolResult) As Object
+            If toolResult Is Nothing OrElse toolResult.Data Is Nothing Then Return Nothing
+
+            Try
+                Dim token = JToken.FromObject(toolResult.Data)
+                If token.Type = JTokenType.Array Then
+                    Dim arr = CType(token, JArray)
+                    Return New JObject From {
+                        {"type", "array"},
+                        {"count", arr.Count},
+                        {"preview", CloneFirstItems(arr, 5)}
+                    }
+                End If
+
+                If token.Type = JTokenType.Object Then
+                    Dim obj = CType(token, JObject)
+                    Dim summary As New JObject From {
+                        {"type", "object"},
+                        {"keys", BuildStringArray(obj.Properties().Select(Function(p) p.Name).Take(20))}
+                    }
+
+                    If obj("total") IsNot Nothing Then summary("total") = obj("total")
+                    If obj("returned") IsNot Nothing Then summary("returned") = obj("returned")
+                    If obj("truncated") IsNot Nothing Then summary("truncated") = obj("truncated")
+                    If obj("items") IsNot Nothing AndAlso obj("items").Type = JTokenType.Array Then
+                        summary("itemsPreview") = CloneFirstItems(CType(obj("items"), JArray), 5)
+                    End If
+
+                    Return summary
+                End If
+
+                Return token
+            Catch ex As Exception
+                AppLogger.Debug("LoopEngine", "BuildDataSummary failed", ex)
+                Return Nothing
+            End Try
+        End Function
+
+        Private Function CloneFirstItems(items As JArray, maxItems As Integer) As JArray
+            Dim result As New JArray()
+            If items Is Nothing Then Return result
+
+            For Each item In items.Take(Math.Max(0, maxItems))
+                result.Add(item.DeepClone())
+            Next
+
+            Return result
+        End Function
+
+        Private Function BuildStringArray(items As IEnumerable(Of String)) As JArray
+            Dim result As New JArray()
+            If items Is Nothing Then Return result
+
+            For Each item In items
+                result.Add(If(item, ""))
+            Next
+
+            Return result
+        End Function
+
+        Private Function SerializeCompactJson(value As Object, maxLength As Integer) As String
+            If value Is Nothing Then Return ""
+
+            Try
+                Dim json = JsonConvert.SerializeObject(value, Formatting.None)
+                If maxLength > 0 AndAlso json.Length > maxLength Then
+                    Return json.Substring(0, maxLength) & "...(truncated)"
+                End If
+                Return json
+            Catch ex As Exception
+                AppLogger.Debug("LoopEngine", "SerializeCompactJson failed", ex)
+                Return ""
+            End Try
         End Function
 
         Private Function ExtractResultDataValue(toolResult As ToolResult, key As String) As String
@@ -589,8 +669,9 @@ complexity 规则：
             }
         End Function
 
-        Private Function BuildAvailableToolHint(appType As String) As String
-            Dim tools = _toolRegistry.GetAvailableTools(appType).
+        Private Function BuildAvailableToolHint(appType As String,
+                                                Optional executionContext As ToolExecutionContext = Nothing) As String
+            Dim tools = _toolRegistry.GetVisibleTools(appType, executionContext).
                 OrderBy(Function(t) t.Category).
                 ThenBy(Function(t) t.Id).
                 Take(40).
@@ -606,10 +687,36 @@ complexity 规则：
                 Return "❌ [unknown] 无工具结果"
             End If
             If result.Success Then
-                Return $"✅ [{result.ToolId}] 执行成功: {result.Message}"
+                Dim summary = result.ToObserveSummary()
+                Dim dataSummary = FormatResultData(result.Data)
+                If Not String.IsNullOrWhiteSpace(dataSummary) Then
+                    Return $"✅ [{result.ToolId}] 执行成功: {summary}{vbCrLf}data={dataSummary}"
+                End If
+                Return $"✅ [{result.ToolId}] 执行成功: {summary}"
             End If
             ' Structured observe payload for repair/reflect (P0-4).
             Return $"❌ [{result.ToolId}] {result.ToObserveSummary()}"
+        End Function
+
+        Private Function FormatResultData(data As Object) As String
+            If data Is Nothing Then Return ""
+
+            Try
+                Dim text As String
+                If TypeOf data Is JToken Then
+                    text = DirectCast(data, JToken).ToString(Formatting.None)
+                Else
+                    text = JsonConvert.SerializeObject(data, Formatting.None)
+                End If
+
+                Const maxLen As Integer = 1800
+                If text.Length > maxLen Then
+                    Return text.Substring(0, maxLen) & "...(truncated)"
+                End If
+                Return text
+            Catch ex As Exception
+                Return ""
+            End Try
         End Function
 
         ''' <summary>

@@ -26,8 +26,7 @@ Namespace Agent
 
         ' 外部回调（由 BaseChatControl 设置）
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
-        Public Property ExecuteCode As Action(Of String, String, Boolean)
-        Public Property ExecuteCodeWithResult As Func(Of String, String, Boolean, Boolean)
+        Public Property ExecuteCodeWithToolResult As Func(Of String, String, Boolean, ToolResult)
 
         ' MCP 客户端（由外部设置，可选）
         Public Property McpClient As StreamJsonRpcMCPClient
@@ -236,22 +235,22 @@ Namespace Agent
                 ' 将上下文保存到记忆中（供多轮对话使用）
                 _memory.SetWorking("lastOfficeContext", officeContext)
 
-            ' 绑定执行回调
-            _toolRegistry.ExecuteCode = ExecuteCode
-            _toolRegistry.ExecuteCodeWithResult = ExecuteCodeWithResult
-
-                ' 构建系统提示词（注入上下文）
-                Dim contextText = officeContext.ToPromptText()
-                Dim systemPrompt = _promptManager.BuildSystemPrompt(
-                    appType,
-                    _toolRegistry.GetAvailableTools(appType),
-                    _memory,
-                    contextText  ' ← 新增：上下文文本
-                )
+                ' 绑定执行回调。Agent 原生工具必须返回 ToolResult，禁止退回 Boolean 假成功。
+                _toolRegistry.ExecuteCodeWithToolResult = ExecuteCodeWithToolResult
 
                 ' 自动选择 Skill：优先使用 filesystem Skill 索引，旧 JSON SkillRegistry 作为兜底。
                 Dim matchedSkill = SelectSkillForRequest(userRequest, appType)
                 If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
+                Dim executionContext As ToolExecutionContext = ToolExecutionContext.FromSession(_session, matchedSkill)
+
+                ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
+                Dim contextText = officeContext.ToPromptText()
+                Dim systemPrompt = _promptManager.BuildSystemPrompt(
+                    appType,
+                    _toolRegistry.GetVisibleTools(appType, executionContext),
+                    _memory,
+                    contextText
+                )
 
                 ' 执行 ReAct Loop
                 Dim result = Await _loopEngine.RunAsync(_session, systemPrompt, matchedSkill)

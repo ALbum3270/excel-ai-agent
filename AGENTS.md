@@ -57,7 +57,8 @@ AiHelper/
 | 调试/迁移文档 | `docs/` | Visual Studio/VSTO 调试、迁移指南等 |
 | 需求/变更规格 | `openspec/` | 变更说明、规格草案、归档记录 |
 | AI Native Harness 总设计 | `docs/ai-native-harness-design.md` | 对标 Copilot/Claude/Cursor 的平台设计与细化清单 |
-| Harness 专项设计 | `docs/design/` | ContextPack / Observe / Safety 等冻结级专项 |
+| AI Native Harness 落地实施设计 | `docs/ai-native-harness-implementation-design.md` | 基于现有代码的渐进改造任务、文件范围与验收清单 |
+| Harness 专项设计 | `docs/design/` | ContextPack / Observe / Safety 等目标合同级专项 |
 | NuGet 依赖 | 各项目 `packages.config` 与根 `packages/` | 判断技术栈、依赖版本、目标框架 |
 
 ## Local AGENTS.md Files

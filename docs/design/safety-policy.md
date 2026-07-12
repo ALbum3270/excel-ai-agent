@@ -3,9 +3,10 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：工具 JSON 有 `riskLevel` 字段；`Agent/Execution/SafetyGate.vb` 已接入 `ToolRegistry.ExecuteToolAsync`，在 COM 前同步裁决。当前最小版默认拒绝 VBA（`VBA_DISABLED`），risky/删除/全文替换返回 `SAFETY_NEEDS_APPROVAL` 且不执行；完整审批 UI、ContextPack 风险、影响面阈值和 RunTrace 事件仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.6 |
-| 现有代码 | `Agent/Execution/SafetyChecker.vb`（字符串黑名单）、工具 JSON 的 risk 字段、Loop 高风险日志 |
+| 现有代码 | `Agent/Execution/SafetyGate.vb`、`Agent/Execution/SafetyChecker.vb`（VBA/代码字符串子模块）、工具 JSON 的 `riskLevel` 字段、`ToolRegistry` 执行前裁决 |
 | 关联 | [`tool-result-observation.md`](./tool-result-observation.md)、[`context-pack-schema.md`](./context-pack-schema.md) risks |
 
 ---
@@ -42,9 +43,9 @@
 
 | 现有 | 问题 |
 |---|---|
-| `SafetyChecker` 扫 VBA/代码子串 | 对 JSON Tool 几乎无效 |
-| Tool JSON 有 riskLevel | 未在 Broker 强制聚合 |
-| Loop 对 risky 仅 Debug 日志 | 无统一审批 UX |
+| `SafetyChecker` 扫 VBA/代码子串 | 已降级为 VBA/代码子模块 |
+| Tool JSON 有 riskLevel | 已在 `ToolRegistry` 执行前最小聚合 |
+| Loop 对 risky 仅 Debug 日志 | 最小版已由 `SafetyGate` 返回 `SAFETY_NEEDS_APPROVAL`；审批 UX 待补 |
 | 文档保护/大表 | 未系统进入裁决 |
 | 快路径 Capability | 可能绕过检查 |
 

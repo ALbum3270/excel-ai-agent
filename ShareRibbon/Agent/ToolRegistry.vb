@@ -44,6 +44,12 @@ Namespace Agent
         Public Property Data As Object              ' 执行结果的原始数据
         Public Property ToolId As String
         Public Property ElapsedMs As Long
+        ''' <summary>面向 Agent/用户解释的执行观察，H1 起用于描述改动范围、是否变更、警告等。</summary>
+        Public Property Observation As Object
+        ''' <summary>宿主侧撤销点 ID；H1 先保留字段，具体执行器逐步填充。</summary>
+        Public Property UndoPointId As String = ""
+        ''' <summary>执行产生的附加产物，例如 chart/slide/range 引用。</summary>
+        Public Property Artifacts As Object
         ''' <summary>稳定错误码，如 NETWORK_ERROR / COM_ERROR / NOT_FOUND。</summary>
         Public Property ErrorCode As String = ""
         ''' <summary>面向用户的简短说明（已脱敏）。</summary>
@@ -54,13 +60,19 @@ Namespace Agent
         Public Property Recoverable As Boolean = True
 
         Public Shared Function Succeed(toolId As String, Optional message As String = "",
-                                       Optional data As Object = Nothing) As ToolResult
+                                       Optional data As Object = Nothing,
+                                       Optional observation As Object = Nothing,
+                                       Optional undoPointId As String = "",
+                                       Optional artifacts As Object = Nothing) As ToolResult
             Return New ToolResult With {
                 .Success = True,
                 .ToolId = toolId,
                 .Message = message,
                 .UserMessage = message,
                 .Data = data,
+                .Observation = observation,
+                .UndoPointId = If(undoPointId, ""),
+                .Artifacts = artifacts,
                 .ErrorCode = "",
                 .Recoverable = True
             }
@@ -71,7 +83,9 @@ Namespace Agent
                                       Optional errorCode As String = Nothing,
                                       Optional userMessage As String = Nothing,
                                       Optional debugDetail As String = Nothing,
-                                      Optional recoverable As Boolean = True) As ToolResult
+                                      Optional recoverable As Boolean = True,
+                                      Optional observation As Object = Nothing,
+                                      Optional artifacts As Object = Nothing) As ToolResult
             Dim code = If(String.IsNullOrWhiteSpace(errorCode), ExceptionClassifier.CodeUnknown, errorCode)
             Dim userMsg = If(String.IsNullOrWhiteSpace(userMessage), message, userMessage)
             Dim detail = If(String.IsNullOrWhiteSpace(debugDetail), message, debugDetail)
@@ -81,6 +95,8 @@ Namespace Agent
                 .ToolId = toolId,
                 .Message = message,
                 .Data = data,
+                .Observation = observation,
+                .Artifacts = artifacts,
                 .ErrorCode = code,
                 .UserMessage = userMsg,
                 .DebugDetail = AppLogger.Redact(detail),
@@ -103,11 +119,35 @@ Namespace Agent
         ''' <summary>供 Loop observe/repair 使用的紧凑摘要。</summary>
         Public Function ToObserveSummary() As String
             If Success Then
+                Dim summary = ExtractObservationSummary()
+                If Not String.IsNullOrWhiteSpace(summary) Then Return summary
                 Return If(String.IsNullOrWhiteSpace(Message), "ok", Message)
             End If
             Dim code = If(String.IsNullOrWhiteSpace(ErrorCode), ExceptionClassifier.CodeUnknown, ErrorCode)
             Dim um = If(String.IsNullOrWhiteSpace(UserMessage), Message, UserMessage)
             Return $"[{code}] recoverable={Recoverable}: {um}"
+        End Function
+
+        Private Function ExtractObservationSummary() As String
+            If Observation Is Nothing Then Return ""
+
+            Try
+                Dim token = TryCast(Observation, JToken)
+                If token IsNot Nothing Then
+                    Return If(token("summary")?.ToString(), "")
+                End If
+
+                Dim observationType = Observation.GetType()
+                Dim summaryProperty = observationType.GetProperty("summary")
+                If summaryProperty Is Nothing Then summaryProperty = observationType.GetProperty("Summary")
+                If summaryProperty IsNot Nothing Then
+                    Dim value = summaryProperty.GetValue(Observation, Nothing)
+                    If value IsNot Nothing Then Return value.ToString()
+                End If
+            Catch
+            End Try
+
+            Return ""
         End Function
     End Class
 
@@ -126,13 +166,12 @@ Namespace Agent
     Public Class ToolRegistry
         Private ReadOnly _tools As New Dictionary(Of String, ToolDescriptor)(StringComparer.OrdinalIgnoreCase)
         Private _mcpClient As StreamJsonRpcMCPClient
-        Private ReadOnly _executeCodeCallback As Action(Of String, String, Boolean)
+        Private ReadOnly _safetyGate As New Execution.SafetyGate()
 
         ''' <summary>
-        ''' 代码执行委托（用于原生 Office 工具）
+        ''' 代码执行委托（用于原生 Office 工具）。Agent 主路径必须返回 ToolResult。
         ''' </summary>
-        Public Property ExecuteCode As Action(Of String, String, Boolean)
-        Public Property ExecuteCodeWithResult As Func(Of String, String, Boolean, Boolean)
+        Public Property ExecuteCodeWithToolResult As Func(Of String, String, Boolean, ToolResult)
 
         ''' <summary>
         ''' MCP 客户端（用于远程工具调用）
@@ -326,6 +365,15 @@ Namespace Agent
             Return result
         End Function
 
+        Public Function GetVisibleTools(appType As String, executionContext As ToolExecutionContext) As List(Of ToolDescriptor)
+            Dim tools = GetAvailableTools(appType)
+            If executionContext Is Nothing OrElse Not executionContext.HasPrimarySkillGate() Then
+                Return tools
+            End If
+
+            Return tools.Where(Function(t) executionContext.IsToolAllowed(t.Id)).ToList()
+        End Function
+
         Private Shared Function SupportsApp(tool As ToolDescriptor, appType As String) As Boolean
             If tool Is Nothing Then Return False
             Dim raw = If(tool.AppType, "")
@@ -356,6 +404,13 @@ Namespace Agent
         End Function
 
         Public Function TryNormalizeToolCall(appType As String, toolCall As ToolCall, ByRef message As String) As Boolean
+            Return TryNormalizeToolCall(appType, toolCall, Nothing, message)
+        End Function
+
+        Public Function TryNormalizeToolCall(appType As String,
+                                             toolCall As ToolCall,
+                                             executionContext As ToolExecutionContext,
+                                             ByRef message As String) As Boolean
             message = ""
             If toolCall Is Nothing OrElse String.IsNullOrWhiteSpace(toolCall.ToolId) Then
                 message = "工具调用为空"
@@ -380,7 +435,7 @@ Namespace Agent
             End If
 
             Dim normalized = NormalizeToolKey(original)
-            Dim matches = GetAvailableTools(appType).
+            Dim matches = GetVisibleTools(appType, executionContext).
                 Where(Function(t) NormalizeToolKey(t.Id) = normalized OrElse NormalizeToolKey(t.Name) = normalized).
                 ToList()
             If matches.Count = 1 Then
@@ -389,7 +444,7 @@ Namespace Agent
                 Return True
             End If
 
-            Dim available = String.Join(", ", GetAvailableTools(appType).Select(Function(t) t.Id).OrderBy(Function(id) id).Take(30))
+            Dim available = String.Join(", ", GetVisibleTools(appType, executionContext).Select(Function(t) t.Id).OrderBy(Function(id) id).Take(30))
             message = $"未找到工具: {original}。只能使用当前 {If(appType, "Office")} 已注册工具，例如: {available}"
             Return False
         End Function
@@ -557,12 +612,72 @@ Namespace Agent
         ''' 执行工具调用
         ''' </summary>
         Public Async Function ExecuteToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)
+            Return Await ExecuteToolAsync(Nothing, toolId, params)
+        End Function
+
+        Public Async Function ExecuteToolAsync(executionContext As ToolExecutionContext,
+                                               toolId As String,
+                                               params As JObject) As Task(Of ToolResult)
             Dim sw = Diagnostics.Stopwatch.StartNew()
+            If params Is Nothing Then params = New JObject()
 
             Dim tool = GetTool(toolId)
             If tool Is Nothing Then
                 sw.Stop()
                 Return ToolResult.Failed(toolId, $"未找到工具: {toolId}")
+            End If
+
+            Dim appType = If(executionContext?.AppType, "")
+            If Not String.IsNullOrWhiteSpace(appType) AndAlso Not SupportsApp(tool, appType) Then
+                sw.Stop()
+                Dim message = $"工具 {toolId} 不支持当前宿主 {appType}"
+                Return ToolResult.Failed(toolId,
+                                         message,
+                                         New With {.appType = appType, .toolAppType = tool.AppType},
+                                         ExceptionClassifier.CodeHostUnsupported,
+                                         message,
+                                         message,
+                                         recoverable:=False)
+            End If
+
+            If executionContext IsNot Nothing AndAlso
+               executionContext.HasPrimarySkillGate() AndAlso
+               Not executionContext.IsToolAllowed(tool.Id) Then
+                sw.Stop()
+                Dim message = $"工具 {tool.Id} 不在当前 Skill 允许工具集合中"
+                Return ToolResult.Failed(tool.Id,
+                                         message,
+                                         New With {
+                                             .primarySkill = executionContext.PrimarySkillName,
+                                             .allowedTools = executionContext.AllowedToolsText()
+                                         },
+                                         ExceptionClassifier.CodeToolNotAllowed,
+                                         message,
+                                         message,
+                                         recoverable:=True)
+            End If
+
+            Dim safetyDecision = _safetyGate.Evaluate(tool, params)
+            If safetyDecision IsNot Nothing AndAlso safetyDecision.Action <> Execution.SafetyAction.Allow Then
+                sw.Stop()
+                Dim errorCode = If(String.IsNullOrWhiteSpace(safetyDecision.ErrorCode),
+                                   ExceptionClassifier.CodeSafetyBlocked,
+                                   safetyDecision.ErrorCode)
+                Dim message = If(String.IsNullOrWhiteSpace(safetyDecision.UserMessage),
+                                 safetyDecision.Reason,
+                                 safetyDecision.UserMessage)
+                AppLogger.Warn("ToolRegistry", $"Safety denied toolId={tool.Id} action={safetyDecision.Action} code={errorCode}: {AppLogger.Redact(safetyDecision.Reason)}")
+                Return ToolResult.Failed(tool.Id,
+                                         message,
+                                         New With {
+                                             .riskLevel = safetyDecision.RiskLevel,
+                                             .safetyAction = safetyDecision.Action.ToString(),
+                                             .reason = safetyDecision.Reason
+                                         },
+                                         errorCode,
+                                         message,
+                                         safetyDecision.Reason,
+                                         recoverable:=False)
             End If
 
             If toolId.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) Then
@@ -650,9 +765,13 @@ Namespace Agent
 
             ' 原生 Office 工具，通过 ExecuteCode 回调执行
             If tool.IsVbaFallback OrElse Not toolId.StartsWith("mcp.") Then
-                If ExecuteCodeWithResult Is Nothing AndAlso ExecuteCode Is Nothing Then
+                If ExecuteCodeWithToolResult Is Nothing Then
                     sw.Stop()
-                    Return ToolResult.Failed(toolId, "ExecuteCode 回调未设置")
+                    Return ToolResult.Failed(toolId,
+                                             "ExecuteCodeWithToolResult 回调未设置",
+                                             errorCode:=ExceptionClassifier.CodeUnknown,
+                                             userMessage:="宿主工具执行器未初始化",
+                                             recoverable:=True)
                 End If
 
                 ' 构建完整的 JSON 命令
@@ -668,25 +787,19 @@ Namespace Agent
                 End If
 
                 Try
-                    ' 调用现有执行逻辑
-                    Dim hostSuccess As Boolean = True
-                    If ExecuteCodeWithResult IsNot Nothing Then
-                        hostSuccess = ExecuteCodeWithResult.Invoke(command, "json", False)
-                    Else
-                        ExecuteCode.Invoke(command, "json", False)
-                    End If
+                    Dim hostResult = ExecuteCodeWithToolResult.Invoke(command, "json", False)
                     sw.Stop()
-                    If hostSuccess Then
-                        Return ToolResult.Succeed(toolId, "执行成功", New With {.elapsedMs = sw.ElapsedMilliseconds})
+                    If hostResult Is Nothing Then
+                        Return ToolResult.Failed(toolId,
+                                                 $"宿主执行器未返回结果: {toolId}",
+                                                 New With {.elapsedMs = sw.ElapsedMilliseconds, .command = command},
+                                                 ExceptionClassifier.CodeUnknown,
+                                                 $"宿主执行器未返回结果: {toolId}",
+                                                 recoverable:=True)
                     End If
-                    Dim failureMessage = $"宿主执行器返回失败: {toolId}"
-                    Return ToolResult.Failed(toolId,
-                                             failureMessage,
-                                             New With {.elapsedMs = sw.ElapsedMilliseconds, .command = command},
-                                             ExceptionClassifier.CodeUnknown,
-                                             failureMessage,
-                                             failureMessage,
-                                             recoverable:=True)
+                    If String.IsNullOrWhiteSpace(hostResult.ToolId) Then hostResult.ToolId = toolId
+                    If hostResult.ElapsedMs <= 0 Then hostResult.ElapsedMs = sw.ElapsedMilliseconds
+                    Return hostResult
                 Catch ex As Exception
                     sw.Stop()
                     AppLogger.Error("ToolRegistry", $"Native tool execute failed toolId={toolId}", ex)

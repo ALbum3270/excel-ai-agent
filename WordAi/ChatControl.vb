@@ -8,6 +8,7 @@ Imports System.Net.Http
 Imports System.Net.Http.Headers
 Imports System.Net.Mime
 Imports System.Reflection.Emit
+Imports System.Security.Cryptography
 Imports System.Text
 Imports System.Text.JSON
 Imports System.Text.RegularExpressions
@@ -3790,6 +3791,535 @@ Public Class ChatControl
         End Try
     End Function
 
+    Protected Overrides Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
+        Try
+            Dim errorMessage As String = ""
+            Dim normalizedJson As JToken = Nothing
+
+            If Not WordJsonCommandSchema.ValidateJsonStructure(jsonCode, errorMessage, normalizedJson) Then
+                Return Agent.ToolResult.Failed("", $"JSON格式不符合规范: {errorMessage}",
+                                               errorCode:=ExceptionClassifier.CodeJson,
+                                               userMessage:=$"JSON格式不符合规范: {errorMessage}",
+                                               recoverable:=True)
+            End If
+
+            If normalizedJson IsNot Nothing AndAlso normalizedJson.Type = JTokenType.Object Then
+                Dim jsonObj = CType(normalizedJson, JObject)
+                If jsonObj("commands") IsNot Nothing Then
+                    Return ExecuteWordCommandsArrayWithToolResult(jsonObj("commands"), preview)
+                Else
+                    Dim command = jsonObj("command")?.ToString()
+                    If IsToolResultCommand(command) Then
+                        Return ExecuteWordCommandWithToolResult(jsonObj)
+                    End If
+                End If
+            End If
+
+            Dim ok = ExecuteJsonCommand(jsonCode, preview)
+            If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
+            Return Agent.ToolResult.Failed("", "JSON命令执行失败")
+
+        Catch ex As Newtonsoft.Json.JsonReaderException
+            Return Agent.ToolResult.Failed("", $"JSON格式无效: {ex.Message}",
+                                           errorCode:=ExceptionClassifier.CodeJson,
+                                           userMessage:=$"JSON格式无效: {ex.Message}",
+                                           debugDetail:=ex.Message,
+                                           recoverable:=True)
+        Catch ex As Exception
+            Return Agent.ToolResult.FromException("", ex)
+        End Try
+    End Function
+
+    Private Function IsToolResultCommand(command As String) As Boolean
+        Return IsReadToolCommand(command) OrElse IsWriteToolCommand(command)
+    End Function
+
+    Private Function IsReadToolCommand(command As String) As Boolean
+        If String.IsNullOrWhiteSpace(command) Then Return False
+        Select Case command.Trim().ToLowerInvariant()
+            Case "listparagraphs", "getparagraphinfo"
+                Return True
+            Case Else
+                Return False
+        End Select
+    End Function
+
+    Private Function IsWriteToolCommand(command As String) As Boolean
+        If String.IsNullOrWhiteSpace(command) Then Return False
+        Select Case command.Trim().ToLowerInvariant()
+            Case "inserttext", "formattext", "replacetext", "deletetext"
+                Return True
+            Case Else
+                Return False
+        End Select
+    End Function
+
+    Private Function ExecuteWordCommandsArrayWithToolResult(commandsArray As JToken, preview As Boolean) As Agent.ToolResult
+        Try
+            If preview Then
+                Dim previewObj As New JObject From {{"commands", commandsArray}}
+                If Not ShareRibbon.CommandPreviewForm.ShowPreview("Word命令预览", previewObj) Then
+                    ExecuteJavaScriptAsyncJS("handleExecutionCancelled('')")
+                    Return Agent.ToolResult.Succeed("WordCommands", "用户取消执行")
+                End If
+            End If
+
+            If commandsArray Is Nothing OrElse commandsArray.Type <> JTokenType.Array Then
+                Return Agent.ToolResult.Failed("WordCommands",
+                                               "commands 必须是数组",
+                                               errorCode:=ExceptionClassifier.CodeJson,
+                                               userMessage:="commands 必须是数组",
+                                               recoverable:=True)
+            End If
+
+            Dim observations As New JArray()
+            Dim successCount As Integer = 0
+            Dim failCount As Integer = 0
+            Dim firstFailure As Agent.ToolResult = Nothing
+
+            For Each cmd In CType(commandsArray, JArray)
+                If cmd.Type <> JTokenType.Object Then
+                    failCount += 1
+                    Continue For
+                End If
+
+                Dim result = ExecuteWordCommandWithToolResult(CType(cmd, JObject))
+                If result.Success Then
+                    successCount += 1
+                Else
+                    failCount += 1
+                    If firstFailure Is Nothing Then firstFailure = result
+                End If
+
+                If result.Observation IsNot Nothing Then
+                    observations.Add(JToken.FromObject(result.Observation))
+                End If
+            Next
+
+            Dim aggregateObservation As New JObject From {
+                {"kind", "batch"},
+                {"summary", $"批量执行 Word 命令：{successCount} 成功，{failCount} 失败"},
+                {"changed", successCount > 0},
+                {"targetRefs", New JArray("Word:Document")},
+                {"warnings", New JArray()},
+                {"items", observations}
+            }
+
+            If failCount = 0 Then
+                Return Agent.ToolResult.Succeed("WordCommands",
+                                                $"所有 {successCount} 个命令执行成功",
+                                                observation:=aggregateObservation)
+            End If
+
+            Return Agent.ToolResult.Failed("WordCommands",
+                                           $"批量执行完成: {successCount} 成功, {failCount} 失败",
+                                           errorCode:=If(firstFailure?.ErrorCode, ExceptionClassifier.CodeUnknown),
+                                           userMessage:=If(firstFailure?.UserMessage, $"批量执行完成: {successCount} 成功, {failCount} 失败"),
+                                           recoverable:=True,
+                                           observation:=aggregateObservation)
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteWordCommandsArrayWithToolResult 出错: {ex.Message}")
+            Return Agent.ToolResult.FromException("WordCommands", ex)
+        End Try
+    End Function
+
+    Private Function ExecuteWordCommandWithToolResult(commandJson As JObject) As Agent.ToolResult
+        Dim command = commandJson("command")?.ToString()
+
+        If IsReadToolCommand(command) Then
+            Return ExecuteWordReadCommandWithToolResult(commandJson)
+        End If
+
+        If Not IsWriteToolCommand(command) Then
+            Return Agent.ToolResult.Failed(If(command, ""),
+                                           $"不支持的Word命令: {command}",
+                                           errorCode:=ExceptionClassifier.CodeNotFound,
+                                           userMessage:=$"不支持的Word命令: {command}",
+                                           recoverable:=False)
+        End If
+
+        Try
+            Dim params = commandJson("params")
+            Dim normalizedToolId = NormalizeWordToolId(command)
+            Dim doc = Globals.ThisAddIn.Application.ActiveDocument
+            Dim selection = Globals.ThisAddIn.Application.Selection
+            Dim beforeSnapshot = CaptureWordWriteSnapshot(normalizedToolId, params, doc, selection)
+            Dim success As Boolean = False
+
+            Select Case command.Trim().ToLowerInvariant()
+                Case "inserttext"
+                    success = ExecuteInsertText(params, selection)
+                Case "formattext"
+                    success = ExecuteFormatText(params, selection)
+                Case "replacetext"
+                    success = ExecuteReplaceText(params, doc)
+                Case "deletetext"
+                    success = ExecuteDeleteText(params, doc, selection)
+            End Select
+
+            Dim afterSnapshot = CaptureWordWriteSnapshot(normalizedToolId, params, doc, selection)
+            Dim observation = BuildWordWriteObservation(normalizedToolId, params, success, beforeSnapshot, afterSnapshot)
+            Dim summary = observation("summary")?.ToString()
+
+            If success Then
+                Return Agent.ToolResult.Succeed(normalizedToolId,
+                                                If(String.IsNullOrWhiteSpace(summary), "执行成功", summary),
+                                                observation:=observation)
+            End If
+
+            Return Agent.ToolResult.Failed(normalizedToolId,
+                                           $"{normalizedToolId} 执行失败",
+                                           errorCode:=ExceptionClassifier.CodeUnknown,
+                                           userMessage:=$"{normalizedToolId} 执行失败",
+                                           recoverable:=True,
+                                           observation:=observation)
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteWordCommandWithToolResult 出错: {ex.Message}")
+            Return Agent.ToolResult.FromException(If(command, ""), ex)
+        End Try
+    End Function
+
+    Private Function ExecuteWordReadCommandWithToolResult(commandJson As JObject) As Agent.ToolResult
+        Dim command = commandJson("command")?.ToString()
+        Dim params = commandJson("params")
+
+        Select Case If(command, "").Trim().ToLowerInvariant()
+            Case "listparagraphs"
+                Return ExecuteListParagraphsWithToolResult(params)
+            Case "getparagraphinfo"
+                Return ExecuteGetParagraphInfoWithToolResult(params)
+            Case Else
+                Return Agent.ToolResult.Failed(If(command, ""), $"不支持的Word读取命令: {command}",
+                                               errorCode:=ExceptionClassifier.CodeNotFound,
+                                               userMessage:=$"不支持的Word读取命令: {command}",
+                                               recoverable:=False)
+        End Select
+    End Function
+
+    Private Function NormalizeWordToolId(command As String) As String
+        Select Case If(command, "").Trim().ToLowerInvariant()
+            Case "inserttext"
+                Return "InsertText"
+            Case "formattext"
+                Return "FormatText"
+            Case "replacetext"
+                Return "ReplaceText"
+            Case "deletetext"
+                Return "DeleteText"
+            Case Else
+                Return If(command, "")
+        End Select
+    End Function
+
+    Private Function BuildWordWriteObservation(toolId As String,
+                                               params As JToken,
+                                               commandSucceeded As Boolean,
+                                               beforeSnapshot As JObject,
+                                               afterSnapshot As JObject) As JObject
+        Dim targetRefs As JArray = GetWordWriteTargetRefs(toolId, params)
+        Dim warnings As New JArray()
+        Dim diff = BuildWordSnapshotDiff(beforeSnapshot, afterSnapshot)
+        Dim changed = SnapshotDiffChanged(diff)
+
+        If Not commandSucceeded Then
+            warnings.Add("宿主执行器返回失败，未确认文档已修改")
+        ElseIf Not changed Then
+            warnings.Add("宿主执行器返回成功，但未检测到文档内容或选区格式变化")
+        End If
+
+        Return New JObject From {
+            {"kind", "write"},
+            {"summary", BuildWordWriteSummary(toolId, params, commandSucceeded, changed)},
+            {"targetRefs", targetRefs},
+            {"changed", changed},
+            {"before", If(beforeSnapshot, New JObject())},
+            {"after", If(afterSnapshot, New JObject())},
+            {"diff", diff},
+            {"warnings", warnings}
+        }
+    End Function
+
+    Private Function BuildWordWriteSummary(toolId As String, params As JToken, commandSucceeded As Boolean, changed As Boolean) As String
+        Dim prefix = ""
+        If Not commandSucceeded Then
+            prefix = "未完成："
+        ElseIf Not changed Then
+            prefix = "已执行但未检测到变化："
+        End If
+
+        Select Case toolId
+            Case "InsertText"
+                Dim content = If(params?("content")?.ToString(), "")
+                Dim position = If(params?("position")?.ToString(), "cursor")
+                Return $"{prefix}在 {DescribeWordPosition(position)} 插入 {content.Length} 个字符"
+            Case "FormatText"
+                Return $"{prefix}格式化当前选区文本"
+            Case "ReplaceText"
+                Dim find = If(params?("find")?.ToString(), "")
+                Return $"{prefix}在文档中替换匹配文本 '{TruncateObservationText(find, 40)}'"
+            Case "DeleteText"
+                Dim rangeName = If(params?("range")?.ToString(), "selection")
+                Return $"{prefix}删除 {DescribeWordRange(rangeName)} 文本"
+            Case Else
+                Return $"{prefix}{toolId} 执行完成"
+        End Select
+    End Function
+
+    Private Function CaptureWordWriteSnapshot(toolId As String, params As JToken, doc As Object, selection As Object) As JObject
+        Dim snapshot As New JObject()
+
+        Try
+            Dim documentText = SafeGetDocumentText(doc)
+            Dim selectionText = SafeGetSelectionText(selection)
+            Dim targetText = SafeGetWordTargetText(toolId, params, doc, selection, documentText, selectionText)
+
+            snapshot("paragraphCount") = SafeGetParagraphCount(doc)
+            snapshot("documentCharCount") = documentText.Length
+            snapshot("documentTextHash") = ComputeTextHash(documentText)
+            snapshot("selectionStart") = SafeGetSelectionBoundary(selection, "Start")
+            snapshot("selectionEnd") = SafeGetSelectionBoundary(selection, "End")
+            snapshot("selectionTextPreview") = TruncateObservationText(NormalizeObservationText(selectionText), 120)
+            snapshot("selectionTextHash") = ComputeTextHash(selectionText)
+            snapshot("selectionFormat") = CaptureSelectionFormat(selection)
+            snapshot("selectionFormatHash") = ComputeTextHash(snapshot("selectionFormat").ToString(Formatting.None))
+            snapshot("targetTextPreview") = TruncateObservationText(NormalizeObservationText(targetText), 160)
+            snapshot("targetTextHash") = ComputeTextHash(targetText)
+
+            Dim findText = If(params?("find")?.ToString(), "")
+            If Not String.IsNullOrEmpty(findText) Then
+                snapshot("findMatchCount") = CountTextOccurrences(documentText, findText, If(params?("matchCase")?.Value(Of Boolean)(), False))
+            End If
+        Catch ex As Exception
+            snapshot("snapshotError") = ex.Message
+        End Try
+
+        Return snapshot
+    End Function
+
+    Private Function BuildWordSnapshotDiff(beforeSnapshot As JObject, afterSnapshot As JObject) As JObject
+        Dim beforeChars = GetIntegerValue(beforeSnapshot, "documentCharCount")
+        Dim afterChars = GetIntegerValue(afterSnapshot, "documentCharCount")
+        Dim beforeParagraphs = GetIntegerValue(beforeSnapshot, "paragraphCount")
+        Dim afterParagraphs = GetIntegerValue(afterSnapshot, "paragraphCount")
+        Dim beforeMatches = GetIntegerValue(beforeSnapshot, "findMatchCount")
+        Dim afterMatches = GetIntegerValue(afterSnapshot, "findMatchCount")
+
+        Return New JObject From {
+            {"documentHashChanged", GetStringValue(beforeSnapshot, "documentTextHash") <> GetStringValue(afterSnapshot, "documentTextHash")},
+            {"targetHashChanged", GetStringValue(beforeSnapshot, "targetTextHash") <> GetStringValue(afterSnapshot, "targetTextHash")},
+            {"selectionTextChanged", GetStringValue(beforeSnapshot, "selectionTextHash") <> GetStringValue(afterSnapshot, "selectionTextHash")},
+            {"selectionFormatChanged", GetStringValue(beforeSnapshot, "selectionFormatHash") <> GetStringValue(afterSnapshot, "selectionFormatHash")},
+            {"charDelta", afterChars - beforeChars},
+            {"paragraphDelta", afterParagraphs - beforeParagraphs},
+            {"findMatchDelta", afterMatches - beforeMatches}
+        }
+    End Function
+
+    Private Function SnapshotDiffChanged(diff As JObject) As Boolean
+        If diff Is Nothing Then Return False
+        Return GetBooleanValue(diff, "documentHashChanged") OrElse
+               GetBooleanValue(diff, "targetHashChanged") OrElse
+               GetBooleanValue(diff, "selectionTextChanged") OrElse
+               GetBooleanValue(diff, "selectionFormatChanged") OrElse
+               GetIntegerValue(diff, "charDelta") <> 0 OrElse
+               GetIntegerValue(diff, "paragraphDelta") <> 0
+    End Function
+
+    Private Function SafeGetDocumentText(doc As Object) As String
+        Try
+            If doc Is Nothing OrElse doc.Content Is Nothing Then Return ""
+            Return If(doc.Content.Text, "")
+        Catch
+            Return ""
+        End Try
+    End Function
+
+    Private Function SafeGetSelectionText(selection As Object) As String
+        Try
+            If selection Is Nothing OrElse selection.Range Is Nothing Then Return ""
+            Return If(selection.Range.Text, "")
+        Catch
+            Return ""
+        End Try
+    End Function
+
+    Private Function SafeGetWordTargetText(toolId As String,
+                                           params As JToken,
+                                           doc As Object,
+                                           selection As Object,
+                                           documentText As String,
+                                           selectionText As String) As String
+        Select Case toolId
+            Case "ReplaceText"
+                Return documentText
+            Case "DeleteText"
+                Dim rangeName = If(params?("range")?.ToString(), "selection").Trim().ToLowerInvariant()
+                If rangeName = "all" OrElse rangeName = "document" OrElse rangeName = "全文" Then Return documentText
+                Return selectionText
+            Case "InsertText"
+                Dim position = If(params?("position")?.ToString(), "cursor").Trim().ToLowerInvariant()
+                If position = "start" OrElse position = "end" Then Return documentText
+                Return selectionText
+            Case Else
+                Return selectionText
+        End Select
+    End Function
+
+    Private Function SafeGetParagraphCount(doc As Object) As Integer
+        Try
+            If doc Is Nothing OrElse doc.Paragraphs Is Nothing Then Return 0
+            Return CInt(doc.Paragraphs.Count)
+        Catch
+            Return 0
+        End Try
+    End Function
+
+    Private Function SafeGetSelectionBoundary(selection As Object, propertyName As String) As Integer
+        Try
+            If selection Is Nothing OrElse selection.Range Is Nothing Then Return -1
+            If propertyName = "End" Then Return CInt(selection.Range.End)
+            Return CInt(selection.Range.Start)
+        Catch
+            Return -1
+        End Try
+    End Function
+
+    Private Function CaptureSelectionFormat(selection As Object) As JObject
+        Dim result As New JObject()
+        Try
+            If selection Is Nothing OrElse selection.Range Is Nothing OrElse selection.Range.Font Is Nothing Then Return result
+            Dim font = selection.Range.Font
+            result("bold") = SafeObjectString(font.Bold)
+            result("italic") = SafeObjectString(font.Italic)
+            result("underline") = SafeObjectString(font.Underline)
+            result("fontName") = SafeObjectString(font.Name)
+            result("fontSize") = SafeObjectString(font.Size)
+            result("color") = SafeObjectString(font.Color)
+        Catch ex As Exception
+            result("formatError") = ex.Message
+        End Try
+        Return result
+    End Function
+
+    Private Function SafeObjectString(value As Object) As String
+        If value Is Nothing Then Return ""
+        Try
+            Return value.ToString()
+        Catch
+            Return ""
+        End Try
+    End Function
+
+    Private Function CountTextOccurrences(text As String, findText As String, matchCase As Boolean) As Integer
+        If String.IsNullOrEmpty(text) OrElse String.IsNullOrEmpty(findText) Then Return 0
+        Dim comparison = If(matchCase, StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase)
+        Dim count As Integer = 0
+        Dim index As Integer = 0
+
+        While index < text.Length
+            Dim found = text.IndexOf(findText, index, comparison)
+            If found < 0 Then Exit While
+            count += 1
+            index = found + Math.Max(findText.Length, 1)
+        End While
+
+        Return count
+    End Function
+
+    Private Function ComputeTextHash(text As String) As String
+        Try
+            Using sha = SHA256.Create()
+                Dim bytes = Encoding.UTF8.GetBytes(If(text, ""))
+                Dim hash = sha.ComputeHash(bytes)
+                Return BitConverter.ToString(hash, 0, Math.Min(8, hash.Length)).Replace("-", "").ToLowerInvariant()
+            End Using
+        Catch
+            Return ""
+        End Try
+    End Function
+
+    Private Function NormalizeObservationText(text As String) As String
+        If String.IsNullOrEmpty(text) Then Return ""
+        Return Regex.Replace(text, "\s+", " ").Trim()
+    End Function
+
+    Private Function GetIntegerValue(obj As JObject, propertyName As String) As Integer
+        Try
+            If obj Is Nothing OrElse obj(propertyName) Is Nothing Then Return 0
+            Return obj(propertyName).Value(Of Integer)()
+        Catch
+            Return 0
+        End Try
+    End Function
+
+    Private Function GetBooleanValue(obj As JObject, propertyName As String) As Boolean
+        Try
+            If obj Is Nothing OrElse obj(propertyName) Is Nothing Then Return False
+            Return obj(propertyName).Value(Of Boolean)()
+        Catch
+            Return False
+        End Try
+    End Function
+
+    Private Function GetStringValue(obj As JObject, propertyName As String) As String
+        Try
+            If obj Is Nothing OrElse obj(propertyName) Is Nothing Then Return ""
+            Return obj(propertyName).ToString()
+        Catch
+            Return ""
+        End Try
+    End Function
+
+    Private Function GetWordWriteTargetRefs(toolId As String, params As JToken) As JArray
+        Select Case toolId
+            Case "InsertText"
+                Dim position = If(params?("position")?.ToString(), "cursor").Trim().ToLowerInvariant()
+                Select Case position
+                    Case "start"
+                        Return New JArray("Word:DocumentStart")
+                    Case "end"
+                        Return New JArray("Word:DocumentEnd")
+                    Case Else
+                        Return New JArray("Word:Selection")
+                End Select
+            Case "ReplaceText"
+                Return New JArray("Word:Document")
+            Case "DeleteText"
+                Dim rangeName = If(params?("range")?.ToString(), "selection").Trim().ToLowerInvariant()
+                If rangeName = "all" OrElse rangeName = "document" OrElse rangeName = "全文" Then
+                    Return New JArray("Word:Document")
+                End If
+                Return New JArray("Word:Selection")
+            Case Else
+                Return New JArray("Word:Selection")
+        End Select
+    End Function
+
+    Private Function DescribeWordPosition(position As String) As String
+        Select Case If(position, "").Trim().ToLowerInvariant()
+            Case "start"
+                Return "文档开头"
+            Case "end"
+                Return "文档末尾"
+            Case Else
+                Return "光标位置"
+        End Select
+    End Function
+
+    Private Function DescribeWordRange(rangeName As String) As String
+        Select Case If(rangeName, "").Trim().ToLowerInvariant()
+            Case "all", "document", "全文"
+                Return "全文"
+            Case Else
+                Return "当前选区"
+        End Select
+    End Function
+
+    Private Function TruncateObservationText(text As String, maxLen As Integer) As String
+        If String.IsNullOrEmpty(text) OrElse text.Length <= maxLen Then Return If(text, "")
+        Return text.Substring(0, maxLen) & "..."
+    End Function
+
     ''' <summary>
     ''' 执行DSL指令 - 桥接到已有的Word排版渲染管道
     ''' </summary>
@@ -4534,12 +5064,44 @@ Public Class ChatControl
             ShareRibbon.GlobalStatusStrip.ShowInfo($"找到 {result.Count} 个段落")
             Debug.WriteLine($"[ExecuteListParagraphs] 返回: {result.ToString()}")
 
-            ' TODO: 将结果返回给 AI（需要修改 ToolResult 支持结构化数据）
             Return True
 
         Catch ex As Exception
             Debug.WriteLine($"ExecuteListParagraphs 出错: {ex.Message}")
             Return False
+        End Try
+    End Function
+
+    Private Function ExecuteListParagraphsWithToolResult(params As JToken) As Agent.ToolResult
+        Try
+            If _paragraphService Is Nothing Then
+                Return Agent.ToolResult.Failed("ListParagraphs",
+                                               "ParagraphService 未初始化",
+                                               errorCode:=ExceptionClassifier.CodeUnknown,
+                                               userMessage:="Word 段落服务未初始化",
+                                               recoverable:=True)
+            End If
+
+            Dim maxCount As Integer = If(params?("maxCount")?.Value(Of Integer)(), 50)
+            Dim result As JArray = _paragraphService.ListParagraphs(maxCount)
+            Dim total As Integer = result.Count
+            Try
+                total = Globals.ThisAddIn.Application.ActiveDocument.Paragraphs.Count
+            Catch
+            End Try
+
+            Dim data As New JObject From {
+                {"items", result},
+                {"total", total},
+                {"returned", result.Count},
+                {"truncated", result.Count >= maxCount AndAlso total > result.Count}
+            }
+            Return Agent.ToolResult.Succeed("ListParagraphs",
+                                            $"读取 {result.Count}/{total} 个段落",
+                                            data)
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteListParagraphsWithToolResult 出错: {ex.Message}")
+            Return Agent.ToolResult.FromException("ListParagraphs", ex)
         End Try
     End Function
 
@@ -4568,12 +5130,48 @@ Public Class ChatControl
             ShareRibbon.GlobalStatusStrip.ShowInfo($"段落 {paragraphIndex}: {result("style")} {result("fontSize")}pt")
             Debug.WriteLine($"[ExecuteGetParagraphInfo] 返回: {result.ToString()}")
 
-            ' TODO: 将结果返回给 AI
             Return True
 
         Catch ex As Exception
             Debug.WriteLine($"ExecuteGetParagraphInfo 出错: {ex.Message}")
             Return False
+        End Try
+    End Function
+
+    Private Function ExecuteGetParagraphInfoWithToolResult(params As JToken) As Agent.ToolResult
+        Try
+            If _paragraphService Is Nothing Then
+                Return Agent.ToolResult.Failed("GetParagraphInfo",
+                                               "ParagraphService 未初始化",
+                                               errorCode:=ExceptionClassifier.CodeUnknown,
+                                               userMessage:="Word 段落服务未初始化",
+                                               recoverable:=True)
+            End If
+
+            Dim paragraphIndex As Integer = If(params?("paragraphIndex")?.Value(Of Integer)(), 1)
+            If paragraphIndex < 1 Then
+                Return Agent.ToolResult.Failed("GetParagraphInfo",
+                                               "段落索引必须大于等于 1",
+                                               errorCode:=ExceptionClassifier.CodeArgument,
+                                               userMessage:="段落索引必须大于等于 1",
+                                               recoverable:=True)
+            End If
+
+            Dim result As JObject = _paragraphService.GetParagraphInfo(paragraphIndex)
+            If result Is Nothing Then
+                Return Agent.ToolResult.Failed("GetParagraphInfo",
+                                               $"未找到段落: {paragraphIndex}",
+                                               errorCode:=ExceptionClassifier.CodeNotFound,
+                                               userMessage:=$"未找到段落: {paragraphIndex}",
+                                               recoverable:=True)
+            End If
+
+            Return Agent.ToolResult.Succeed("GetParagraphInfo",
+                                            $"读取第 {paragraphIndex} 段信息",
+                                            result)
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteGetParagraphInfoWithToolResult 出错: {ex.Message}")
+            Return Agent.ToolResult.FromException("GetParagraphInfo", ex)
         End Try
     End Function
 

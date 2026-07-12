@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：Word 是当前最接近样板的一端，已有 `WordActionHarness`、编号/格式/校对/语义排版 fast-path 结构化结果回灌；`ListParagraphs`/`GetParagraphInfo` 已通过 `ToolResult.Data` 返回给 Agent；`InsertText/FormatText/ReplaceText/DeleteText` 已返回 before/after/diff Observation，并通过 `ExecutionExplanation` 进入 Agent 卡片和轻量 RunTrace。快路径全量统一 `ToolResult`、翻译/续写纳入 Harness、Excel/PPT 同构仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.1 |
 | 现有 | `WordCapabilityRegistry`、`WordActionHarness`、`WordFormattingAgent`、`WordNumberingAgent`、校对/排版服务、`Tools/word/*.json`（24） |
 | 关联 | Context / Observe / Safety / Skill / RunTrace / Golden |
@@ -14,15 +15,15 @@
 
 ### 1.1 目标
 
-1. 给出 Word 端 **Capability ↔ Tool ↔ 服务类 ↔ UI** 的完整地图。  
-2. 规定快路径（ActionHarness）与 Loop 工具路径如何统一产出 `ToolResult` / Trace。  
-3. 明确每条 Capability 的 Input、Observe、Repair、风险与示例话术。  
-4. 标出缺口（读工具 Data、语义排版闭环、翻译/续写纳入 Harness）。  
+1. 给出 Word 端 **Capability ↔ Tool ↔ 服务类 ↔ UI** 的完整地图。
+2. 规定快路径（ActionHarness）与 Loop 工具路径如何统一产出 `ToolResult` / Trace。
+3. 明确每条 Capability 的 Input、Observe、Repair、风险与示例话术。
+4. 标出缺口（读工具 Data、语义排版闭环、翻译/续写纳入 Harness）。
 
 ### 1.2 非目标
 
-- 不重写校对算法细节。  
-- 不定义 Excel/PPT（见对应 runtime 专项）。  
+- 不重写校对算法细节。
+- 不定义 Excel/PPT（见对应 runtime 专项）。
 
 ---
 
@@ -77,16 +78,16 @@ OfficeHarness
 
 | ToolId | 建议 Capability | 读写 | base risk | 备注 |
 |---|---|---|---|---|
-| ListParagraphs | word.read-structure | R | safe | **必须回 Data** |
-| GetParagraphInfo | word.read-structure | R | safe | **必须回 Data** |
-| FormatText | word.direct-formatting | W | medium | |
+| ListParagraphs | word.read-structure | R | safe | 已回 Data，后续补稳定 ref |
+| GetParagraphInfo | word.read-structure | R | safe | 已回 Data，后续补稳定 ref |
+| FormatText | word.direct-formatting | W | medium | 已有 before/after/diff Observation |
 | SetParagraphFormat | word.direct-formatting | W | medium | |
 | ApplyStyle | word.semantic-reformat / beautify | W | medium | |
 | BeautifyDocument | word.beautify | W | medium | |
-| ReplaceText | word.replace | W | medium/risky | |
-| InsertText | word.insert-content / continue-write | W | medium | |
+| ReplaceText | word.replace | W | medium/risky | 已有 before/after/diff Observation；全文风险待 Safety |
+| InsertText | word.insert-content / continue-write | W | medium | 已有 before/after/diff Observation |
 | InsertParagraph | word.insert-content | W | medium | |
-| DeleteText | word.replace / edit | W | risky | |
+| DeleteText | word.replace / edit | W | risky | 已有 before/after/diff Observation；审批待 Safety |
 | CopyPasteText | word.insert-content | W | medium | |
 | InsertTable | word.table-edit | W | medium | |
 | FormatTable | word.table-edit | W | medium | |
@@ -148,9 +149,9 @@ WordCapabilityExecutionResult
 
 ### 6.3 与 Skill 关系
 
-- primary skill 通常为 `word-document-agent`  
-- 快路径 tools 必须 ⊆ skill.allowed-tools  
-- 若 skill 未声明某 tool，快路径也不得调用  
+- primary skill 通常为 `word-document-agent`
+- 快路径 tools 必须 ⊆ skill.allowed-tools
+- 若 skill 未声明某 tool，快路径也不得调用
 
 ---
 
@@ -236,31 +237,32 @@ WordCapabilityExecutionResult
 
 ## 10. 验收标准
 
-1. Registry 中每个 Capability 有 Observe/Repair/Explain 非空。  
-2. 24 个 word tools 均映射到 Capability 或显式 `unassigned` 清单。  
-3. 快路径与 Loop 的 Trace step 字段同构。  
-4. Golden：U2、W-proofread-basic、W-numbering-fix、读工具 Data 断言。  
-5. 新增 NL 分支不得落在 ChatControl（架构评审检查表）。  
+1. Registry 中每个 Capability 有 Observe/Repair/Explain 非空。
+2. 24 个 word tools 均映射到 Capability 或显式 `unassigned` 清单。
+3. 快路径与 Loop 的 Trace step 字段同构。
+4. Golden：U2、W-proofread-basic、W-numbering-fix、读工具 Data 断言。
+5. 新增 NL 分支不得落在 ChatControl（架构评审检查表）。
 
 ---
 
 ## 11. 决策摘要（评审）
 
-- [x] 同意现有 4 Capability 为快路径核心  
-- [x] 同意快路径必须 ToolResult + Trace（**D9**）  
-- [x] 同意读工具 Data 为 P0（W-GAP-1）  
-- [x] 同意 ChatControl 不再新增业务分支  
-- [x] 同意翻译/续写后续 Capability 化（P1）  
+- [x] 同意现有 4 Capability 为快路径核心
+- [x] 同意快路径必须 ToolResult + Trace（**D9**）
+- [x] 同意读工具 Data 为 P0（W-GAP-1）
+- [x] 同意 ChatControl 不再新增业务分支
+- [x] 同意翻译/续写后续 Capability 化（P1）
 
 ---
 
 ## 12. 落地顺序
 
-1. 读工具 Data + Trace 埋点  
-2. 快路径 → ToolResult 适配器  
-3. 迁出 Executor 出 ChatControl  
-4. 登记 replace/toc/page-setup  
-5. 翻译/续写 Capability 化  
+1. 已完成：读工具 Data 回传。
+2. 已完成：基础写工具 before/after/diff Observation。
+3. 已完成：轻量 Trace 埋点进入 `agent_run` / `agent_run_step`。
+4. 下一步：快路径全量 ToolResult 适配器。
+5. 下一步：迁出 Executor 出 ChatControl。
+6. 下一步：登记 replace/toc/page-setup，翻译/续写 Capability 化。
 
 ---
 

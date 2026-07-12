@@ -1,9 +1,12 @@
 # AI Native Harness · 专项设计索引
 
-> 本目录存放 **冻结级专项设计**。  
-> 总纲：[`../ai-native-harness-design.md`](../ai-native-harness-design.md)  
-> **评审记录（含 Frozen D1–D15）**：[`design-review-record.md`](./design-review-record.md)  
+> 本目录存放 **目标合同级专项设计**。
+> 总纲：[`../ai-native-harness-design.md`](../ai-native-harness-design.md)
+> **落地入口**：[`../ai-native-harness-implementation-design.md`](../ai-native-harness-implementation-design.md)
+> **评审记录（含设计决策 D1–D15）**：[`design-review-record.md`](./design-review-record.md)
 > 原则：契约可序列化、可测试、可回放；`ShareRibbon` 只放抽象，COM 在宿主项目。
+
+> 重要说明：本目录的“评审通过”表示目标设计可作为实现约束，不表示当前代码已经实现。当前实现差距以各专项文头的“实现状态”和落地入口文档为准。
 
 ## 评审结论（2026-07-11）
 
@@ -12,9 +15,9 @@
 | 总体 | **有条件同意 → 整改已落实（v0.2）** |
 | 驳回项 | 无 |
 | 编码 | 文档冻结后可启动 **Phase H0**（仅接口/适配器） |
-| 权威冲突 | 以 [`design-review-record.md`](./design-review-record.md) Frozen Decisions 为准 |
+| 权威冲突 | 以 [`design-review-record.md`](./design-review-record.md) 设计决策为准；实现顺序以落地入口为准 |
 
-### Frozen 速查（D1–D15）
+### 设计决策速查（D1–D15，目标态）
 
 | ID | 一句话 |
 |---|---|
@@ -39,6 +42,8 @@
 ---
 
 ## 已完成专项（12 + 评审记录）
+
+这里的“已完成”指专项文档已完成评审，不指代码已完成。
 
 ### 平台闭环
 
@@ -85,9 +90,9 @@
 
 ## 评审约定
 
-1. 先定契约与 Frozen Decisions，再 H0 编码。  
-2. 专项与评审记录冲突 → **评审记录优先**，并回写专项。  
-3. 新增 ErrorCode / 阈值必须更新评审记录 §4 与 Safety。  
+1. 先定契约与设计决策，再按落地入口分阶段编码。
+2. 专项与评审记录冲突 → **评审记录优先**，并回写专项。
+3. 新增 ErrorCode / 阈值必须更新评审记录 §4 与 Safety。
 
 ## 版本
 
@@ -96,3 +101,4 @@
 | 0.4 | 2026-07-11 | 12 专项齐 |
 | **0.5** | **2026-07-11** | **统一评审 + md 整改；v0.2 专项；评审记录** |
 | **0.6** | **2026-07-12** | **实现审计追加：P0 guardrails、Word fast-path 回灌、VSTO shadow-copy 工具定位、0 迭代防误报** |
+| **0.7** | **2026-07-12** | **拆分目标设计与实现状态；新增落地实施设计入口** |

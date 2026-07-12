@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；轻量实现已落地 |
+| 实现状态 | **轻量实现**：当前已有 `agent_run`/`agent_run_step` 表、schema version 11 迁移、`IRunTraceStore`/`SqliteRunTraceStore`，并由 `OfficeHarness` 写入 run 与 step explanation。`agent_run_event`、完整回放 UI、审批事件、崩溃 orphan 清理仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §4.6 / §9 |
 | 关联 | Observe / Safety / Skill 专项；Memory 管线 |
 | 现有 | `conversation_event`、`conversation`、`memory_*`、`AgentSession` 内存对象、AppLogger 文件日志 |
@@ -45,7 +46,7 @@
 | `conversation_event` | **对话层** 用户/助手消息与记忆管线输入 |
 | **`agent_run`（新）** | **执行层** 一次 Harness 运行 |
 | **`agent_run_step`（新）** | 步骤级 tool 调用与结果摘要 |
-| **`agent_run_event`（新）** | 细粒度事件（审批、门禁、repair） |
+| **`agent_run_event`（待补）** | 细粒度事件（审批、门禁、repair） |
 | `memory_item` | 长期记忆，可通过 source 关联 run/event |
 | AppLogger 文件 | 运维诊断，非产品回放主源 |
 
@@ -151,9 +152,9 @@ User 发送
 
 ---
 
-## 4. SQL 草案（实现时迁移）
+## 4. SQL 合同
 
-> 版本号在实现时分配；以下为语义草案。
+当前代码已落地轻量版 `agent_run` / `agent_run_step`，位于 `ShareRibbon/Storage/Migrations/011_agent_run_trace.sql` 与 `OfficeAiDbSchema.current.sql`。下方字段是目标完整合同；未落地字段不得在查询和 UI 中假设存在。
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_run (

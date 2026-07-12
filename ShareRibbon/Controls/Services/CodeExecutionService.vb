@@ -186,19 +186,53 @@ Public Class CodeExecutionService
             End If
         End Function
 
+        Public Function ExecuteCodeWithToolResult(code As String, language As String, preview As Boolean) As Agent.ToolResult
+            Dim lowerLang As String = If(language, "").ToLower().Trim()
+
+            If String.IsNullOrEmpty(lowerLang) OrElse lowerLang = "plaintext" OrElse lowerLang = "text" Then
+                Dim trimmedCode = If(code, "").Trim()
+                If trimmedCode.StartsWith("{") AndAlso trimmedCode.EndsWith("}") Then
+                    Try
+                        Dim testJson = Newtonsoft.Json.Linq.JObject.Parse(trimmedCode)
+                        If testJson("command") IsNot Nothing OrElse testJson("commands") IsNot Nothing Then
+                            lowerLang = "json"
+                        End If
+                    Catch
+                    End Try
+                End If
+            End If
+
+            If lowerLang.Contains("json") Then
+                Return ExecuteJsonCommandWithToolResult(code, preview)
+            End If
+
+            Dim ok = ExecuteCodeWithResult(code, language, preview)
+            If ok Then
+                Return Agent.ToolResult.Succeed("", "执行成功")
+            End If
+            Return Agent.ToolResult.Failed("", "宿主执行器返回失败")
+        End Function
+
         ''' <summary>
         ''' JSON命令执行委托（由子类设置）
         ''' </summary>
         Public Property JsonCommandExecutor As Func(Of String, Boolean, Boolean) = Nothing
+        Public Property JsonCommandExecutorWithResult As Func(Of String, Boolean, Agent.ToolResult) = Nothing
 
         ''' <summary>
         ''' Execute host JSON tool/schema backend. P0-2: tool backend only, not NL product entry.
         ''' </summary>
         Public Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
+            Dim result = ExecuteJsonCommandWithToolResult(jsonCode, preview)
+            Return result IsNot Nothing AndAlso result.Success
+        End Function
+
+        Public Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
             Debug.WriteLine($"[CodeExecutionService] ExecuteJsonCommand (tool backend) preview={preview}")
             Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutor set: {JsonCommandExecutor IsNot Nothing}")
+            Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutorWithResult set: {JsonCommandExecutorWithResult IsNot Nothing}")
             
-            If JsonCommandExecutor IsNot Nothing Then
+            If JsonCommandExecutorWithResult IsNot Nothing OrElse JsonCommandExecutor IsNot Nothing Then
                 Try
                     Dim currentJsonCode As String = jsonCode
                     Dim parseSuccess As Boolean = False
@@ -229,18 +263,26 @@ Public Class CodeExecutionService
                     End If
 
                     ' 执行命令
-                    Dim result = JsonCommandExecutor.Invoke(currentJsonCode, preview)
-                    Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {result}")
-                    Return result
+                    If JsonCommandExecutorWithResult IsNot Nothing Then
+                        Dim result = JsonCommandExecutorWithResult.Invoke(currentJsonCode, preview)
+                        Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {If(result Is Nothing, "null", result.ToObserveSummary())}")
+                        If result Is Nothing Then Return Agent.ToolResult.Failed("", "JSON命令执行器未返回结果")
+                        Return result
+                    End If
+
+                    Dim ok = JsonCommandExecutor.Invoke(currentJsonCode, preview)
+                    Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {ok}")
+                    If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
+                    Return Agent.ToolResult.Failed("", "JSON命令执行失败")
                 Catch ex As Exception
                     Debug.WriteLine($"[CodeExecutionService] JSON命令执行异常: {ex.Message}")
                     GlobalStatusStrip.ShowWarning($"JSON命令执行失败: {ex.Message}")
-                    Return False
+                    Return Agent.ToolResult.FromException("", ex)
                 End Try
             Else
                 Debug.WriteLine("[CodeExecutionService] JsonCommandExecutor 未设置!")
                 GlobalStatusStrip.ShowWarning("当前应用不支持JSON命令执行，请使用VBA代码")
-                Return False
+                Return Agent.ToolResult.Failed("", "当前应用不支持JSON命令执行，请使用VBA代码")
             End If
         End Function
 

@@ -12,7 +12,7 @@ Public Class AgentKernelService
     Private ReadOnly _executeScript As Func(Of String, Task)
     Private ReadOnly _escapeJs As Func(Of String, String)
     Private ReadOnly _sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
-    Private ReadOnly _executeCode As Func(Of String, String, Boolean, Boolean)
+    Private ReadOnly _executeCodeWithToolResult As Func(Of String, String, Boolean, Agent.ToolResult)
     Private ReadOnly _chatStateService As ChatStateService
     Private ReadOnly _historyMessages As List(Of HistoryMessage)
     Private ReadOnly _manageHistorySize As Action
@@ -20,6 +20,7 @@ Public Class AgentKernelService
 
     ' 统一的 AgentKernel 实例
     Private _agentKernel As Agent.AgentKernel
+    Private _officeHarness As Agent.Harness.IOfficeHarness
 
     ' Agent 状态字段（供 BaseChatControl 访问）
     Public Property AgentThinkingUuid As String = Nothing
@@ -30,19 +31,11 @@ Public Class AgentKernelService
     ' 审批等待器（用于 LoopEngine 的 OnRequestApproval 事件）
     Private _approvalTcs As TaskCompletionSource(Of Boolean)
 
-    ''' <summary>暴露底层 AgentKernel 供外部直接调用</summary>
-    Public ReadOnly Property Kernel As Agent.AgentKernel
-        Get
-            EnsureInitialized()
-            Return _agentKernel
-        End Get
-    End Property
-
     Public Sub New(
         executeScript As Func(Of String, Task),
         escapeJs As Func(Of String, String),
         sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String)),
-        executeCode As Func(Of String, String, Boolean, Boolean),
+        executeCodeWithToolResult As Func(Of String, String, Boolean, Agent.ToolResult),
         chatStateService As ChatStateService,
         historyMessages As List(Of HistoryMessage),
         manageHistorySize As Action,
@@ -51,7 +44,8 @@ Public Class AgentKernelService
         _executeScript = executeScript
         _escapeJs = escapeJs
         _sendAiRequest = sendAiRequest
-        _executeCode = executeCode
+        If executeCodeWithToolResult Is Nothing Then Throw New ArgumentNullException(NameOf(executeCodeWithToolResult))
+        _executeCodeWithToolResult = executeCodeWithToolResult
         _chatStateService = chatStateService
         _historyMessages = historyMessages
         _manageHistorySize = manageHistorySize
@@ -71,13 +65,10 @@ Public Class AgentKernelService
                                           Return Await _sendAiRequest(prompt, system, history)
                                       End Function
 
-        ' 绑定代码执行委托
-        _agentKernel.ExecuteCodeWithResult = Function(code, lang, preview)
-                                                 Return _executeCode(code, lang, preview)
-                                             End Function
-        _agentKernel.ExecuteCode = Sub(code, lang, preview)
-                                       _executeCode(code, lang, preview)
-                                   End Sub
+        ' 绑定代码执行委托：Agent 主路径强制 ToolResult 回执。
+        _agentKernel.ExecuteCodeWithToolResult = Function(code, lang, preview)
+                                                     Return _executeCodeWithToolResult(code, lang, preview)
+                                                 End Function
 
         ' 绑定事件
         AddHandler _agentKernel.OnStatusChanged, AddressOf OnKernelStatusChanged
@@ -90,6 +81,7 @@ Public Class AgentKernelService
 
         ' 加载工具和技能
         _agentKernel.Initialize()
+        _officeHarness = New Agent.Harness.OfficeHarness(_agentKernel, New Agent.Harness.SqliteRunTraceStore())
     End Sub
 
 #Region "Public Methods"
@@ -118,17 +110,25 @@ Public Class AgentKernelService
                 Next
             End If
 
-            ' 执行 Agent 任务
-            Dim result = Await _agentKernel.ExecuteAsync(userRequest, appType, currentContent, officeContext)
+            ' 执行 Agent 任务（H0: 通过 Harness adapter 收口，内部仍复用 AgentKernel）
+            Dim turn As New Agent.Harness.UserTurn With {
+                .SessionId = CurrentAgentSessionId,
+                .AppType = appType,
+                .Text = userRequest,
+                .Mode = "agent",
+                .HostContextText = currentContent,
+                .OfficeContext = officeContext
+            }
+            Dim result = Await _officeHarness.RunAsync(turn, Threading.CancellationToken.None)
 
             If result Is Nothing Then
                 AppLogger.Warn("AgentKernelService", "StartAgentAsync returned null result")
                 Return False
             End If
-            If Not result.Success Then
-                AppLogger.Warn("AgentKernelService", $"StartAgentAsync agent failed: {result.Message}")
+            If result.Status <> Agent.Harness.HarnessRunStatus.Succeeded Then
+                AppLogger.Warn("AgentKernelService", $"StartAgentAsync agent failed: {result.UserMessage}")
             End If
-            Return result.Success
+            Return result.Status = Agent.Harness.HarnessRunStatus.Succeeded
         Catch ex As Exception
             AppLogger.Error("AgentKernelService", "StartAgentAsync exception", ex)
             GlobalStatusStrip.ShowWarning(ExceptionClassifier.ToUserMessage(ex, "Agent 启动失败，请重试"))

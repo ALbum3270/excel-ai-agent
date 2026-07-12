@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：Excel 已有 `ExcelDirectOperationService`、`ExcelContextService`、命令 schema 与工具 JSON；尚无统一 `ExcelActionHarness`、表级 Observation/Diff、按 Skill 收紧工具集合和大表分块执行闭环。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.2 |
 | Skill | `Skills/excel-table-agent/SKILL.md` |
 | 现有 | `ExcelDirectOperationService`、`ExcelContextService`、`ExcelJsonCommandSchema`、Tools/excel（25）、ExcelDna UDF |
@@ -15,16 +16,16 @@
 
 ### 1.1 目标
 
-1. 定义 Excel 从 **表探测 → 规划 → 工具执行 → 观察 → 修复** 的标准运行时。  
-2. 对标 Copilot 表格分析 + Cursor 级工具精度（公式、图、透视、清洗）。  
-3. 规定大表分块、公式 repair、图表选型、结果落表策略。  
-4. 设计 `ExcelActionHarness` 与 Capability 列表（对齐 Word 样板）。  
+1. 定义 Excel 从 **表探测 → 规划 → 工具执行 → 观察 → 修复** 的标准运行时。
+2. 对标 Copilot 表格分析 + Cursor 级工具精度（公式、图、透视、清洗）。
+3. 规定大表分块、公式 repair、图表选型、结果落表策略。
+4. 设计 `ExcelActionHarness` 与 Capability 列表（对齐 Word 样板）。
 
 ### 1.2 非目标
 
-- v1 不做完整 Power Query 执行引擎（占位能力保持「明确不做」或独立后期）。  
-- 不把 ExcelDna 同步 UDF 并进 Agent 主路径（隔离策略见 §10）。  
-- 不做多人共编冲突解决。  
+- v1 不做完整 Power Query 执行引擎（占位能力保持「明确不做」或独立后期）。
+- 不把 ExcelDna 同步 UDF 并进 Agent 主路径（隔离策略见 §10）。
+- 不做多人共编冲突解决。
 
 ---
 
@@ -101,8 +102,8 @@ UserTurn (Excel)
 
 ### 3.4 失败
 
-- 空表 / 单格：TaskSpec exploratory，先 `DataAnalysis` 只读描述，不写。  
-- 多区域选区：拆分或取最大矩形，warnings 记录。  
+- 空表 / 单格：TaskSpec exploratory，先 `DataAnalysis` 只读描述，不写。
+- 多区域选区：拆分或取最大矩形，warnings 记录。
 
 ---
 
@@ -280,9 +281,9 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 
 **规则**
 
-- UDF 不走 Skill/Loop。  
-- UDF 使用 `SendHttpRequestSync`（已 P0-3 桥接），有超时。  
-- 文档声明：UDF 不保证与 Agent 记忆/Trace 一致。  
+- UDF 不走 Skill/Loop。
+- UDF 使用 `SendHttpRequestSync`（已 P0-3 桥接），有超时。
+- 文档声明：UDF 不保证与 Agent 记忆/Trace 一致。
 
 ---
 
@@ -302,11 +303,11 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 
 每次写后至少：
 
-1. 目标 `Excel:Sheet!Range`  
-2. `formulaErrorCount` delta（若相关）  
-3. 抽样 3 个单元格 before/after  
-4. chartCount / pivotCount delta（若相关）  
-5. UsedRange 尺寸 delta  
+1. 目标 `Excel:Sheet!Range`
+2. `formulaErrorCount` delta（若相关）
+3. 抽样 3 个单元格 before/after
+4. chartCount / pivotCount delta（若相关）
+5. UsedRange 尺寸 delta
 
 ---
 
@@ -337,24 +338,24 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 
 ## 15. 决策摘要（评审）
 
-- [x] 同意 TableRegion 探测优先级  
-- [x] 同意管道模型（profile/clean/formula/…）  
-- [x] 同意公式 error 观察驱动 repair  
-- [x] 同意分块服从 Safety T1/T2（**D15**）  
-- [x] 同意结果默认新 Sheet、不静默覆盖  
-- [x] 同意 PowerQuery v1 **不做**（**D12**）  
-- [x] 同意 UDF 与 Agent 路径隔离  
+- [x] 同意 TableRegion 探测优先级
+- [x] 同意管道模型（profile/clean/formula/…）
+- [x] 同意公式 error 观察驱动 repair
+- [x] 同意分块服从 Safety T1/T2（**D15**）
+- [x] 同意结果默认新 Sheet、不静默覆盖
+- [x] 同意 PowerQuery v1 **不做**（**D12**）
+- [x] 同意 UDF 与 Agent 路径隔离
 
 ---
 
 ## 16. 落地顺序
 
-1. TableRegion 探测进 ContextPack  
-2. profile/formula/chart 三条闭环 + Observe  
-3. Safety 阈值联动分块  
-4. ActionHarness 快路径  
-5. 清洗/透视/报告  
-6. 服务拆分  
+1. TableRegion 探测进 ContextPack
+2. profile/formula/chart 三条闭环 + Observe
+3. Safety 阈值联动分块
+4. ActionHarness 快路径
+5. 清洗/透视/报告
+6. 服务拆分
 
 ---
 

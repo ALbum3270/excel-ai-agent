@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：目录型 Skill、front matter 解析、Skills 索引和 `allowed-tools` 元数据已存在；`ToolExecutionContext` 与 `ToolRegistry.ExecuteToolAsync(context, ...)` 已按本轮 primary Skill 做 `TOOL_NOT_ALLOWED` 硬拒绝；`AgentKernel/LoopEngine` 已收紧 Prompt 可见工具和 repair 可用工具提示；轻量 RunTrace 已写 run/step。门禁细粒度事件仍待 `agent_run_event`。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.3 |
 | 关联 | [`safety-policy.md`](./safety-policy.md)、[`context-pack-schema.md`](./context-pack-schema.md)、[`tool-result-observation.md`](./tool-result-observation.md) |
 | 现有代码 | `Skills/*`、`SkillRegistry`（JSON）、`SkillsDirectoryService`、`skills_registry` 表、`AgentKernel.SelectSkill*`、`ToolRegistry` |
@@ -48,7 +49,7 @@
 | `SkillsDirectoryService` | front matter / detail | 需成为唯一真相源 |
 | `skills_registry` | 索引与 usage | 需与门禁事件打通 |
 | Kernel 选 Skill | filesystem 优先 + JSON 兜底 | 兜底应标 deprecated |
-| Tool 执行 | 基本不校验 allowed-tools | **P0 缺口** |
+| Tool 执行 | 已按 primary Skill 执行期校验 allowed-tools | RunTrace 门禁事件待补 |
 
 ---
 

@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：`memory_item` 管线、`atomic_memory` 兼容、RAG 过滤和 `memory.*` 工具已存在；单写模型、任务级记忆、隐私导出/清除 UI 仍需产品化。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.7 |
 | 蓝图参考 | `openspec/changes/fix-memory-rag-pipeline/agent-memory-architecture.md` |
 | 现有 | `conversation_event` / `memory_item` / `memory_embedding` / `memory_job`、`atomic_memory` 兼容、`MemoryService`/`UnifiedMemoryService`/`AgentMemoryRepository`、`MemoryConfig`、`memory.*` 工具 |

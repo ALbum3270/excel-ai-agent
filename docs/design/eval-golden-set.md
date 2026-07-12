@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码未完整实现 |
+| 实现状态 | **设计态**：当前只有 `scripts/smoke-*.ps1` 和 code checks；尚无 Golden fixture、runner、RunTrace 断言和 Office 宿主自动场景测试。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §7 / §9 / U1–U10 |
 | 关联 | [`run-trace-storage.md`](./run-trace-storage.md)、Observe / Safety / Skill 专项 |
 | 现有 | `scripts/smoke-*.ps1`（契约/DB/网关，**非**场景 Agent） |

@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **部分实现**：已有 `OfficeContext`、`ChatContextBuilder`、`ChatContextTrace` 与三端上下文采集；尚未实现统一 `ContextPack`、预算器、before/after `DocumentDiff`。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.1 |
 | 现有代码 | `Agent/Context/OfficeContext.vb`、`ChatContextBuilder`、三端 `CaptureOfficeContext`、`ChatContextTrace` |
 

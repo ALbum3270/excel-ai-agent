@@ -23,11 +23,13 @@
 - **基准 schema（版本 1）**：在 `GetMigrationSql()` 中用 `CREATE TABLE IF NOT EXISTS` 建表，并创建 `schema_version` 表、写入版本 1。
 - **增量升级**：新增字段/索引等一律通过 **ALTER TABLE / CREATE INDEX** 在 `RunVersionedMigrations()` 中按版本号执行，便于升级与版本控制。
 - 每次 `EnsureInitialized()` 会：先执行基准 SQL，再根据 `schema_version.version` 只执行**未应用过的**迁移（如 2、3…），执行后更新 `schema_version`。
+- **当前最新版本：11**。版本 11 新增 `agent_run` / `agent_run_step` 轻量 RunTrace 表；新增迁移后必须同步 `OfficeAiDbSchema.current.sql`、`scripts/smoke-empty-db-initialization.ps1` 和 schema drift smoke。
 
 ### 如何新增迁移（例如新增字段）
 1. 在 `OfficeAiDatabase.RunVersionedMigrations()` 的 `migrations` 字典中增加一档，例如：
    - 版本 3：`"ALTER TABLE xxx ADD COLUMN yyy TEXT DEFAULT ''; UPDATE schema_version SET version = 3;"`
 2. 不要改基准 SQL 里已有表结构（旧库已存在），只通过迁移脚本从当前版本升级到新版本。
+3. 如新增独立 SQL 文件，放在 `ShareRibbon/Storage/Migrations/NNN_name.sql`，并保持内联迁移、当前 schema snapshot 与 smoke 期望一致。
 
 ### 发布新包时
 - 无需用户手动执行 SQL。

@@ -83,6 +83,8 @@ Namespace Agent
         Public Property ElapsedMs As Long
         Public Property BeforeSummary As String
         Public Property AfterSummary As String
+        Public Property ObservationJson As String
+        Public Property DataSummaryJson As String
         Public Property Success As Boolean
         Public Property Message As String
         Public Property SkillName As String

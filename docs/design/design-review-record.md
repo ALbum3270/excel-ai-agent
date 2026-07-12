@@ -5,7 +5,7 @@
 | 评审日期 | 2026-07-11 |
 | 评审方式 | 按 `README.md` 序 0–12 统一评审 |
 | 结论 | **有条件同意全套**（整改项已回写各专项，见 §3） |
-| 编码 | 整改完成前不启动业务编码；H0 仅允许在勾选通过后启动 |
+| 编码 | 评审通过表示目标设计可作为实现约束；具体编码顺序以 [`../ai-native-harness-implementation-design.md`](../ai-native-harness-implementation-design.md) 为准 |
 
 ---
 
@@ -39,7 +39,7 @@
 | C2 | Excel 大表阈值 vs Safety T1/T2 表述不完全一致 | 统一引用 Safety 阈值为权威；Excel 分块阈值交叉引用 |
 | C3 | Harness 注入列表未列 `IMemoryRuntime` | office-harness-api 注入列表补齐 |
 | C4 | ErrorCode 分散在 Observe/Safety/Gateway | 增加共享错误码索引表（本记录 §4 + 总纲附录引用） |
-| C5 | 开放问题「建议默认」未提升为「已冻结」 | 关键默认提升为 Frozen Decision |
+| C5 | 开放问题「建议默认」未提升为「已冻结」 | 关键默认提升为设计决策 |
 | C6 | 版本号均为 v0.1，整改后无法区分 | 专项升为 **v0.2（评审修订）** |
 | C7 | 审批模式 B 仅在 API 写清，其它文档偶发「阻塞等待」歧义 | 全局注明：审批不阻塞 `RunAsync` Task 挂起，用状态机挂起 run |
 | C8 | 无 Skill 时 VisibleTools=全 app 工具 vs Safety 收紧 | 冻结：v1 全 app 工具 + Safety；写入 skill 专项决策 |
@@ -50,13 +50,13 @@
 
 | # | 动作 | 目标文件 |
 |---|---|---|
-| R1 | 增加 Frozen Decisions + 决策摘要 | context / skill / observe / run-trace / golden / word / excel / ppt |
+| R1 | 增加设计决策 + 决策摘要 | context / skill / observe / run-trace / golden / word / excel / ppt |
 | R2 | 注入 `IMemoryRuntime`；全局审批模式 B 脚注 | office-harness-api.md |
 | R3 | Excel 阈值节引用 safety-policy T1/T2 | excel-table-agent-runtime.md |
 | R4 | 共享 ErrorCode 速查 | design/README.md + 本记录 §4 |
 | R5 | 评审状态改为 v0.2 评审修订 | 各专项文头 + README |
 | R6 | 总纲 §11/决策表 与评审结论对齐 | ai-native-harness-design.md |
-| R7 | README 增加「评审结论」与 Frozen 总表 | design/README.md |
+| R7 | README 增加「评审结论」与设计决策总表 | design/README.md |
 
 ---
 
@@ -88,7 +88,9 @@
 
 ---
 
-## 5. Frozen Decisions（全局默认，H0 起生效）
+## 5. 设计决策（目标态，H0 起逐步落地）
+
+> 本表是目标约束，不代表当前代码全部实现。已实现/未实现状态见 §7 与落地实施设计。
 
 | ID | 决策 |
 |---|---|
@@ -124,12 +126,12 @@
 
 | 项 | 结论 |
 |---|---|
-| H0 状态 | 已启动，未完成正式 `IOfficeHarness` 外壳 |
-| 已落地 | `ToolResult` 错误契约、原生 Office Tool Boolean 回灌、Word fast-path 结构化结果、VSTO shadow-copy 工具定位、0 迭代失败防误报 |
+| H0 状态 | 已完成 adapter 版正式入口：`AgentKernelService.StartAgentAsync` 经 `OfficeHarness.RunAsync` 调用现有 `AgentKernel` |
+| 已落地 | `ToolResult` 错误契约、原生 Office ToolResult 回灌、Word fast-path 结构化结果、VSTO shadow-copy 工具定位、0 迭代失败防误报、执行期 `allowed-tools` 硬拒绝、轻量 RunTrace、Word 基础写工具 before/after/diff Observation |
 | 工程门禁 | `scripts/run-code-checks.ps1`、`.github/workflows/code-checks.yml`、`scripts/audit-p0-guardrails.ps1` 已落地 |
 | Ralph | 主 HTML 不再加载 `ralph-loop.js`；后端 `startLoop` 仅保留兼容 shim |
-| 仍未完成 | `IOfficeHarness` 正式接口、Skill `allowed-tools` 与命中 Skill 交集硬拒绝、DocumentDiff、Excel/PPT capability harness |
+| 仍未完成 | 完整 ContextHub、审批控制 API、`agent_run_event`/回放 UI、Excel/PPT 最小 Diff、Excel/PPT capability harness |
 
-本追加不改变 D1–D15；它只记录设计与代码实态之间的同步状态。
+本追加不改变 D1–D15；它只记录设计与代码实态之间的同步状态。实现任务拆分见 [`../ai-native-harness-implementation-design.md`](../ai-native-harness-implementation-design.md)。
 
-*本记录是专项文档的上级裁决；与专项冲突时以本记录 Frozen Decisions 为准，并应回写专项。*
+*本记录是专项文档的上级裁决；与专项冲突时以本记录设计决策为准，并应回写专项。*

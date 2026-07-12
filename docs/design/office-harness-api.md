@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 版本 | **v0.2（评审修订）** |
-| 状态 | 评审通过（见 [`design-review-record.md`](./design-review-record.md)） |
+| 状态 | 目标设计已评审；代码部分实现 |
+| 实现状态 | **H0 adapter 已落地并进入主路径**：`ShareRibbon/Agent/Harness` 已有 `IOfficeHarness`、`OfficeHarness`、轻量 DTO 和 `IRunTraceStore`；`AgentKernelService.StartAgentAsync` 已经通过 `OfficeHarness` adapter 调用现有 `AgentKernel`；轻量 RunTrace 已写 `agent_run`/`agent_run_step`。完整 `ApproveAsync/CancelAsync/ContextHub/agent_run_event` 和回放 API 仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §3 / Phase H0 |
 | 现有 | `ChatRoutingOrchestrator`、`AgentKernel`/`AgentKernelService`、WebView 消息、`ExecutionPathPolicy` |
 | 关联 | 全部 design/* 专项；实现时 Surface 只依赖本 API |
@@ -21,7 +22,7 @@
 
 ### 1.2 非目标
 
-- 本专项不写 VB 实现。  
+- 本专项不规定最终 VB 实现细节；当前 H0 已有 adapter。
 - 不规定 COM 细节。  
 - 不替代 Tool JSON schema。  
 

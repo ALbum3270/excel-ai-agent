@@ -159,7 +159,7 @@ Public MustInherit Class BaseChatControl
                     AddressOf ExecuteJavaScriptAsyncJS,
                     AddressOf EscapeJavaScriptString,
                     AddressOf SendAndGetResponseAsync,
-                    Function(c, l, p) CodeExecutionService.ExecuteCodeWithResult(c, l, p),
+                    Function(c, l, p) CodeExecutionService.ExecuteCodeWithToolResult(c, l, p),
                     _chatStateService,
                     systemHistoryMessageData,
                     AddressOf ManageHistoryMessageSize,
@@ -232,6 +232,7 @@ Public MustInherit Class BaseChatControl
                     AddressOf EvaluateFormula)
                 ' 设置JSON命令执行器（由子类提供）
                 _codeExecutionService.JsonCommandExecutor = AddressOf ExecuteJsonCommand
+                _codeExecutionService.JsonCommandExecutorWithResult = AddressOf ExecuteJsonCommandWithToolResult
             End If
             Return _codeExecutionService
         End Get
@@ -286,6 +287,12 @@ Public MustInherit Class BaseChatControl
         ' 默认实现：不支持JSON命令
         GlobalStatusStrip.ShowWarning("当前应用不支持JSON命令执行")
         Return False
+    End Function
+
+    Protected Overridable Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
+        Dim ok = ExecuteJsonCommand(jsonCode, preview)
+        If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
+        Return Agent.ToolResult.Failed("", "JSON命令执行失败")
     End Function
 
     ' 延迟初始化的意图识别服务
