@@ -117,6 +117,19 @@ msbuild OfficeAgentSetupCustomActions/OfficeAgentSetupCustomActions.vbproj
 - Office COM Interop 操作应保持应用边界清晰，并注意 UI 线程/宿主进程上下文。
 - 配置/API Key/Prompt 相关逻辑优先查 `ShareRibbon/Config/`。
 - MCP 协议相关逻辑优先查 `ShareRibbon/Mcp/`。
+
+### 声明式 Office 对象操作硬规则
+
+- 动态 API 能力必须接入现有主链：`BaseChatControl -> ChatRoutingOrchestrator -> AgentKernelService -> OfficeHarness -> AgentKernel -> LoopEngine -> ToolRegistry -> CodeExecutionService -> Host`。禁止复制或旁路其中任何一层。
+- 只允许两个稳定的长尾入口：`DiscoverOfficeCapability`（只读发现）和 `OfficeObjectOperation`（声明式执行）。新增 SmartArt、艺术字、形状组合等能力时，默认扩展 Catalog/Resolver/Executor/Observer，不新增专用意图和 Tool。
+- 共享 DTO/验证合同放 `ShareRibbon/Agent/OfficeOperations/`；具体 COM Catalog Provider、ObjectResolver、OperationExecutor、Observer 放对应 `WordAi/`、`ExcelAi/`、`PowerPointAi/` 项目。
+- API Catalog 不得整体注入模型上下文；单次发现最多返回任务相关的少量成员。Catalog member 必须具有稳定 ID、参数 schema、风险等级和 executable 状态。
+- 禁止任意反射执行。Executor 只能调用 Catalog 中 `Executable=True` 且通过参数绑定、宿主检查、SafetyGate 的成员；不得用 `CallByName`、VBA 或动态字符串路径绕过。
+- 所有 Office COM 调用必须在宿主 UI 线程执行。Agent/Loop 可在后台运行，但进入 `ExecuteJsonCommandWithToolResult` 前必须统一 marshal；禁止各 Executor 私建线程调 COM。
+- 通用 operation 成功必须返回 `ToolResult + Observation`，写操作至少包含 before/after、changed、targetRefs、warnings；原子调用成功不等于用户目标完成。
+- Repair 继续使用现有 `LoopEngine`，最多按既定无进展阈值修复；不得在宿主 Executor 内嵌第二套模型调用或 repair loop。
+- 现有 Tool 渐进迁移为 `OperationBatch` adapter，外部 Tool ID 保持兼容；迁移前后必须有 Golden 对比，禁止一次删除大批 Tool。
+- 实施顺序和 Definition of Done 以 `docs/design/office-object-operation-integration.md` 为准。
 - Chat UI、WebView2、HTTP/streaming 服务优先查 `ShareRibbon/Controls/`。
 
 ## Agent Working Protocol
@@ -202,6 +215,10 @@ Chat 相关 HTML/JS/CSS 通过 Office Virtual Server 加载，是用户交互入
 - 数据库字段/表变更有迁移路径。
 - `.vdproj` 没有被无意改动或格式化。
 - 文档没有过时日期、错误分支名或临时标记。
+- 新增动态 Office API 能力没有创建平行 Harness/Loop/Safety/执行入口。
+- `DiscoverOfficeCapability` 为只读且返回集合受限；`OfficeObjectOperation` 的每个 member 均来自 Catalog 并经过 Safety。
+- 通用 COM Executor 在宿主 UI 线程执行，临时 COM 对象未跨 step/session 保存。
+- 通用写操作有真实 Observation/Verifier，失败不会误报任务完成。
 
 ## CodeGraph Rules
 

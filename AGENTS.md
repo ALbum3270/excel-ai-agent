@@ -59,6 +59,7 @@ AiHelper/
 | AI Native Harness 总设计 | `docs/ai-native-harness-design.md` | 对标 Copilot/Claude/Cursor 的平台设计与细化清单 |
 | AI Native Harness 落地实施设计 | `docs/ai-native-harness-implementation-design.md` | 基于现有代码的渐进改造任务、文件范围与验收清单 |
 | Harness 专项设计 | `docs/design/` | ContextPack / Observe / Safety 等目标合同级专项 |
+| 声明式 Office 对象操作 | `docs/design/office-object-operation-integration.md` | 基于现有 Harness/ToolRegistry/Loop 接入动态 API 发现、通用对象操作和宿主 Executor |
 | NuGet 依赖 | 各项目 `packages.config` 与根 `packages/` | 判断技术栈、依赖版本、目标框架 |
 
 ## Local AGENTS.md Files
@@ -151,6 +152,18 @@ AiHelper/
 - Excel、PowerPoint 的具体能力分别放在 `ExcelAi/`、`PowerPointAi/`，通过相同抽象接入共享 harness/loop。
 - `openspec/` 中的 AI Native 设计文档是产品/架构意图来源；实现时要优先保持与 roadmap 一致。
 
+### 动态 Office API 与声明式操作
+
+- 长尾 Office 能力必须沿现有唯一主链接入：`OfficeHarness -> AgentKernel -> LoopEngine -> ToolRegistry -> CodeExecutionService -> 宿主 ExecuteJsonCommandWithToolResult`。
+- 禁止为动态能力另建第二套 Harness、Planner、Loop、ToolBroker、SafetyGate 或宿主旁路执行入口。
+- 动态发现统一使用稳定工具 `DiscoverOfficeCapability`；声明式执行统一使用 `OfficeObjectOperation`。不得为 SmartArt、艺术字、时间线等长尾需求继续新增意图枚举或一需求一 Tool。
+- API Catalog 可以枚举宿主 Type Library，但一次只向 Agent 返回少量相关成员；禁止把 Word/Excel/PowerPoint 全量 API 注入 Prompt。
+- `ShareRibbon/` 只承载 `OfficeObjectRef`、`OfficeOperationBatch`、Capability/Observation 等共享合同；PowerPoint/Word/Excel 的 Catalog Provider、ObjectResolver、OperationExecutor、Observer 必须放在各自宿主项目。
+- Catalog 中“可发现”不等于“可执行”。未评级、宏、外部进程、退出/覆盖类成员默认拒绝，所有写操作继续经过现有 `SafetyGate`。
+- 通用 COM 操作必须通过共享宿主 UI 线程入口执行；禁止在 Executor 内各自创建线程或绕过 `CodeExecutionService`。
+- 现有高频 Tool 保持兼容，稳定后逐个转为 `OperationBatch` adapter；禁止大爆炸式删除或一次跨三宿主迁移。
+- 权威实施方案见 `docs/design/office-object-operation-integration.md`。
+
 ### 新能力落地清单
 
 新增一个 AI Native 能力时，至少补齐：
@@ -222,6 +235,9 @@ intent_types: data_analysis, formula, chart
 10. 用关键词 `if/else` 堆叠用户意图，绕过 harness/agent/loop，导致场景永远补不完。
 11. 明明能读取 Office 上下文，却让用户反复回答文档范围、编号格式、选区内容等插件可自行观察的信息。
 12. 对明确执行请求只输出聊天解释或 JSON 示例，不进入预览、执行、观察和修复流程。
+13. 为每个新 Office 对象或业务话术新增意图枚举和专用 Tool，而不先评估 `DiscoverOfficeCapability + OfficeObjectOperation`。
+14. 在通用 Executor 中开放任意字符串反射、`CallByName`、宏或未经过 Catalog/Safety 的 COM 成员。
+15. 新建平行 Harness/Loop/Safety 来实现动态 API，造成两套状态机、两套终态和不同错误合同。
 
 ## Commands
 

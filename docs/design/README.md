@@ -58,6 +58,7 @@
 | [model-gateway-streaming.md](./model-gateway-streaming.md) | v0.2 | Gateway |
 | [run-trace-storage.md](./run-trace-storage.md) | v0.2 | RunTrace |
 | [eval-golden-set.md](./eval-golden-set.md) | v0.2 | Golden |
+| [office-object-operation-integration.md](./office-object-operation-integration.md) | v1.0 | 现有主链接入动态 API 发现与声明式 Office 对象操作 |
 
 ### 宿主运行时
 
@@ -102,3 +103,4 @@
 | **0.5** | **2026-07-11** | **统一评审 + md 整改；v0.2 专项；评审记录** |
 | **0.6** | **2026-07-12** | **实现审计追加：P0 guardrails、Word fast-path 回灌、VSTO shadow-copy 工具定位、0 迭代防误报** |
 | **0.7** | **2026-07-12** | **拆分目标设计与实现状态；新增落地实施设计入口** |
+| **0.8** | **2026-07-12** | **新增声明式 Office 对象操作现有主链接入实施设计** |
