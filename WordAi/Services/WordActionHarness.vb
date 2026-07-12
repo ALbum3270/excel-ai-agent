@@ -36,6 +36,48 @@ Namespace Services
         End Property
     End Class
 
+    Public Enum WordCapabilityExecutionStatus
+        Accepted
+        Succeeded
+        Failed
+        Fallback
+    End Enum
+
+    Public Class WordCapabilityExecutionResult
+        Public Property CapabilityId As String = ""
+        Public Property Kind As WordActionKind = WordActionKind.None
+        Public Property Status As WordCapabilityExecutionStatus = WordCapabilityExecutionStatus.Accepted
+        Public Property Success As Boolean
+        Public Property UserMessage As String = ""
+        Public Property DebugDetail As String = ""
+        Public Property Recoverable As Boolean = True
+        Public Property Data As Object
+
+        Public Shared Function FromPlan(plan As WordActionPlan,
+                                        status As WordCapabilityExecutionStatus,
+                                        success As Boolean,
+                                        userMessage As String,
+                                        Optional debugDetail As String = "",
+                                        Optional data As Object = Nothing,
+                                        Optional recoverable As Boolean = True) As WordCapabilityExecutionResult
+            Return New WordCapabilityExecutionResult With {
+                .CapabilityId = If(plan?.Capability?.Id, ""),
+                .Kind = If(plan Is Nothing, WordActionKind.None, plan.Kind),
+                .Status = status,
+                .Success = success,
+                .UserMessage = If(userMessage, ""),
+                .DebugDetail = If(debugDetail, ""),
+                .Data = data,
+                .Recoverable = recoverable
+            }
+        End Function
+
+        Public Function ToObserveSummary() As String
+            Dim state = If(Success, "success", "failed")
+            Return $"{CapabilityId} kind={Kind} status={Status} result={state}: {UserMessage}"
+        End Function
+    End Class
+
     Public Class WordActionHarness
 
         Private ReadOnly _app As Object

@@ -34,14 +34,24 @@ Namespace Agent
     End Class
 
     ''' <summary>
-    ''' 工具调用结果
+    ''' 工具调用结果（P0-4 统一错误契约）。
+    ''' Success/Message 保持兼容；新增 ErrorCode/UserMessage/DebugDetail/Recoverable 供 observe/repair 使用。
     ''' </summary>
     Public Class ToolResult
         Public Property Success As Boolean
+        ''' <summary>技术/观察用消息（可含简要错误）；兼容旧调用方。</summary>
         Public Property Message As String
         Public Property Data As Object              ' 执行结果的原始数据
         Public Property ToolId As String
         Public Property ElapsedMs As Long
+        ''' <summary>稳定错误码，如 NETWORK_ERROR / COM_ERROR / NOT_FOUND。</summary>
+        Public Property ErrorCode As String = ""
+        ''' <summary>面向用户的简短说明（已脱敏）。</summary>
+        Public Property UserMessage As String = ""
+        ''' <summary>调试细节（已脱敏），勿直接展示给用户。</summary>
+        Public Property DebugDetail As String = ""
+        ''' <summary>是否适合 Agent 自动 repair / 重试。</summary>
+        Public Property Recoverable As Boolean = True
 
         Public Shared Function Succeed(toolId As String, Optional message As String = "",
                                        Optional data As Object = Nothing) As ToolResult
@@ -49,18 +59,55 @@ Namespace Agent
                 .Success = True,
                 .ToolId = toolId,
                 .Message = message,
-                .Data = data
+                .UserMessage = message,
+                .Data = data,
+                .ErrorCode = "",
+                .Recoverable = True
             }
         End Function
 
         Public Shared Function Failed(toolId As String, message As String,
-                                      Optional data As Object = Nothing) As ToolResult
+                                      Optional data As Object = Nothing,
+                                      Optional errorCode As String = Nothing,
+                                      Optional userMessage As String = Nothing,
+                                      Optional debugDetail As String = Nothing,
+                                      Optional recoverable As Boolean = True) As ToolResult
+            Dim code = If(String.IsNullOrWhiteSpace(errorCode), ExceptionClassifier.CodeUnknown, errorCode)
+            Dim userMsg = If(String.IsNullOrWhiteSpace(userMessage), message, userMessage)
+            Dim detail = If(String.IsNullOrWhiteSpace(debugDetail), message, debugDetail)
+            AppLogger.Warn("ToolRegistry", $"Tool failed toolId={toolId} code={code}: {AppLogger.Redact(message)}")
             Return New ToolResult With {
                 .Success = False,
                 .ToolId = toolId,
                 .Message = message,
-                .Data = data
+                .Data = data,
+                .ErrorCode = code,
+                .UserMessage = userMsg,
+                .DebugDetail = AppLogger.Redact(detail),
+                .Recoverable = recoverable
             }
+        End Function
+
+        Public Shared Function FromException(toolId As String, ex As Exception,
+                                             Optional data As Object = Nothing) As ToolResult
+            Dim classified = ExceptionClassifier.Classify(ex)
+            Return Failed(toolId,
+                          classified.DebugDetail,
+                          data,
+                          classified.ErrorCode,
+                          classified.UserMessage,
+                          classified.DebugDetail,
+                          classified.Recoverable)
+        End Function
+
+        ''' <summary>供 Loop observe/repair 使用的紧凑摘要。</summary>
+        Public Function ToObserveSummary() As String
+            If Success Then
+                Return If(String.IsNullOrWhiteSpace(Message), "ok", Message)
+            End If
+            Dim code = If(String.IsNullOrWhiteSpace(ErrorCode), ExceptionClassifier.CodeUnknown, ErrorCode)
+            Dim um = If(String.IsNullOrWhiteSpace(UserMessage), Message, UserMessage)
+            Return $"[{code}] recoverable={Recoverable}: {um}"
         End Function
     End Class
 
@@ -85,6 +132,7 @@ Namespace Agent
         ''' 代码执行委托（用于原生 Office 工具）
         ''' </summary>
         Public Property ExecuteCode As Action(Of String, String, Boolean)
+        Public Property ExecuteCodeWithResult As Func(Of String, String, Boolean, Boolean)
 
         ''' <summary>
         ''' MCP 客户端（用于远程工具调用）
@@ -163,25 +211,63 @@ Namespace Agent
         ''' </summary>
         Public Sub LoadFromDirectory(dir As String)
             If Not Directory.Exists(dir) Then Return
+            Dim loaded As Integer = 0
             For Each file In Directory.GetFiles(dir, "*.json", SearchOption.AllDirectories)
                 Try
                     Dim json = System.IO.File.ReadAllText(file)
                     Dim tool = JsonConvert.DeserializeObject(Of ToolDescriptor)(json)
                     If tool IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tool.Id) Then
-                        _tools(tool.Id) = tool
+                        RegisterOrMergeTool(tool)
+                        loaded += 1
                     End If
                 Catch ex As Exception
                     Debug.WriteLine($"[ToolRegistry] 加载工具失败 {file}: {ex.Message}")
                 End Try
             Next
+            Debug.WriteLine($"[ToolRegistry] 从目录加载原生工具 {loaded} 个，注册表当前 {ToolCount} 个: {dir}")
         End Sub
 
         ''' <summary>
         ''' 注册单个工具
         ''' </summary>
         Public Sub RegisterTool(tool As ToolDescriptor)
-            _tools(tool.Id) = tool
+            RegisterOrMergeTool(tool)
         End Sub
+
+        Private Sub RegisterOrMergeTool(tool As ToolDescriptor)
+            If tool Is Nothing OrElse String.IsNullOrWhiteSpace(tool.Id) Then Return
+
+            Dim existing As ToolDescriptor = Nothing
+            If _tools.TryGetValue(tool.Id, existing) Then
+                existing.AppType = MergeAppTypes(existing.AppType, tool.AppType)
+                If String.IsNullOrWhiteSpace(existing.Description) Then existing.Description = tool.Description
+                If String.IsNullOrWhiteSpace(existing.Name) Then existing.Name = tool.Name
+                If existing.Parameters Is Nothing OrElse existing.Parameters.Count = 0 Then existing.Parameters = tool.Parameters
+                If String.IsNullOrWhiteSpace(existing.Category) OrElse existing.Category = "基础操作" Then existing.Category = tool.Category
+                If String.Equals(existing.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) AndAlso
+                   Not String.Equals(tool.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) Then
+                    existing.RiskLevel = tool.RiskLevel
+                End If
+            Else
+                _tools(tool.Id) = tool
+            End If
+        End Sub
+
+        Private Shared Function MergeAppTypes(left As String, right As String) As String
+            Dim values As New List(Of String)()
+            For Each raw In {left, right}
+                If String.IsNullOrWhiteSpace(raw) Then Continue For
+                For Each part In raw.Split({","c, ";"c, "|"c}, StringSplitOptions.RemoveEmptyEntries)
+                    Dim item = part.Trim()
+                    If item.Length = 0 Then Continue For
+                    If Not values.Any(Function(v) String.Equals(v, item, StringComparison.OrdinalIgnoreCase)) Then
+                        values.Add(item)
+                    End If
+                Next
+            Next
+            If values.Count = 0 Then Return ""
+            Return String.Join(",", values)
+        End Function
 
         ''' <summary>
         ''' 从 Skills 目录加载所有脚本作为工具
@@ -235,10 +321,23 @@ Namespace Agent
                     Return False
                 End If
 
-                Return String.Equals(t.AppType, appType, StringComparison.OrdinalIgnoreCase) OrElse
-                       String.Equals(t.AppType, "common", StringComparison.OrdinalIgnoreCase)
+                Return SupportsApp(t, appType)
             End Function).ToList()
             Return result
+        End Function
+
+        Private Shared Function SupportsApp(tool As ToolDescriptor, appType As String) As Boolean
+            If tool Is Nothing Then Return False
+            Dim raw = If(tool.AppType, "")
+            If String.IsNullOrWhiteSpace(raw) Then Return True
+            For Each part In raw.Split({","c, ";"c, "|"c}, StringSplitOptions.RemoveEmptyEntries)
+                Dim item = part.Trim()
+                If String.Equals(item, "common", StringComparison.OrdinalIgnoreCase) OrElse
+                   String.Equals(item, appType, StringComparison.OrdinalIgnoreCase) Then
+                    Return True
+                End If
+            Next
+            Return False
         End Function
 
         ''' <summary>
@@ -254,6 +353,75 @@ Namespace Agent
         ''' </summary>
         Public Function HasTool(toolId As String) As Boolean
             Return _tools.ContainsKey(toolId)
+        End Function
+
+        Public Function TryNormalizeToolCall(appType As String, toolCall As ToolCall, ByRef message As String) As Boolean
+            message = ""
+            If toolCall Is Nothing OrElse String.IsNullOrWhiteSpace(toolCall.ToolId) Then
+                message = "工具调用为空"
+                Return False
+            End If
+
+            Dim original = toolCall.ToolId.Trim()
+            If toolCall.Parameters Is Nothing Then toolCall.Parameters = New JObject()
+            Dim direct = GetTool(original)
+            If direct IsNot Nothing AndAlso SupportsApp(direct, appType) Then
+                toolCall.ToolId = direct.Id
+                Return True
+            End If
+
+            Dim aliasId = ResolveBuiltInAlias(original, toolCall.Parameters)
+            If Not String.IsNullOrWhiteSpace(aliasId) Then
+                Dim aliasTool = GetTool(aliasId)
+                If aliasTool IsNot Nothing AndAlso SupportsApp(aliasTool, appType) Then
+                    toolCall.ToolId = aliasTool.Id
+                    Return True
+                End If
+            End If
+
+            Dim normalized = NormalizeToolKey(original)
+            Dim matches = GetAvailableTools(appType).
+                Where(Function(t) NormalizeToolKey(t.Id) = normalized OrElse NormalizeToolKey(t.Name) = normalized).
+                ToList()
+            If matches.Count = 1 Then
+                toolCall.ToolId = matches(0).Id
+                message = $"已将工具 {original} 规范化为 {toolCall.ToolId}"
+                Return True
+            End If
+
+            Dim available = String.Join(", ", GetAvailableTools(appType).Select(Function(t) t.Id).OrderBy(Function(id) id).Take(30))
+            message = $"未找到工具: {original}。只能使用当前 {If(appType, "Office")} 已注册工具，例如: {available}"
+            Return False
+        End Function
+
+        Private Shared Function NormalizeToolKey(value As String) As String
+            If String.IsNullOrWhiteSpace(value) Then Return ""
+            Dim sb As New StringBuilder()
+            For Each ch In value
+                If Char.IsLetterOrDigit(ch) Then
+                    sb.Append(Char.ToLowerInvariant(ch))
+                End If
+            Next
+            Return sb.ToString()
+        End Function
+
+        Private Shared Function ResolveBuiltInAlias(toolId As String, params As JObject) As String
+            Dim key = NormalizeToolKey(toolId)
+            Select Case key
+                Case "cleardocument", "cleardoc", "deletedocument", "deletealltext"
+                    If params Is Nothing Then params = New JObject()
+                    If params("range") Is Nothing Then params("range") = "all"
+                    Return "DeleteText"
+                Case "deletetext", "removetext"
+                    Return "DeleteText"
+                Case "replacetext"
+                    Return "ReplaceText"
+                Case "inserttext", "writetext", "appendtext"
+                    Return "InsertText"
+                Case "setparagraphformat", "setparagraphproperties"
+                    Return "SetParagraphFormat"
+            End Select
+            Return Nothing
         End Function
 
         ''' <summary>
@@ -465,21 +633,24 @@ Namespace Agent
                                                })
                 Catch ex As Exception
                     sw.Stop()
-                    Dim failureMessage = $"MCP 调用异常: {ex.Message}"
+                    Dim classified = ExceptionClassifier.Classify(ex)
+                    Dim failureMessage = $"MCP 调用异常: {classified.DebugDetail}"
                     MarkToolHealth(tool, "error", failureMessage)
-                    Return ToolResult.Failed(toolId, failureMessage,
+                    AppLogger.Error("ToolRegistry", $"MCP tool exception toolId={toolId}", ex)
+                    Return ToolResult.FromException(toolId, ex,
                         New With {
                             .mcpToolName = toolId.Substring(4),
                             .mcpStatus = "error",
                             .failureReason = failureMessage,
-                            .elapsedMs = sw.ElapsedMilliseconds
+                            .elapsedMs = sw.ElapsedMilliseconds,
+                            .errorCode = classified.ErrorCode
                         })
                 End Try
             End If
 
             ' 原生 Office 工具，通过 ExecuteCode 回调执行
             If tool.IsVbaFallback OrElse Not toolId.StartsWith("mcp.") Then
-                If ExecuteCode Is Nothing Then
+                If ExecuteCodeWithResult Is Nothing AndAlso ExecuteCode Is Nothing Then
                     sw.Stop()
                     Return ToolResult.Failed(toolId, "ExecuteCode 回调未设置")
                 End If
@@ -498,17 +669,36 @@ Namespace Agent
 
                 Try
                     ' 调用现有执行逻辑
-                    ExecuteCode.Invoke(command, "json", False)
+                    Dim hostSuccess As Boolean = True
+                    If ExecuteCodeWithResult IsNot Nothing Then
+                        hostSuccess = ExecuteCodeWithResult.Invoke(command, "json", False)
+                    Else
+                        ExecuteCode.Invoke(command, "json", False)
+                    End If
                     sw.Stop()
-                    Return ToolResult.Succeed(toolId, "执行成功", New With {.elapsedMs = sw.ElapsedMilliseconds})
+                    If hostSuccess Then
+                        Return ToolResult.Succeed(toolId, "执行成功", New With {.elapsedMs = sw.ElapsedMilliseconds})
+                    End If
+                    Dim failureMessage = $"宿主执行器返回失败: {toolId}"
+                    Return ToolResult.Failed(toolId,
+                                             failureMessage,
+                                             New With {.elapsedMs = sw.ElapsedMilliseconds, .command = command},
+                                             ExceptionClassifier.CodeUnknown,
+                                             failureMessage,
+                                             failureMessage,
+                                             recoverable:=True)
                 Catch ex As Exception
                     sw.Stop()
-                    Return ToolResult.Failed(toolId, $"执行失败: {ex.Message}")
+                    AppLogger.Error("ToolRegistry", $"Native tool execute failed toolId={toolId}", ex)
+                    Return ToolResult.FromException(toolId, ex, New With {.elapsedMs = sw.ElapsedMilliseconds})
                 End Try
             End If
 
             sw.Stop()
-            Return ToolResult.Failed(toolId, "未知的工具类型")
+            Return ToolResult.Failed(toolId, "未知的工具类型",
+                                    errorCode:=ExceptionClassifier.CodeNotFound,
+                                    userMessage:="未识别的工具类型",
+                                    recoverable:=False)
         End Function
 
         Private Async Function ExecuteMemoryToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)

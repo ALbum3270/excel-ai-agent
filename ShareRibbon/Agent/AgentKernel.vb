@@ -27,6 +27,7 @@ Namespace Agent
         ' 外部回调（由 BaseChatControl 设置）
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
         Public Property ExecuteCode As Action(Of String, String, Boolean)
+        Public Property ExecuteCodeWithResult As Func(Of String, String, Boolean, Boolean)
 
         ' MCP 客户端（由外部设置，可选）
         Public Property McpClient As StreamJsonRpcMCPClient
@@ -48,7 +49,7 @@ Namespace Agent
         Public Event OnCompleted(result As AgentResult)
 
         Public Sub New()
-            Dim baseDir = Path.GetDirectoryName(GetType(AgentKernel).Assembly.Location)
+            Dim baseDir = ResolveRuntimeBaseDirectory()
             PromptsDirectory = Path.Combine(baseDir, "Prompts")
             ToolsDirectory = Path.Combine(baseDir, "Tools")
             SkillsDirectory = Path.Combine(baseDir, "Skills")
@@ -66,9 +67,7 @@ Namespace Agent
         ''' </summary>
         Public Sub Initialize()
             ' 加载工具定义
-            If Directory.Exists(ToolsDirectory) Then
-                _toolRegistry.LoadFromDirectory(ToolsDirectory)
-            End If
+            LoadToolDefinitions()
 
             ' 加载技能定义
             If Directory.Exists(SkillsDirectory) Then
@@ -114,6 +113,89 @@ Namespace Agent
                                     End Function
         End Sub
 
+        Private Sub LoadToolDefinitions()
+            Dim loadedAny As Boolean = False
+            For Each candidateDir In GetToolDirectoryCandidates()
+                If Directory.Exists(candidateDir) Then
+                    _toolRegistry.LoadFromDirectory(candidateDir)
+                    loadedAny = True
+                End If
+            Next
+
+            If Not loadedAny Then
+                AppLogger.Warn("AgentKernel", $"Tools directory not found. Primary={ToolsDirectory}")
+            Else
+                AppLogger.Info("AgentKernel", $"Tool registry initialized. Count={_toolRegistry.ToolCount}")
+            End If
+        End Sub
+
+        Private Function GetToolDirectoryCandidates() As List(Of String)
+            Dim candidates As New List(Of String)()
+            AddCandidate(candidates, ToolsDirectory)
+
+            For Each baseDir In GetRuntimeBaseDirectoryCandidates()
+                Dim currentDir = baseDir
+                While Not String.IsNullOrWhiteSpace(currentDir)
+                    AddCandidate(candidates, Path.Combine(currentDir, "Tools"))
+                    AddCandidate(candidates, Path.Combine(currentDir, "ShareRibbon", "Tools"))
+                    currentDir = Path.GetDirectoryName(currentDir)
+                End While
+            Next
+
+            Return candidates
+        End Function
+
+        Private Shared Function ResolveRuntimeBaseDirectory() As String
+            For Each candidate In GetRuntimeBaseDirectoryCandidates()
+                If Directory.Exists(Path.Combine(candidate, "Tools")) OrElse
+                   Directory.Exists(Path.Combine(candidate, "Prompts")) OrElse
+                   Directory.Exists(Path.Combine(candidate, "Skills")) Then
+                    Return candidate
+                End If
+            Next
+
+            Dim assemblyLocation = GetType(AgentKernel).Assembly.Location
+            If Not String.IsNullOrWhiteSpace(assemblyLocation) Then
+                Return Path.GetDirectoryName(assemblyLocation)
+            End If
+
+            Return AppDomain.CurrentDomain.BaseDirectory
+        End Function
+
+        Private Shared Function GetRuntimeBaseDirectoryCandidates() As List(Of String)
+            Dim candidates As New List(Of String)()
+            AddCandidate(candidates, GetDirectoryFromPath(GetType(AgentKernel).Assembly.Location))
+
+            Try
+                Dim codeBase = GetType(AgentKernel).Assembly.CodeBase
+                If Not String.IsNullOrWhiteSpace(codeBase) Then
+                    AddCandidate(candidates, GetDirectoryFromPath(New Uri(codeBase).LocalPath))
+                End If
+            Catch
+            End Try
+
+            AddCandidate(candidates, AppDomain.CurrentDomain.BaseDirectory)
+            AddCandidate(candidates, AppDomain.CurrentDomain.RelativeSearchPath)
+
+            Return candidates.Where(Function(c) Not String.IsNullOrWhiteSpace(c)).ToList()
+        End Function
+
+        Private Shared Function GetDirectoryFromPath(rawPath As String) As String
+            If String.IsNullOrWhiteSpace(rawPath) Then Return Nothing
+            Try
+                If Directory.Exists(rawPath) Then Return rawPath
+                Return Path.GetDirectoryName(rawPath)
+            Catch
+                Return Nothing
+            End Try
+        End Function
+
+        Private Shared Sub AddCandidate(candidates As List(Of String), path As String)
+            If String.IsNullOrWhiteSpace(path) Then Return
+            If candidates.Any(Function(p) String.Equals(p, path, StringComparison.OrdinalIgnoreCase)) Then Return
+            candidates.Add(path)
+        End Sub
+
         ''' <summary>
         ''' 异步初始化 MCP 工具（在 MCP 客户端就绪后调用）
         ''' </summary>
@@ -136,47 +218,68 @@ Namespace Agent
                                             appType As String,
                                             currentContent As String,
                                             Optional officeContext As Context.OfficeContext = Nothing) As Task(Of AgentResult)
-            ' 创建会话
-            _session = New AgentSession(userRequest, appType, currentContent)
-            _memory.ClearWorking()
-            _memory.AddSessionMessage("user", userRequest)
+            Dim cid = AppLogger.BeginScope()
+            AppLogger.Info("AgentKernel", $"ExecuteAsync start appType={appType} cid={cid}")
 
-            ' 采集 Office 上下文（如果未传入）
-            If officeContext Is Nothing Then
-                ' 创建空上下文（TODO: 后续由调用方传入具体的 ContextProvider）
-                officeContext = New Context.OfficeContext With {.AppType = appType}
-            End If
+            Try
+                ' 创建会话
+                _session = New AgentSession(userRequest, appType, currentContent)
+                _memory.ClearWorking()
+                _memory.AddSessionMessage("user", userRequest)
 
-            ' 将上下文保存到记忆中（供多轮对话使用）
-            _memory.SetWorking("lastOfficeContext", officeContext)
+                ' Production path must inject CaptureOfficeContext; empty context is last-resort only.
+                If officeContext Is Nothing Then
+                    AppLogger.Warn("AgentKernel", "ExecuteAsync called without OfficeContext; using empty context")
+                    officeContext = New Context.OfficeContext With {.AppType = appType}
+                End If
+
+                ' 将上下文保存到记忆中（供多轮对话使用）
+                _memory.SetWorking("lastOfficeContext", officeContext)
 
             ' 绑定执行回调
             _toolRegistry.ExecuteCode = ExecuteCode
+            _toolRegistry.ExecuteCodeWithResult = ExecuteCodeWithResult
 
-            ' 构建系统提示词（注入上下文）
-            Dim contextText = officeContext.ToPromptText()
-            Dim systemPrompt = _promptManager.BuildSystemPrompt(
-                appType,
-                _toolRegistry.GetAvailableTools(appType),
-                _memory,
-                contextText  ' ← 新增：上下文文本
-            )
+                ' 构建系统提示词（注入上下文）
+                Dim contextText = officeContext.ToPromptText()
+                Dim systemPrompt = _promptManager.BuildSystemPrompt(
+                    appType,
+                    _toolRegistry.GetAvailableTools(appType),
+                    _memory,
+                    contextText  ' ← 新增：上下文文本
+                )
 
-            ' 自动选择 Skill：优先使用 filesystem Skill 索引，旧 JSON SkillRegistry 作为兜底。
-            Dim matchedSkill = SelectSkillForRequest(userRequest, appType)
-            If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
+                ' 自动选择 Skill：优先使用 filesystem Skill 索引，旧 JSON SkillRegistry 作为兜底。
+                Dim matchedSkill = SelectSkillForRequest(userRequest, appType)
+                If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
 
-            ' 执行 ReAct Loop
-            Dim result = Await _loopEngine.RunAsync(_session, systemPrompt, matchedSkill)
+                ' 执行 ReAct Loop
+                Dim result = Await _loopEngine.RunAsync(_session, systemPrompt, matchedSkill)
 
-            ' 保存记忆
-            _memory.AddTaskRecord(result)
-            _memory.AddSessionMessage("assistant", result.Message)
+                ' 保存记忆
+                _memory.AddTaskRecord(result)
+                _memory.AddSessionMessage("assistant", result.Message)
 
-            ' 通知完成
-            RaiseEvent OnCompleted(result)
+                If result IsNot Nothing AndAlso Not result.Success Then
+                    AppLogger.Warn("AgentKernel", $"ExecuteAsync finished with failure: {result.Message}")
+                Else
+                    AppLogger.Info("AgentKernel", "ExecuteAsync finished success")
+                End If
 
-            Return result
+                ' 通知完成
+                RaiseEvent OnCompleted(result)
+
+                Return result
+            Catch ex As Exception
+                AppLogger.Error("AgentKernel", "ExecuteAsync unhandled exception", ex)
+                Dim classified = ExceptionClassifier.Classify(ex)
+                Dim failed = AgentResult.Failed(If(_session?.Id, Guid.NewGuid().ToString()),
+                                                $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}")
+                RaiseEvent OnCompleted(failed)
+                Return failed
+            Finally
+                AppLogger.ClearScope()
+            End Try
         End Function
 
         ''' <summary>

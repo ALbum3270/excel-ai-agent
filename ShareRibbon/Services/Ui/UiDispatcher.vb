@@ -8,6 +8,49 @@ Imports System.Windows.Forms
 Public Class UiDispatcher
     Private Const DefaultHandleTimeoutMs As Integer = 5000
 
+    ''' <summary>
+    ''' Synchronous UI marshal for background threads that must touch WinForms/WebView2/COM.
+    ''' Prefer InvokeAsync. Do not call long network work inside the action.
+    ''' Safe when already on the UI thread (runs inline). Uses Control.Invoke when marshaling,
+    ''' never GetAwaiter().GetResult() on an async UI dispatch (avoids STA deadlocks).
+    ''' </summary>
+    Public Shared Sub InvokeSync(control As Control, action As Action, Optional handleTimeoutMs As Integer = DefaultHandleTimeoutMs)
+        If action Is Nothing Then Return
+        If control Is Nothing OrElse control.IsDisposed Then Return
+
+        If Not control.InvokeRequired Then
+            action()
+            Return
+        End If
+
+        If Not WaitForHandleSync(control, handleTimeoutMs) Then
+            Throw New InvalidOperationException("Cannot dispatch to UI thread before the control handle is created.")
+        End If
+        If control.IsDisposed Then Return
+
+        control.Invoke(New MethodInvoker(Sub()
+                                             If control.IsDisposed Then Return
+                                             action()
+                                         End Sub))
+    End Sub
+
+    Private Shared Function WaitForHandleSync(control As Control, timeoutMs As Integer) As Boolean
+        If control Is Nothing OrElse control.IsDisposed Then Return False
+        If control.IsHandleCreated Then Return True
+
+        Dim waited As Integer = 0
+        Dim delayMs As Integer = 25
+        Dim maxWait As Integer = If(timeoutMs > 0, timeoutMs, DefaultHandleTimeoutMs)
+        While waited < maxWait
+            If control Is Nothing OrElse control.IsDisposed Then Return False
+            If control.IsHandleCreated Then Return True
+            Threading.Thread.Sleep(delayMs)
+            waited += delayMs
+        End While
+        Debug.WriteLine($"[UiDispatcher] Sync wait for handle timed out: {control.GetType().Name}")
+        Return control IsNot Nothing AndAlso Not control.IsDisposed AndAlso control.IsHandleCreated
+    End Function
+
     Public Shared Async Function InvokeAsync(control As Control, action As Action, Optional handleTimeoutMs As Integer = DefaultHandleTimeoutMs) As Task
         If action Is Nothing Then Return
         If control Is Nothing OrElse control.IsDisposed Then Return

@@ -987,8 +987,14 @@ Public Class ChatControl
         MyBase.HandleSendMessage(jsonDoc)
     End Sub
 
+    ''' <summary>
+    ''' Host capability fast path (P0-2): high-confidence Word capabilities run deterministically.
+    ''' This is not a parallel NL product router; unresolved messages continue to ChatRouting → AgentKernel.
+    ''' Future: fold observe/explain results back into Agent loop memory.
+    ''' </summary>
     Private Function TryRouteWordActionHarness(userMessage As String, originalJsonDoc As JObject) As Boolean
         If String.IsNullOrWhiteSpace(userMessage) Then Return False
+        If Not Agent.ExecutionPathPolicy.AllowHostCapabilityFastPath Then Return False
 
         Try
             Dim intent As IntentResult = Nothing
@@ -1002,35 +1008,63 @@ Public Class ChatControl
             Dim plan = harness.Plan(userMessage, intent)
             If plan Is Nothing OrElse Not plan.ShouldHandle Then Return False
 
-            Debug.WriteLine($"[WordActionHarness] kind={plan.Kind}, confidence={plan.Confidence:0.00}, reason={plan.Reason}")
+            Debug.WriteLine($"[WordActionHarness] capability fast-path kind={plan.Kind}, confidence={plan.Confidence:0.00}, reason={plan.Reason}, capability={plan.CapabilitySummary}")
 
             Select Case plan.Kind
                 Case Services.WordActionKind.Numbering
-                    HandleNumberingCommand(userMessage, originalJsonDoc)
+                    HandleNumberingCommand(userMessage, originalJsonDoc, plan)
                     Return True
 
                 Case Services.WordActionKind.Proofread
-                    HandleProofreadCommand(userMessage, originalJsonDoc)
+                    HandleProofreadCommand(userMessage, originalJsonDoc, plan)
                     Return True
 
                 Case Services.WordActionKind.DirectFormatting
-                    HandleDirectFormattingCommand(userMessage, originalJsonDoc)
+                    HandleDirectFormattingCommand(userMessage, originalJsonDoc, plan)
                     Return True
 
                 Case Services.WordActionKind.SemanticReformat
-                    HandleChatDrivenReformat(userMessage, originalJsonDoc)
+                    HandleChatDrivenReformat(userMessage, originalJsonDoc, plan)
                     Return True
             End Select
         Catch ex As Exception
             Debug.WriteLine($"[WordActionHarness] route failed: {ex.Message}")
+            AppLogger.Error("WordActionHarness", "Capability fast-path route failed", ex)
         End Try
 
         Return False
     End Function
 
-    Private Async Sub HandleDirectFormattingCommand(userMessage As String, originalJsonDoc As JObject)
+    Private Sub ReportWordCapabilityResult(plan As Services.WordActionPlan, result As Services.WordCapabilityExecutionResult)
+        If result Is Nothing Then Return
+
+        Dim capabilityId = If(String.IsNullOrWhiteSpace(result.CapabilityId), If(plan?.Capability?.Id, "word.unknown"), result.CapabilityId)
+        Dim message = result.ToObserveSummary()
+        If result.Success Then
+            AppLogger.Info("WordCapability", message)
+        Else
+            AppLogger.Warn("WordCapability", message)
+        End If
+        Debug.WriteLine($"[WordCapability] {message}")
+
+        Try
+            If result.Status = Services.WordCapabilityExecutionStatus.Failed Then
+                GlobalStatusStrip.ShowWarning(If(String.IsNullOrWhiteSpace(result.UserMessage), $"{capabilityId} 执行失败", result.UserMessage))
+            End If
+        Catch
+        End Try
+    End Sub
+
+    Private Async Sub HandleDirectFormattingCommand(userMessage As String, originalJsonDoc As JObject, plan As Services.WordActionPlan)
         Try
             Dim applied = Await ExecuteDirectFormattingCommandAsync(userMessage, True)
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                If(applied, Services.WordCapabilityExecutionStatus.Succeeded, Services.WordCapabilityExecutionStatus.Fallback),
+                applied,
+                If(applied, "直接格式调整已应用。", "直接格式调整未能应用，回退到 Agent 主路径。"),
+                plan?.Reason,
+                New With {.applied = applied}))
             If Not applied Then
                 If originalJsonDoc IsNot Nothing Then
                     MyBase.HandleSendMessage(originalJsonDoc)
@@ -1040,6 +1074,13 @@ Public Class ChatControl
             End If
         Catch ex As Exception
             Debug.WriteLine($"HandleDirectFormattingCommand error: {ex.Message}")
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                Services.WordCapabilityExecutionStatus.Failed,
+                False,
+                $"格式调整失败: {ex.Message}",
+                ex.ToString(),
+                recoverable:=True))
             GlobalStatusStrip.ShowWarning($"格式调整失败: {ex.Message}")
             Try
                 If originalJsonDoc IsNot Nothing Then
@@ -1053,7 +1094,7 @@ Public Class ChatControl
         End Try
     End Sub
 
-    Private Async Sub HandleNumberingCommand(userMessage As String, originalJsonDoc As JObject)
+    Private Async Sub HandleNumberingCommand(userMessage As String, originalJsonDoc As JObject, plan As Services.WordActionPlan)
         Try
             Dim userMsgUuid = Guid.NewGuid().ToString()
             Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
@@ -1065,6 +1106,14 @@ Public Class ChatControl
             If result Is Nothing OrElse Not result.Success Then
                 Dim reason = If(result Is Nothing, "未生成编号执行结果", result.ToHumanReadableSummary())
                 Debug.WriteLine($"[Word] 自动编号重排未执行: {reason}")
+                ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                    plan,
+                    Services.WordCapabilityExecutionStatus.Failed,
+                    False,
+                    reason,
+                    reason,
+                    result,
+                    recoverable:=True))
                 Dim failureResponseUuid = Guid.NewGuid().ToString()
                 Await ExecuteJavaScriptAsyncJS($"createChatSection('AI编号助手', formatDateTime(new Date()), '{failureResponseUuid}');")
                 Dim escapedReason = reason.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
@@ -1076,11 +1125,25 @@ Public Class ChatControl
             Dim responseUuid = Guid.NewGuid().ToString()
             Await ExecuteJavaScriptAsyncJS($"createChatSection('AI编号助手', formatDateTime(new Date()), '{responseUuid}');")
             Dim summary = result.ToHumanReadableSummary()
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                Services.WordCapabilityExecutionStatus.Succeeded,
+                True,
+                summary,
+                summary,
+                result))
             Dim escapedSummary = summary.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, "").Replace(vbLf, "\n")
             Await ExecuteJavaScriptAsyncJS($"appendRenderer('{responseUuid}','已完成自动编号重排：{escapedSummary}');")
             GlobalStatusStrip.ShowSuccess("自动编号已重排为连续递增")
         Catch ex As Exception
             Debug.WriteLine($"HandleNumberingCommand error: {ex.Message}")
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                Services.WordCapabilityExecutionStatus.Failed,
+                False,
+                $"自动编号重排失败: {ex.Message}",
+                ex.ToString(),
+                recoverable:=True))
             GlobalStatusStrip.ShowWarning($"自动编号重排失败: {ex.Message}")
             Try
                 If originalJsonDoc IsNot Nothing Then
@@ -1236,7 +1299,7 @@ Public Class ChatControl
         End If
     End Function
 
-    Private Async Sub HandleProofreadCommand(userMessage As String, originalJsonDoc As JObject)
+    Private Async Sub HandleProofreadCommand(userMessage As String, originalJsonDoc As JObject, plan As Services.WordActionPlan)
         Try
             Dim userMsgUuid = Guid.NewGuid().ToString()
             Await ExecuteJavaScriptAsyncJS($"createChatSection('你', formatDateTime(new Date()), '{userMsgUuid}');")
@@ -1244,10 +1307,27 @@ Public Class ChatControl
 
             Dim wordApp = Globals.ThisAddIn.Application
             Dim compiler As New Services.ProofreadIntentCompiler()
-            Dim plan = compiler.Compile(userMessage, HasUsableProofreadSelection(wordApp))
-            Await ExecuteProofreadAsync(plan, userMessage)
+            Dim proofreadPlan = compiler.Compile(userMessage, HasUsableProofreadSelection(wordApp))
+            Dim started = Await ExecuteProofreadAsync(proofreadPlan, userMessage)
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                If(started, Services.WordCapabilityExecutionStatus.Succeeded, Services.WordCapabilityExecutionStatus.Fallback),
+                started,
+                If(started, "校对流程已启动。", "校对流程未启动，回退到 Agent 主路径。"),
+                If(proofreadPlan Is Nothing, "", proofreadPlan.ToHumanReadableSummary()),
+                proofreadPlan))
+            If Not started AndAlso originalJsonDoc IsNot Nothing Then
+                MyBase.HandleSendMessage(originalJsonDoc)
+            End If
         Catch ex As Exception
             Debug.WriteLine($"HandleProofreadCommand error: {ex.Message}")
+            ReportWordCapabilityResult(plan, Services.WordCapabilityExecutionResult.FromPlan(
+                plan,
+                Services.WordCapabilityExecutionStatus.Failed,
+                False,
+                $"校对启动失败: {ex.Message}",
+                ex.ToString(),
+                recoverable:=True))
             GlobalStatusStrip.ShowWarning($"校对启动失败: {ex.Message}")
             Try
                 MyBase.HandleSendMessage(originalJsonDoc)
@@ -1311,7 +1391,7 @@ Public Class ChatControl
     ''' Chat驱动的排版流程：收集段落→意图解析→选择标准→预览卡片
     ''' 用户点击"应用排版"后走V1的AI语义标注管道（StartSemanticReformatPipeline）
     ''' </summary>
-    Private Async Sub HandleChatDrivenReformat(userMessage As String, originalJsonDoc As JObject)
+    Private Async Sub HandleChatDrivenReformat(userMessage As String, originalJsonDoc As JObject, planContext As Services.WordActionPlan)
         Try
             Dim wordApp = Globals.ThisAddIn.Application
 
@@ -1322,6 +1402,13 @@ Public Class ChatControl
 
             Dim job = CreateReformatJobFromRange(targetRange, scopeKind)
             If job Is Nothing OrElse Not job.HasUsableParagraphs() Then
+                ReportWordCapabilityResult(planContext, Services.WordCapabilityExecutionResult.FromPlan(
+                    planContext,
+                    Services.WordCapabilityExecutionStatus.Fallback,
+                    False,
+                    "当前范围没有可用于语义排版的段落，回退到 Agent 主路径。",
+                    "CreateReformatJobFromRange returned no usable paragraphs",
+                    New With {.scope = scopeKind.ToString()}))
                 ' 没有选区时回退到正常AI对话流程
                 If originalJsonDoc IsNot Nothing Then
                     MyBase.HandleSendMessage(originalJsonDoc)
@@ -1397,9 +1484,23 @@ Public Class ChatControl
             jsonPayload("html") = html
             Await ExecuteJavaScriptAsyncJS($"appendFormattingCard({jsonPayload.ToString(Newtonsoft.Json.Formatting.None)});")
 
+            ReportWordCapabilityResult(planContext, Services.WordCapabilityExecutionResult.FromPlan(
+                planContext,
+                Services.WordCapabilityExecutionStatus.Succeeded,
+                True,
+                $"语义排版预览已生成，推荐标准: {plan.StandardName}。",
+                $"scope={job.GetScopeSummary()}, paragraphs={job.ParagraphTexts.Count}, standard={plan.StandardName}",
+                New With {.scope = job.GetScopeSummary(), .paragraphCount = job.ParagraphTexts.Count, .standardName = plan.StandardName}))
             GlobalStatusStrip.ShowInfo($"分析完成，推荐标准: {plan.StandardName}。范围: {job.GetScopeSummary()}")
         Catch ex As Exception
             Debug.WriteLine($"HandleChatDrivenReformat error: {ex.Message}")
+            ReportWordCapabilityResult(planContext, Services.WordCapabilityExecutionResult.FromPlan(
+                planContext,
+                Services.WordCapabilityExecutionStatus.Failed,
+                False,
+                $"智能排版失败: {ex.Message}",
+                ex.ToString(),
+                recoverable:=True))
             GlobalStatusStrip.ShowWarning($"智能排版失败: {ex.Message}")
             ' 排版失败时回退到正常AI对话流程
             Try
@@ -1517,10 +1618,10 @@ Public Class ChatControl
     ''' 执行校对分析（由Ribbon按钮调用）
     ''' </summary>
     Public Async Function ExecuteProofreadAsync(Optional plan As Services.ProofreadIntentPlan = Nothing,
-                                                 Optional userRequest As String = "") As Task
+                                                 Optional userRequest As String = "") As Task(Of Boolean)
         Try
             Dim wordApp = Globals.ThisAddIn.Application
-            If wordApp Is Nothing Then Return
+            If wordApp Is Nothing Then Return False
 
             If plan Is Nothing Then
                 Dim compiler As New Services.ProofreadIntentCompiler()
@@ -1530,7 +1631,7 @@ Public Class ChatControl
             Dim selRange = ResolveProofreadRange(wordApp, plan)
             If selRange Is Nothing OrElse String.IsNullOrWhiteSpace(If(selRange.Text, "")) Then
                 GlobalStatusStrip.ShowWarning("当前文档没有可校对的文本内容。")
-                Return
+                Return False
             End If
 
             ' 按段落收集文本
@@ -1550,7 +1651,7 @@ Public Class ChatControl
 
             If paragraphs.Count = 0 Then
                 GlobalStatusStrip.ShowWarning("选中的内容没有有效段落。")
-                Return
+                Return False
             End If
 
             ' 存储段落列表供结果处理使用
@@ -1581,10 +1682,12 @@ Public Class ChatControl
 
             ' 发送校对请求
             Await Send(sb.ToString(), systemPrompt, False, "proofread")
+            Return True
 
         Catch ex As Exception
             Debug.WriteLine($"ExecuteProofreadAsync 出错: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"校对失败: {ex.Message}")
+            Return False
         End Try
     End Function
 
@@ -1699,7 +1802,7 @@ Public Class ChatControl
             End If
 
             If IsExplicitFormattingRequest(formattingRequest) Then
-                HandleChatDrivenReformat(formattingRequest, Nothing)
+                HandleChatDrivenReformat(formattingRequest, Nothing, Nothing)
             Else
                 Await Send(formattingRequest, "", True, "")
             End If
@@ -4065,6 +4168,8 @@ Public Class ChatControl
                     Return ExecuteFormatText(params, selection)
                 Case "replacetext"
                     Return ExecuteReplaceText(params, doc)
+                Case "deletetext"
+                    Return ExecuteDeleteText(params, doc, selection)
                 Case "inserttable"
                     Return ExecuteInsertTable(params, selection)
                 Case "applystyle"
@@ -4175,6 +4280,30 @@ Public Class ChatControl
             Return True
         Catch ex As Exception
             Debug.WriteLine($"ExecuteReplaceText 出错: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    Private Function ExecuteDeleteText(params As JToken, doc As Object, selection As Object) As Boolean
+        Try
+            Dim rangeName = "selection"
+            If params IsNot Nothing AndAlso params("range") IsNot Nothing Then
+                rangeName = params("range").ToString()
+            End If
+            rangeName = rangeName.Trim().ToLowerInvariant()
+
+            Select Case rangeName
+                Case "all", "document", "全文"
+                    Dim contentRange = doc.Content
+                    contentRange.Delete()
+                Case Else
+                    If selection Is Nothing OrElse selection.Range Is Nothing Then Return False
+                    selection.Range.Delete()
+            End Select
+
+            Return True
+        Catch ex As Exception
+            Debug.WriteLine($"ExecuteDeleteText 出错: {ex.Message}")
             Return False
         End Try
     End Function

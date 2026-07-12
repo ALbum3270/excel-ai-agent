@@ -56,6 +56,8 @@ AiHelper/
 | 安装自定义动作 | `OfficeAgentSetupCustomActions/`（如存在） | 安装流程辅助逻辑，优先在这里承载可代码化安装行为 |
 | 调试/迁移文档 | `docs/` | Visual Studio/VSTO 调试、迁移指南等 |
 | 需求/变更规格 | `openspec/` | 变更说明、规格草案、归档记录 |
+| AI Native Harness 总设计 | `docs/ai-native-harness-design.md` | 对标 Copilot/Claude/Cursor 的平台设计与细化清单 |
+| Harness 专项设计 | `docs/design/` | ContextPack / Observe / Safety 等冻结级专项 |
 | NuGet 依赖 | 各项目 `packages.config` 与根 `packages/` | 判断技术栈、依赖版本、目标框架 |
 
 ## Local AGENTS.md Files
@@ -121,8 +123,9 @@ AiHelper/
 ### OfficeAgent 与 OfficeAgentSetupCustomActions
 
 - `OfficeAgent/` 的 `.vdproj` 是安装包定义，自动化修改风险高，除非必要不要大范围编辑。
-- `OfficeAgentSetupCustomActions/` 如存在，是 VB.NET 自定义动作项目，适合承载安装过程中需要代码实现的逻辑。
-- 如果安装逻辑可以通过自定义动作表达，优先改自定义动作项目，避免直接重写 `.vdproj`。
+- **当前仓库不存在** `OfficeAgentSetupCustomActions/`；文档中的「如存在」表示可选扩展位。
+- 若需要自定义安装逻辑，应新建该 VB.NET 自定义动作项目，再接入安装包，避免直接重写 `.vdproj`。
+- 打 MSI 前必须先 `build-installer-prep`（Release 代码 + SourcePath 审计），见 `docs/build-and-installer.md`。
 
 ## AI Native Architecture Rules
 
@@ -222,25 +225,43 @@ intent_types: data_analysis, formula, chart
 ## Commands
 
 常用命令索引如下；更完整规则见 `CLAUDE.md`。
+**构建二分（P0-5）**：日常只编代码，不要用整解决方案 Rebuild 判断代码是否可编。详见 `docs/build-and-installer.md`。
 
 ```bash
 # 还原 NuGet 包
 msbuild AiHelper.sln -t:Restore
 
-# 构建整个解决方案
-msbuild AiHelper.sln
+# 推荐：只构建四个代码项目（不含 OfficeAgent.vdproj）
+.\build-code.bat
+# 或
+powershell -File .\scripts\build-code-projects.ps1 -Configuration Debug
 
-# 构建共享库
+# 打 MSI 前准备：Release 代码 + 安装 SourcePath 审计（不生成 MSI）
+.\build-installer-prep.bat
+# 或
+powershell -File .\scripts\build-installer-prep.ps1
+
+# 完整 Release 门禁（构建 + 审计 + smoke 等）
+powershell -File .\build\RunReleaseChecks.ps1
+
+# 构建共享库 / 单插件（MSBuild 直调）
 msbuild ShareRibbon/ShareRibbon.vbproj
-
-# 构建单个 Office 插件
 msbuild ExcelAi/ExcelAi.vbproj
 msbuild WordAi/WordAi.vbproj
 msbuild PowerPointAi/PowerPointAi.vbproj
 
-# 构建安装自定义动作项目（目录存在时）
-msbuild OfficeAgentSetupCustomActions/OfficeAgentSetupCustomActions.vbproj
+# 安装包 MSI：在 Visual Studio 中打开 OfficeAgent/OfficeAgent.vdproj 并 Build（需 Installer Projects 扩展）
+# OfficeAgentSetupCustomActions/ 当前仓库不存在；若需自定义安装逻辑再新建该项目
+
+# 本地 VSTO 开发证书（*.pfx 不入库；克隆后若清单签名失败请运行）
+powershell -File .\scripts\ensure-vsto-temp-keys.ps1
+
+# Release 签名（正式证书经环境变量，禁止用 TemporaryKey）
+# OFFICE_AI_SIGN_CERT_THUMBPRINT=... 或 OFFICE_AI_SIGN_PFX=...
+powershell -File .\build\SignArtifacts.ps1
 ```
+
+签名策略见 `docs/signing-and-certificates.md`。禁止提交 `*.pfx` / `*.snk` / 正式签名私钥。
 
 ## Documentation Maintenance Rules
 

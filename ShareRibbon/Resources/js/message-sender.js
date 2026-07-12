@@ -38,18 +38,16 @@ function sendChatMessage() {
         userTypedText = chatInput.value.trim();
     }
 
-    // 检测 /loop 命令 - 启动 Ralph Loop
+    // /loop 兼容：统一走 startAgent（AgentKernel 主路径），不再依赖 Ralph Loop 协议
     if (userTypedText.startsWith('/loop ')) {
         const loopGoal = userTypedText.substring(6).trim();
         if (loopGoal) {
-            // 清空输入
             if (smartInput) smartInput.innerText = '';
             if (chatInput) chatInput.value = '';
 
-            // 发送启动循环消息
             sendMessageToServer({
-                type: 'startLoop',
-                goal: loopGoal
+                type: 'startAgent',
+                request: loopGoal
             });
             return;
         }

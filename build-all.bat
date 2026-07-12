@@ -1,3 +1,5 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-code-projects.ps1" -Configuration Debug
+REM Alias: code projects only (Debug). Does NOT build OfficeAgent.vdproj / MSI.
+REM Prefer build-code.bat for clarity. See docs\build-and-installer.md
+call "%~dp0build-code.bat" Debug
 exit /b %ERRORLEVEL%

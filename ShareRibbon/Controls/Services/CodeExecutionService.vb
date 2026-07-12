@@ -134,6 +134,13 @@ Public Class CodeExecutionService
         ''' 根据语言类型执行代码
         ''' </summary>
         Public Sub ExecuteCode(code As String, language As String, preview As Boolean)
+            ExecuteCodeWithResult(code, language, preview)
+        End Sub
+
+        ''' <summary>
+        ''' 根据语言类型执行代码，并返回宿主执行结果。Agent ToolResult 使用该返回值做 observe。
+        ''' </summary>
+        Public Function ExecuteCodeWithResult(code As String, language As String, preview As Boolean) As Boolean
             Dim lowerLang As String = If(language, "").ToLower().Trim()
             
             ' 调试日志
@@ -158,24 +165,26 @@ Public Class CodeExecutionService
 
             If lowerLang.Contains("json") Then
                 Debug.WriteLine("[CodeExecutionService] 路由到JSON命令执行器")
-                ExecuteJsonCommand(code, preview)
+                Return ExecuteJsonCommand(code, preview)
             ElseIf lowerLang.Contains("vbnet") OrElse lowerLang.Contains("vbscript") OrElse lowerLang.Contains("vba") Then
                 Debug.WriteLine("[CodeExecutionService] 路由到VBA执行器")
-                ExecuteVBACode(code, preview)
+                Return ExecuteVBACode(code, preview)
             ElseIf lowerLang.Contains("js") OrElse lowerLang.Contains("javascript") Then
                 Debug.WriteLine("[CodeExecutionService] 路由到JavaScript执行器")
-                ExecuteJavaScript(code, preview)
+                Return ExecuteJavaScript(code, preview)
             ElseIf lowerLang.Contains("excel") OrElse lowerLang.Contains("formula") OrElse lowerLang.Contains("function") Then
                 Debug.WriteLine("[CodeExecutionService] 路由到Excel公式执行器")
-                ExecuteExcelFormula(code, preview)
+                Return ExecuteExcelFormula(code, preview)
             ElseIf IsTextOnlyLanguage(lowerLang) Then
                 ' 文本类型语言（markdown、text等）静默跳过，不显示警告
                 Debug.WriteLine($"[CodeExecutionService] 跳过文本类型: '{language}'（不可执行）")
+                Return False
             Else
                 Debug.WriteLine($"[CodeExecutionService] 不支持的语言类型: '{language}'")
                 GlobalStatusStrip.ShowWarning("不支持的语言类型: " & language)
+                Return False
             End If
-        End Sub
+        End Function
 
         ''' <summary>
         ''' JSON命令执行委托（由子类设置）
@@ -183,11 +192,11 @@ Public Class CodeExecutionService
         Public Property JsonCommandExecutor As Func(Of String, Boolean, Boolean) = Nothing
 
         ''' <summary>
-        ''' 执行JSON命令
+        ''' Execute host JSON tool/schema backend. P0-2: tool backend only, not NL product entry.
         ''' </summary>
-        Public Sub ExecuteJsonCommand(jsonCode As String, preview As Boolean)
-            Debug.WriteLine($"[CodeExecutionService] ExecuteJsonCommand 被调用, preview={preview}")
-            Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutor 是否已设置: {JsonCommandExecutor IsNot Nothing}")
+        Public Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
+            Debug.WriteLine($"[CodeExecutionService] ExecuteJsonCommand (tool backend) preview={preview}")
+            Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutor set: {JsonCommandExecutor IsNot Nothing}")
             
             If JsonCommandExecutor IsNot Nothing Then
                 Try
@@ -222,15 +231,18 @@ Public Class CodeExecutionService
                     ' 执行命令
                     Dim result = JsonCommandExecutor.Invoke(currentJsonCode, preview)
                     Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {result}")
+                    Return result
                 Catch ex As Exception
                     Debug.WriteLine($"[CodeExecutionService] JSON命令执行异常: {ex.Message}")
                     GlobalStatusStrip.ShowWarning($"JSON命令执行失败: {ex.Message}")
+                    Return False
                 End Try
             Else
                 Debug.WriteLine("[CodeExecutionService] JsonCommandExecutor 未设置!")
                 GlobalStatusStrip.ShowWarning("当前应用不支持JSON命令执行，请使用VBA代码")
+                Return False
             End If
-        End Sub
+        End Function
 
 #End Region
 

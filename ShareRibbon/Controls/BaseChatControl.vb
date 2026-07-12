@@ -21,6 +21,7 @@ Imports Newtonsoft.Json.Linq
 
 Public MustInherit Class BaseChatControl
     Inherits UserControl
+    Implements IChatRoutingHost
 
     ' 服务类实例
     Private _fileParserService As New FileParserService()
@@ -37,6 +38,7 @@ Public MustInherit Class BaseChatControl
     Private _memoryTurnRecorder As MemoryTurnRecorder = Nothing
     Private _aiNativeRuntime As Agent.IAiNativeRuntime = Nothing
     Private _chatRequestOrchestrator As ChatRequestOrchestrator = Nothing
+    Private _chatRoutingOrchestrator As ChatRoutingOrchestrator = Nothing
 
     Private ReadOnly Property CommandRouter As ChatCommandRouter
         Get
@@ -121,6 +123,15 @@ Public MustInherit Class BaseChatControl
         End Get
     End Property
 
+    Private ReadOnly Property ChatRoutingOrchestrator As ChatRoutingOrchestrator
+        Get
+            If _chatRoutingOrchestrator Is Nothing Then
+                _chatRoutingOrchestrator = New ChatRoutingOrchestrator(Me)
+            End If
+            Return _chatRoutingOrchestrator
+        End Get
+    End Property
+
     ' 延迟初始化的排版服务
     Private _reformatService As ReformatService = Nothing
     Protected ReadOnly Property ReformatSvc As ReformatService
@@ -148,7 +159,7 @@ Public MustInherit Class BaseChatControl
                     AddressOf ExecuteJavaScriptAsyncJS,
                     AddressOf EscapeJavaScriptString,
                     AddressOf SendAndGetResponseAsync,
-                    Sub(c, l, p) CodeExecutionService.ExecuteCode(c, l, p),
+                    Function(c, l, p) CodeExecutionService.ExecuteCodeWithResult(c, l, p),
                     _chatStateService,
                     systemHistoryMessageData,
                     AddressOf ManageHistoryMessageSize,
@@ -268,7 +279,8 @@ Public MustInherit Class BaseChatControl
     End Property
 
     ''' <summary>
-    ''' 执行JSON命令（由子类重写以提供具体实现）
+    ''' Host JSON command backend used by CodeExecutionService / Agent tools (P0-2).
+    ''' Not a product entry for natural-language routing; NL goes ChatRouting → AgentKernel.
     ''' </summary>
     Protected Overridable Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
         ' 默认实现：不支持JSON命令
@@ -342,9 +354,12 @@ Public MustInherit Class BaseChatControl
         End Try
     End Sub
 
+    ''' <summary>
+    ''' Background → UI marshal without async GetResult (P0-3). Prefer RunUiAction/async when possible.
+    ''' </summary>
     Private Sub RunUiActionSync(action As Action)
         If action Is Nothing Then Return
-        UiDispatcher.InvokeAsync(Me, action).GetAwaiter().GetResult()
+        UiDispatcher.InvokeSync(Me, action)
     End Sub
 
     Protected Async Function InitializeWebView2() As Task
@@ -729,6 +744,7 @@ Public MustInherit Class BaseChatControl
         router.Register("startAgentExecution", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
         router.Register("abortAgent", Sub(jsonDoc) HandleAbortAgent())
         router.Register("refineAgentPlan", Sub(jsonDoc) HandleRefineAgentPlan(jsonDoc))
+        ' Legacy Ralph protocol → AgentKernel compatibility shims (do not add new features here).
         router.Register("startLoop", Sub(jsonDoc) HandleLegacyStartLoop(jsonDoc))
         router.Register("continueLoop", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
         router.Register("replanLoop", Sub(jsonDoc) HandleAgentRefinePlan(jsonDoc))
@@ -1489,129 +1505,13 @@ Public MustInherit Class BaseChatControl
                          Await Send(finalMessageToLLM, proofreadSystemPrompt, False, "proofread_followup")
                      End Function)
         Else
-            ' 智能模式：统一消息处理，自动路由到 AgentKernel 或普通聊天
+            ' 智能模式：分析 → 预检 → AgentKernel / 普通聊天（逻辑在 ChatRoutingOrchestrator）
             Task.Run(Async Function()
-                         Try
-                             ' 检查是否有引用内容（文件或选中内容）
-                             Dim hasReferences As Boolean = (filePaths IsNot Nothing AndAlso filePaths.Count > 0) OrElse
-                                                    (selectedContents IsNot Nothing AndAlso selectedContents.Count > 0)
-
-                             ' 检查是否有历史对话记录，如果有则判断新问题是否为追问
-                             Dim isFollowUp As Boolean = False
-                             If systemHistoryMessageData.Count >= 2 AndAlso Not String.IsNullOrWhiteSpace(originalQuestion) Then
-                                 ' 有历史记录，检查新问题是否与之前对话相关
-                                 isFollowUp = Await IntentService.IsFollowUpQuestionAsync(originalQuestion, systemHistoryMessageData)
-                                 Debug.WriteLine($"追问检查结果: isFollowUp={isFollowUp}")
-                             End If
-
-                             ' 如果是追问（与之前对话相关），直接发送给大模型，不弹出意图确认框
-                             If isFollowUp Then
-                                 Debug.WriteLine($"检测到追问，直接发送给大模型处理")
-                                 SendChatMessage(finalMessageToLLM)
-                                 Return
-                             End If
-
-                             ' 不是追问，进行意图识别
-                             ' 获取上下文快照并注入内容区引用与 RAG 记忆
-                             Dim contextSnapshot = GetContextSnapshot()
-                             EnrichContextForIntent(contextSnapshot, originalQuestion, filePaths, selectedContents)
-
-                             ' 注入最近的历史对话，让意图识别能结合上下文
-                             Dim recentHistory = systemHistoryMessageData.Where(Function(m) m.role <> "system" AndAlso Not String.IsNullOrEmpty(m.content)).ToList()
-                             If recentHistory.Count > 0 Then
-                                 Dim historyArray As New JArray()
-                                 Dim takeCount = Math.Min(6, recentHistory.Count)
-                                 For i = recentHistory.Count - takeCount To recentHistory.Count - 1
-                                     Dim hMsg = recentHistory(i)
-                                     historyArray.Add(New JObject From {{"role", hMsg.role}, {"content", If(hMsg.content?.Length > 300, hMsg.content.Substring(0, 300) & "...", hMsg.content)}})
-                                 Next
-                                 contextSnapshot("conversationHistory") = historyArray
-                             End If
-
-                             Dim aiNativeRequest As New Agent.AiNativeRequest With {
-                                 .UserInput = originalQuestion,
-                                 .AppType = GetApplicationType(),
-                                 .SystemPrompt = "",
-                                 .RequestUuid = Guid.NewGuid().ToString(),
-                                 .OfficeContext = CaptureOfficeContext(GetApplicationType()),
-                                 .ContextSnapshot = contextSnapshot,
-                                 .HistoryMessages = recentHistory,
-                                 .EnableMemory = MemoryConfig.EnableUserProfile OrElse MemoryConfig.RagTopN > 0,
-                                 .UseContextBuilder = MemoryConfig.UseContextBuilder
-                             }
-                             Dim aiNativeResult = Await AiNativeRuntime.AnalyzeAsync(aiNativeRequest)
-                             CurrentIntentResult = If(aiNativeResult.Intent, New IntentResult())
-                             CurrentIntentResult.OriginalInput = originalQuestion
-                             If aiNativeResult.ContextTrace IsNot Nothing Then
-                                 Dim intentText = If(CurrentIntentResult.UserFriendlyDescription, "")
-                                 Dim intentEscaped = intentText.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, " ").Replace(vbLf, " ")
-                                 Dim traceJson = JObject.FromObject(aiNativeResult.ContextTrace).ToString(Formatting.None)
-                                 ExecuteJavaScriptAsyncJS($"showContextHints({{ ragCount: {aiNativeResult.RagCount}, intent: '{intentEscaped}', trace: {traceJson} }});")
-                             End If
-
-                             ' 智能路由判断
-                             Dim isComplexTask As Boolean = (CurrentIntentResult.OfficeIntent <> OfficeIntentType.GENERAL_QUERY AndAlso
-                                                              CurrentIntentResult.Confidence >= 0.4)
-
-                             ' === 自检Loop: 发送前校验（排版/校对场景）===
-                             Dim isFormattingOrProofreading As Boolean = (CurrentIntentResult.OfficeIntent = OfficeIntentType.FORMAT_STYLE OrElse
-                                                                         CurrentIntentResult.OfficeIntent = OfficeIntentType.TEXT_FORMAT)
-                             If isFormattingOrProofreading Then
-                                 Try
-                                     Dim execContext = Await BuildExecutionContextAsync(originalQuestion, filePaths, selectedContents)
-                                     execContext.IntentResult = CurrentIntentResult
-                                     Dim preCheck = Await SelfCheckLoopController.PreSendCheckAsync(execContext)
-                                     If Not preCheck.IsValid Then
-                                         Debug.WriteLine($"[SelfCheck] PreSendCheck阻止发送: {String.Join(";", preCheck.Errors)}")
-                                         GlobalStatusStrip.ShowWarning($"请求未通过预检: {String.Join(";", preCheck.Errors)}")
-                                         Return
-                                     End If
-                                     If preCheck.Warnings.Count > 0 Then
-                                         Debug.WriteLine($"[SelfCheck] PreSendCheck警告: {String.Join(";", preCheck.Warnings)}")
-                                     End If
-                                 Catch ex As Exception
-                                     Debug.WriteLine($"[SelfCheck] PreSendCheck异常: {ex.Message}")
-                                 End Try
-                             End If
-
-                             ' 情况1：用户只引用了内容但没有输入问题。AI Native 模式下不再要求用户手动确认意图，
-                             ' 交给意图识别和 Agent 自动选择最合适的处理路径。
-                             If hasReferences AndAlso String.IsNullOrWhiteSpace(originalQuestion) Then
-                                 CurrentIntentResult.UserFriendlyDescription = "已根据引用内容自动识别处理意图"
-                                 If ConfigSettings.UseNewAgentKernel Then
-                                     Debug.WriteLine("[AgentKernel] 引用内容无显式问题，进入自治 Agent 流程")
-                                     StartAgentPlanningFlow(finalMessageToLLM, CurrentIntentResult)
-                                 Else
-                                     Debug.WriteLine("引用内容无显式问题，直接发送给模型自动处理")
-                                     SendChatMessageWithIntent(finalMessageToLLM, CurrentIntentResult)
-                                 End If
-                                 Return
-                             End If
-
-                             ' 情况2：启用了新架构 -> 所有任务都走 AgentKernel（优先级最高）
-                             If ConfigSettings.UseNewAgentKernel Then
-                                 Debug.WriteLine($"智能路由：使用 AgentKernel 处理任务 [{CurrentIntentResult.OfficeIntent}]，置信度: {CurrentIntentResult.Confidence:F2}")
-                                 ExecuteJavaScriptAsyncJS("showIdentifyingStatus()")
-                                 StartAgentPlanningFlow(finalMessageToLLM, CurrentIntentResult)
-                                 Return
-                             End If
-
-                             ' 情况3：旧架构 - 置信度太低（<0.4），让大模型来询问用户澄清
-                             If CurrentIntentResult.Confidence < 0.4 Then
-                                 Debug.WriteLine($"直接发送消息（置信度:{CurrentIntentResult.Confidence:F2}）")
-                                 SendChatMessageWithIntent(finalMessageToLLM, CurrentIntentResult)
-                                 Return
-                             End If
-
-                             ' 情况4：其他所有情况直接发送（智能模式不弹意图确认框）
-                             Debug.WriteLine($"智能路由：直接发送消息（置信度:{CurrentIntentResult.Confidence:F2}）")
-                             SendChatMessageWithIntent(finalMessageToLLM, CurrentIntentResult)
-
-                         Catch ex As Exception
-                             Debug.WriteLine($"意图识别失败，直接发送: {ex.Message}")
-                             ' 回退到直接发送模式
-                             SendChatMessage(finalMessageToLLM)
-                         End Try
+                         Await ChatRoutingOrchestrator.RouteSmartModeAsync(
+                             finalMessageToLLM,
+                             originalQuestion,
+                             filePaths,
+                             selectedContents)
                      End Function)
         End If
     End Sub
@@ -1636,9 +1536,85 @@ Public MustInherit Class BaseChatControl
         End If
     End Sub
 
+#Region "IChatRoutingHost"
+
+    Private Function IChatRoutingHost_GetHistoryMessages() As List(Of HistoryMessage) Implements IChatRoutingHost.GetHistoryMessages
+        Return systemHistoryMessageData
+    End Function
+
+    Private Function IChatRoutingHost_IsFollowUpQuestionAsync(question As String, history As List(Of HistoryMessage)) As Task(Of Boolean) Implements IChatRoutingHost.IsFollowUpQuestionAsync
+        Return IntentService.IsFollowUpQuestionAsync(question, history)
+    End Function
+
+    Private Function IChatRoutingHost_GetContextSnapshot() As JObject Implements IChatRoutingHost.GetContextSnapshot
+        Return GetContextSnapshot()
+    End Function
+
+    Private Sub IChatRoutingHost_EnrichContextForIntent(snapshot As JObject,
+                                                        originalQuestion As String,
+                                                        filePaths As List(Of String),
+                                                        selectedContents As List(Of SendMessageReferenceContentItem)) Implements IChatRoutingHost.EnrichContextForIntent
+        EnrichContextForIntent(snapshot, originalQuestion, filePaths, selectedContents)
+    End Sub
+
+    Private Function IChatRoutingHost_GetApplicationType() As String Implements IChatRoutingHost.GetApplicationType
+        Return GetApplicationType()
+    End Function
+
+    Private Function IChatRoutingHost_CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext Implements IChatRoutingHost.CaptureOfficeContext
+        Return CaptureOfficeContext(appType)
+    End Function
+
+    Private Function IChatRoutingHost_AnalyzeAiNativeAsync(request As Agent.AiNativeRequest) As Task(Of Agent.AiNativeRuntimeResult) Implements IChatRoutingHost.AnalyzeAiNativeAsync
+        Return AiNativeRuntime.AnalyzeAsync(request)
+    End Function
+
+    Private Function IChatRoutingHost_BuildExecutionContextAsync(originalQuestion As String,
+                                                                 filePaths As List(Of String),
+                                                                 selectedContents As List(Of SendMessageReferenceContentItem)) As Task(Of ExecutionContext) Implements IChatRoutingHost.BuildExecutionContextAsync
+        Return BuildExecutionContextAsync(originalQuestion, filePaths, selectedContents)
+    End Function
+
+    Private Function IChatRoutingHost_PreSendCheckAsync(execContext As ExecutionContext) As Task(Of ContextCheckResult) Implements IChatRoutingHost.PreSendCheckAsync
+        Return SelfCheckLoopController.PreSendCheckAsync(execContext)
+    End Function
+
+    Private Sub IChatRoutingHost_ShowContextHints(ragCount As Integer, intentDescription As String, contextTrace As ChatContextTrace) Implements IChatRoutingHost.ShowContextHints
+        Dim intentText = If(intentDescription, "")
+        Dim intentEscaped = intentText.Replace("\", "\\").Replace("'", "\'").Replace(vbCr, " ").Replace(vbLf, " ")
+        Dim traceJson = If(contextTrace Is Nothing, "{}", JObject.FromObject(contextTrace).ToString(Formatting.None))
+        ExecuteJavaScriptAsyncJS($"showContextHints({{ ragCount: {ragCount}, intent: '{intentEscaped}', trace: {traceJson} }});")
+    End Sub
+
+    Private Sub IChatRoutingHost_ShowWarning(message As String) Implements IChatRoutingHost.ShowWarning
+        GlobalStatusStrip.ShowWarning(message)
+    End Sub
+
+    Private Sub IChatRoutingHost_ShowIdentifyingStatus() Implements IChatRoutingHost.ShowIdentifyingStatus
+        ExecuteJavaScriptAsyncJS("showIdentifyingStatus()")
+    End Sub
+
+    Private Sub IChatRoutingHost_SendChatMessage(message As String) Implements IChatRoutingHost.SendChatMessage
+        SendChatMessage(message)
+    End Sub
+
+    Private Sub IChatRoutingHost_SendChatMessageWithIntent(message As String, intent As IntentResult) Implements IChatRoutingHost.SendChatMessageWithIntent
+        SendChatMessageWithIntent(message, intent)
+    End Sub
+
+    Private Sub IChatRoutingHost_StartAgentPlanningFlow(message As String, intent As IntentResult) Implements IChatRoutingHost.StartAgentPlanningFlow
+        StartAgentPlanningFlow(message, intent)
+    End Sub
+
+    Private Sub IChatRoutingHost_SetCurrentIntentResult(intent As IntentResult) Implements IChatRoutingHost.SetCurrentIntentResult
+        CurrentIntentResult = intent
+    End Sub
+
+#End Region
+
     ''' <summary>
     ''' Agent模式下直接启动规划流程（不显示意图预览卡片）
-    ''' 当 UseNewAgentKernel=true 时，使用新 AgentKernelService
+    ''' Primary product path: AgentKernel planning/execution.
     ''' </summary>
     Private Sub StartAgentPlanningFlow(message As String, intent As IntentResult)
         AgentKernelSvc.AgentFullUserMessage = message
@@ -1691,8 +1667,7 @@ Public MustInherit Class BaseChatControl
 #Region "Ralph Agent 智能助手"
 
     ''' <summary>
-    ''' 处理启动Agent请求
-    ''' 当 UseNewAgentKernel=true 时，使用新 AgentKernelService
+    ''' 处理启动Agent请求（AgentKernel 主路径）
     ''' </summary>
     Protected Sub HandleStartAgent(jsonDoc As JObject)
         Try
@@ -1747,7 +1722,7 @@ Public MustInherit Class BaseChatControl
     End Sub
 
     ''' <summary>
-    ''' 异步解析文件并启动Agent（参考HandleSendMessageWithFilesAsync）
+    ''' Compatibility: Ralph /loop and startLoop messages are rewritten to startAgent (AgentKernel).
     ''' </summary>
     Private Sub HandleLegacyStartLoop(jsonDoc As JObject)
         Try
@@ -1756,13 +1731,14 @@ Public MustInherit Class BaseChatControl
                 goal = jsonDoc("request")?.ToString()
             End If
 
+            Debug.WriteLine("[ExecutionPathPolicy] legacy startLoop remapped to startAgent/AgentKernel")
             Dim agentRequest As New JObject()
             agentRequest("type") = "startAgent"
             agentRequest("request") = goal
             HandleStartAgent(agentRequest)
         Catch ex As Exception
             Debug.WriteLine($"HandleLegacyStartLoop failed: {ex.Message}")
-            GlobalStatusStrip.ShowWarning($"启动Loop失败: {ex.Message}")
+            GlobalStatusStrip.ShowWarning($"启动Agent失败: {ex.Message}")
         End Try
     End Sub
 
@@ -1886,7 +1862,7 @@ Public MustInherit Class BaseChatControl
 
     ''' <summary>
     ''' 处理Agent启动的核心逻辑（文件解析完成后调用）
-    ''' 当 UseNewAgentKernel=true 时，路由到新的 AgentKernelService
+    ''' AgentKernel 启动核心（始终注入 CaptureOfficeContext）
     ''' </summary>
     Private Sub HandleStartAgentCore(question As String, originalQuestion As String, fileContent As String)
         ' 构建最终发送给 LLM 的消息
@@ -1957,9 +1933,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentApprovePlan(jsonDoc As JObject)
         Try
-            If ConfigSettings.UseNewAgentKernel Then
-                AgentKernelSvc.Approve()
-            End If
+            AgentKernelSvc.Approve()
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentApprovePlan 出错: {ex.Message}")
         End Try
@@ -1970,9 +1944,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentRejectPlan(jsonDoc As JObject)
         Try
-            If ConfigSettings.UseNewAgentKernel Then
-                AgentKernelSvc.Reject()
-            End If
+            AgentKernelSvc.Reject()
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentRejectPlan 出错: {ex.Message}")
         End Try
@@ -1983,9 +1955,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentApproveStep(jsonDoc As JObject)
         Try
-            If ConfigSettings.UseNewAgentKernel Then
-                AgentKernelSvc.Approve()
-            End If
+            AgentKernelSvc.Approve()
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentApproveStep 出错: {ex.Message}")
         End Try
@@ -1996,24 +1966,21 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentRefinePlan(jsonDoc As JObject)
         Try
-            If ConfigSettings.UseNewAgentKernel Then
-                Dim feedback = jsonDoc("payload")?("feedback")?.ToString()
-                If String.IsNullOrEmpty(feedback) Then
-                    feedback = jsonDoc("feedback")?.ToString()
-                End If
-                If Not String.IsNullOrEmpty(feedback) Then
-                    Debug.WriteLine($"[AgentKernel] 用户请求修改计划: {feedback}")
-                    ExecuteJavaScriptAsyncJS("addThinkingMessage('正在根据您的意见重新规划...')")
-                    ' 重新启动 Agent 任务（带反馈）
-                    Dim request = AgentKernelSvc.AgentOriginalUserRequest
-                    If Not String.IsNullOrEmpty(request) Then
-                        Dim refinedRequest = request & vbCrLf & "[用户修改意见] " & feedback
-                        AgentKernelSvc.AgentThinkingUuid = Guid.NewGuid().ToString()
-                        Dim now = DateTime.Now
-                        Dim timestamp = now.ToString("yyyy-MM-dd HH:mm:ss")
-                        ExecuteJavaScriptAsyncJS($"createChatSection('AI', '{timestamp}', '{AgentKernelSvc.AgentThinkingUuid}')")
-                        HandleStartAgentCore(refinedRequest, request, "")
-                    End If
+            Dim feedback = jsonDoc("payload")?("feedback")?.ToString()
+            If String.IsNullOrEmpty(feedback) Then
+                feedback = jsonDoc("feedback")?.ToString()
+            End If
+            If Not String.IsNullOrEmpty(feedback) Then
+                Debug.WriteLine($"[AgentKernel] 用户请求修改计划: {feedback}")
+                ExecuteJavaScriptAsyncJS("addThinkingMessage('正在根据您的意见重新规划...')")
+                Dim request = AgentKernelSvc.AgentOriginalUserRequest
+                If Not String.IsNullOrEmpty(request) Then
+                    Dim refinedRequest = request & vbCrLf & "[用户修改意见] " & feedback
+                    AgentKernelSvc.AgentThinkingUuid = Guid.NewGuid().ToString()
+                    Dim now = DateTime.Now
+                    Dim timestamp = now.ToString("yyyy-MM-dd HH:mm:ss")
+                    ExecuteJavaScriptAsyncJS($"createChatSection('AI', '{timestamp}', '{AgentKernelSvc.AgentThinkingUuid}')")
+                    HandleStartAgentCore(refinedRequest, request, "")
                 End If
             End If
         Catch ex As Exception

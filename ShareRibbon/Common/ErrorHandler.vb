@@ -143,27 +143,25 @@ Namespace Common
         End Sub
 
         ''' <summary>
-        ''' 记录错误日志
+        ''' 记录错误日志（P0-4：走 AppLogger，自动脱敏）
         ''' </summary>
         Private Shared Sub LogError(context As ErrorContext)
             Try
-                Dim logMessage As String = String.Format("[{0}] [{1}] {2}.{3}: {4}",
-                    context.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                    context.Level.ToString(),
-                    context.ModuleName,
-                    If(String.IsNullOrEmpty(context.Operation), "Unknown", context.Operation),
-                    context.Message)
-
-                System.Diagnostics.Debug.WriteLine(logMessage)
-
-                ' 如果有异常，记录堆栈跟踪
-                If context.Exception IsNot Nothing Then
-                    System.Diagnostics.Debug.WriteLine(String.Format("  StackTrace: {0}", context.Exception.StackTrace))
-                End If
-
-            Catch ex As Exception
+                Dim moduleName = If(String.IsNullOrEmpty(context.ModuleName), "ErrorHandler", context.ModuleName)
+                Dim op = If(String.IsNullOrEmpty(context.Operation), "Unknown", context.Operation)
+                Dim msg = $"{op}: {context.Message}"
+                Select Case context.Level
+                    Case ErrorLevel.Info
+                        AppLogger.Info(moduleName, msg, context.Exception)
+                    Case ErrorLevel.Warning
+                        AppLogger.Warn(moduleName, msg, context.Exception)
+                    Case ErrorLevel.Critical
+                        AppLogger.Error(moduleName, "CRITICAL " & msg, context.Exception)
+                    Case Else
+                        AppLogger.Error(moduleName, msg, context.Exception)
+                End Select
+            Catch
                 ' 日志记录失败，不抛出异常
-                System.Diagnostics.Debug.WriteLine(String.Format("[ErrorHandler] 日志记录失败: {0}", ex.Message))
             End Try
         End Sub
 

@@ -41,7 +41,7 @@ Public Class ExecutionResult
 End Class
 
 ''' <summary>
-''' 单个操作执行结果
+''' 单个操作执行结果（P0-4：与 ToolResult 对齐的错误契约字段）
 ''' </summary>
 Public Class OperationResult
 
@@ -54,6 +54,18 @@ Public Class OperationResult
     ''' <summary>错误消息</summary>
     Public Property ErrorMessage As String = String.Empty
 
+    ''' <summary>稳定错误码</summary>
+    Public Property ErrorCode As String = String.Empty
+
+    ''' <summary>用户可见说明</summary>
+    Public Property UserMessage As String = String.Empty
+
+    ''' <summary>调试细节（脱敏）</summary>
+    Public Property DebugDetail As String = String.Empty
+
+    ''' <summary>是否可自动修复/重试</summary>
+    Public Property Recoverable As Boolean = True
+
     ''' <summary>目标Range（执行时确定的）</summary>
     Public Property TargetRange As Object = Nothing
 
@@ -65,5 +77,18 @@ Public Class OperationResult
 
     ''' <summary>附加数据</summary>
     Public Property AdditionalData As Object = Nothing
+
+    Public Shared Function FailFromException(ex As Exception, Optional instruction As Instruction = Nothing) As OperationResult
+        Dim c = ExceptionClassifier.Classify(ex)
+        Return New OperationResult With {
+            .Instruction = instruction,
+            .IsSuccess = False,
+            .ErrorMessage = c.DebugDetail,
+            .ErrorCode = c.ErrorCode,
+            .UserMessage = c.UserMessage,
+            .DebugDetail = c.DebugDetail,
+            .Recoverable = c.Recoverable
+        }
+    End Function
 
 End Class

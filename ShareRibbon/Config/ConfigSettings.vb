@@ -21,7 +21,9 @@ Public Class ConfigSettings
     Public Shared Property propmtName As String
     Public Shared Property propmtContent As String
 
-    ' Agent 架构切换：true=使用新 AgentKernel，false=保留旧 RalphLoop/RalphAgent
+    ' OBSOLETE for smart-mode routing (P0-2): product path is always AgentKernel via ExecutionPathPolicy.
+    ' Kept for binary/config compatibility; ChatRoutingOrchestrator ignores false for smart-mode.
+    ' Prefer reading Agent.ExecutionPathPolicy.PreferAgentKernelForSmartMode instead of this flag.
     Public Shared Property UseNewAgentKernel As Boolean = True
 
     ' Loop 框架配置

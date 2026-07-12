@@ -1,4 +1,5 @@
 Imports System.Text
+Imports System.Linq
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
@@ -87,6 +88,21 @@ Namespace Agent
                         Continue While
                     End If
 
+                    Dim normalizeMessage As String = ""
+                    If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, normalizeMessage) Then
+                        noProgressCount += 1
+                        planStep.Status = StepStatus.Failed
+                        planStep.ErrorMessage = normalizeMessage
+                        OnStepCompleted?.Invoke(stepIndex, False, normalizeMessage)
+
+                        If noProgressCount >= MaxNoProgress Then Exit While
+                        stepIndex += 1
+                        Continue While
+                    End If
+                    If Not String.IsNullOrWhiteSpace(normalizeMessage) Then
+                        Debug.WriteLine($"[LoopEngine] {normalizeMessage}")
+                    End If
+
                     ' --- RISK NOTICE (autonomous mode) ---
                     Dim tool = _toolRegistry.GetTool(toolCall.ToolId)
                     If tool IsNot Nothing AndAlso tool.RiskLevel = "risky" Then
@@ -117,8 +133,20 @@ Namespace Agent
 
                     ' 多轮修复循环
                     While fixAttempt < MaxFixAttempts
-                        ' 执行工具
-                        toolResult = Await _toolRegistry.ExecuteToolAsync(toolCall.ToolId, toolCall.Parameters)
+                        Dim normalized As String = ""
+                        If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, normalized) Then
+                            toolResult = ToolResult.Failed(toolCall.ToolId,
+                                                           normalized,
+                                                           New With {.availableTools = BuildAvailableToolHint(session.AppType)},
+                                                           ExceptionClassifier.CodeNotFound,
+                                                           normalized,
+                                                           normalized,
+                                                           recoverable:=True)
+                        Else
+                            If Not String.IsNullOrWhiteSpace(normalized) Then Debug.WriteLine($"[LoopEngine] {normalized}")
+                            ' 执行工具
+                            toolResult = Await _toolRegistry.ExecuteToolAsync(toolCall.ToolId, toolCall.Parameters)
+                        End If
 
                         If toolResult.Success Then
                             ' 成功，跳出循环
@@ -128,16 +156,28 @@ Namespace Agent
                         ' 失败：尝试自动修复
                         fixAttempt += 1
                         If fixAttempt < MaxFixAttempts Then
-                            OnStatusChanged?.Invoke($"代码执行失败，AI 正在修复（尝试 {fixAttempt}/{MaxFixAttempts}）...")
-                            Debug.WriteLine($"[LoopEngine] 第 {fixAttempt} 次修复尝试，错误: {toolResult.Message}")
+                            ' Non-recoverable tool failures skip AI repair and go straight to observe/reflect.
+                            If Not toolResult.Recoverable Then
+                                AppLogger.Warn("LoopEngine", $"Skip repair for non-recoverable tool failure: {toolResult.ToObserveSummary()}")
+                                Exit While
+                            End If
 
-                            ' 构建修复提示词
+                            OnStatusChanged?.Invoke($"代码执行失败，AI 正在修复（尝试 {fixAttempt}/{MaxFixAttempts}）...")
+                            AppLogger.Info("LoopEngine", $"Repair attempt {fixAttempt}/{MaxFixAttempts}: {toolResult.ToObserveSummary()}")
+
+                            ' 构建修复提示词（含结构化错误契约）
                             Dim fixPrompt = $"上一次执行失败：
 
-错误信息: {toolResult.Message}
+错误码: {If(toolResult.ErrorCode, ExceptionClassifier.CodeUnknown)}
+用户可见说明: {If(toolResult.UserMessage, toolResult.Message)}
+调试细节: {If(toolResult.DebugDetail, toolResult.Message)}
+可自动修复: {toolResult.Recoverable}
 
 原工具调用: {toolCall.ToolId}
 原参数: {Newtonsoft.Json.JsonConvert.SerializeObject(toolCall.Parameters)}
+
+当前 {If(session.AppType, "Office")} 可用工具（必须使用原样工具 ID，不要自创 snake_case 或未注册命令）:
+{BuildAvailableToolHint(session.AppType)}
 
 请分析错误原因并返回修正后的工具调用。只返回 JSON，格式：
 ```json
@@ -154,20 +194,17 @@ Namespace Agent
 
                                 If Not String.IsNullOrEmpty(fixedJson) Then
                                     Dim fixedObj = JObject.Parse(fixedJson)
-                                    Dim fixedToolCall As New ToolCall With {
-                                        .ToolId = If(fixedObj("toolId")?.ToString(), toolCall.ToolId),
-                                        .Parameters = fixedObj("parameters")
-                                    }
+                                    Dim fixedToolCall = ParseFixedToolCall(fixedObj, toolCall)
 
                                     ' 使用修复后的工具调用
                                     toolCall = fixedToolCall
-                                    Debug.WriteLine($"[LoopEngine] AI 已生成修复方案")
+                                    AppLogger.Info("LoopEngine", "AI generated repair plan")
                                 Else
-                                    Debug.WriteLine($"[LoopEngine] 无法解析修复响应，放弃修复")
+                                    AppLogger.Warn("LoopEngine", "Unable to parse repair response; stop repair")
                                     Exit While
                                 End If
                             Catch ex As Exception
-                                Debug.WriteLine($"[LoopEngine] 修复过程异常: {ex.Message}")
+                                AppLogger.Error("LoopEngine", "Repair loop exception", ex)
                                 Exit While
                             End Try
                         End If
@@ -209,35 +246,40 @@ Namespace Agent
                         OnStepCompleted?.Invoke(stepIndex, True, toolResult.Message)
                     Else
                         planStep.Status = StepStatus.Failed
-                        planStep.ErrorMessage = toolResult.Message
+                        planStep.ErrorMessage = toolResult.ToObserveSummary()
                         noProgressCount += 1
-                        OnStepCompleted?.Invoke(stepIndex, False, toolResult.Message)
+                        OnStepCompleted?.Invoke(stepIndex, False, If(toolResult.UserMessage, toolResult.Message))
+                        AppLogger.Warn("LoopEngine", $"Step failed: {toolResult.ToObserveSummary()}")
 
                         ' 失败且多轮修复失败，提示可以撤销
                         If fixAttempt >= MaxFixAttempts AndAlso undoPoint IsNot Nothing Then
                             Dim undoHint = _undoManager.GetUndoHint(If(session.AppType, "Unknown"))
-                            Debug.WriteLine($"[LoopEngine] 执行失败，{undoHint}")
-                            ' 可以在这里通知用户撤销选项
+                            AppLogger.Info("LoopEngine", $"Execution failed; {undoHint}")
                         End If
 
                         ' --- REFLECT (连续失败) ---
                         If noProgressCount >= MaxNoProgress Then
                             If replanAttempts >= MaxReplanAttempts Then
-                                Return AgentResult.Failed(session.Id, $"步骤多次失败，已达最大重规划次数: {toolResult.Message}")
+                                Dim failMsg = $"步骤多次失败，已达最大重规划次数: {toolResult.ToObserveSummary()}"
+                                AppLogger.Error("LoopEngine", failMsg)
+                                Return AgentResult.Failed(session.Id, failMsg)
                             End If
 
                             session.Status = AgentStatus.Reflecting
                             OnStatusChanged?.Invoke("正在分析失败原因并重新规划...")
                             replanAttempts += 1
+                            AppLogger.Info("LoopEngine", $"Reflect/replan attempt {replanAttempts}: {toolResult.ToObserveSummary()}")
 
-                            Dim newPlan = Await ReflectAndReplanAsync(session, toolResult.Message, systemPrompt)
+                            Dim newPlan = Await ReflectAndReplanAsync(session, toolResult.ToObserveSummary(), systemPrompt)
                             If newPlan IsNot Nothing AndAlso newPlan.Steps.Count > 0 Then
                                 session.Plan = newPlan
                                 stepIndex = 0
                                 noProgressCount = 0
                                 Continue While
                             Else
-                                Return AgentResult.Failed(session.Id, $"重新规划失败: {toolResult.Message}")
+                                Dim replanFail = $"重新规划失败: {toolResult.ToObserveSummary()}"
+                                AppLogger.Error("LoopEngine", replanFail)
+                                Return AgentResult.Failed(session.Id, replanFail)
                             End If
                         End If
                     End If
@@ -245,16 +287,38 @@ Namespace Agent
                     stepIndex += 1
                 End While
 
+                If session.CurrentIteration = 0 Then
+                    session.Status = AgentStatus.Failed
+                    Dim failMsg = "任务未执行任何工具调用。可能是计划步骤没有生成可解析的 action，或当前宿主工具未加载。"
+                    OnStatusChanged?.Invoke(failMsg)
+                    AppLogger.Warn("LoopEngine", failMsg)
+                    Return AgentResult.Failed(session.Id, failMsg)
+                End If
+
+                Dim incompleteSteps = session.Plan.Steps.
+                    Where(Function(s) s.Status <> StepStatus.Completed).
+                    ToList()
+                If incompleteSteps.Count > 0 Then
+                    session.Status = AgentStatus.Failed
+                    Dim failMsg = $"任务未完成，失败/未执行步骤 {incompleteSteps.Count} 个: {String.Join("; ", incompleteSteps.Select(Function(s) s.ErrorMessage).Where(Function(m) Not String.IsNullOrWhiteSpace(m)).Take(3))}"
+                    OnStatusChanged?.Invoke(failMsg)
+                    AppLogger.Warn("LoopEngine", failMsg)
+                    Return AgentResult.Failed(session.Id, failMsg)
+                End If
+
                 ' 完成
                 session.Status = AgentStatus.Completed
                 Dim finalMsg = $"任务完成，共执行 {session.CurrentIteration} 个迭代"
                 OnStatusChanged?.Invoke(finalMsg)
+                AppLogger.Info("LoopEngine", finalMsg)
                 Return AgentResult.SuccessResult(session.Id, finalMsg)
 
             Catch ex As Exception
                 session.Status = AgentStatus.Failed
-                OnStatusChanged?.Invoke($"执行出错: {ex.Message}")
-                Return AgentResult.Failed(session.Id, $"执行异常: {ex.Message}")
+                Dim classified = ExceptionClassifier.Classify(ex)
+                OnStatusChanged?.Invoke($"执行出错: {classified.UserMessage}")
+                AppLogger.Error("LoopEngine", "RunAsync unhandled exception", ex)
+                Return AgentResult.Failed(session.Id, $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}")
             End Try
         End Function
 
@@ -337,7 +401,8 @@ Namespace Agent
                 Dim token = obj.SelectToken(key)
                 If token Is Nothing Then Return ""
                 Return token.ToString()
-            Catch
+            Catch ex As Exception
+                AppLogger.Debug("LoopEngine", $"ExtractResultDataValue key={key} failed", ex)
                 Return ""
             End Try
         End Function
@@ -501,15 +566,50 @@ complexity 规则：
             End Try
         End Function
 
+        Private Function ParseFixedToolCall(fixedObj As JObject, fallback As ToolCall) As ToolCall
+            If fixedObj Is Nothing Then Return fallback
+
+            Dim toolId = fixedObj("toolId")?.ToString()
+            Dim params = TryCast(fixedObj("parameters"), JObject)
+
+            If String.IsNullOrWhiteSpace(toolId) Then
+                Dim action = TryCast(fixedObj("action"), JObject)
+                If action IsNot Nothing Then
+                    toolId = action("tool")?.ToString()
+                    If params Is Nothing Then params = TryCast(action("params"), JObject)
+                End If
+            End If
+
+            If String.IsNullOrWhiteSpace(toolId) Then toolId = fallback.ToolId
+            If params Is Nothing Then params = If(fallback.Parameters, New JObject())
+
+            Return New ToolCall With {
+                .ToolId = toolId,
+                .Parameters = params
+            }
+        End Function
+
+        Private Function BuildAvailableToolHint(appType As String) As String
+            Dim tools = _toolRegistry.GetAvailableTools(appType).
+                OrderBy(Function(t) t.Category).
+                ThenBy(Function(t) t.Id).
+                Take(40).
+                Select(Function(t) $"- {t.Id}: {t.Name}")
+            Return String.Join(vbCrLf, tools)
+        End Function
+
         ''' <summary>
         ''' 格式化观察结果
         ''' </summary>
         Private Function FormatObservation(result As ToolResult) As String
+            If result Is Nothing Then
+                Return "❌ [unknown] 无工具结果"
+            End If
             If result.Success Then
                 Return $"✅ [{result.ToolId}] 执行成功: {result.Message}"
-            Else
-                Return $"❌ [{result.ToolId}] 执行失败: {result.Message}"
             End If
+            ' Structured observe payload for repair/reflect (P0-4).
+            Return $"❌ [{result.ToolId}] {result.ToObserveSummary()}"
         End Function
 
         ''' <summary>

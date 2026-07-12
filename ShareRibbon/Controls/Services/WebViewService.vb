@@ -175,10 +175,10 @@ Public Class WebViewService
         End Function
 
         ''' <summary>
-        ''' 同步方式在 UI 线程执行操作
+        ''' 同步方式在 UI 线程执行操作（P0-3: Control.Invoke，避免 GetResult 死锁）
         ''' </summary>
         Public Sub InvokeIfRequired(action As Action)
-            UiDispatcher.InvokeAsync(_chatBrowser, action).GetAwaiter().GetResult()
+            UiDispatcher.InvokeSync(_chatBrowser, action)
         End Sub
 
         ''' <summary>

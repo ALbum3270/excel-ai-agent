@@ -1,26 +1,33 @@
-﻿Imports System.IO
+' ShareRibbon\Log\SimpleLogger.vb
+' Compatibility facade — routes to AppLogger (P0-4).
 
+Imports System.IO
+
+''' <summary>
+''' Legacy logger API. Prefer AppLogger with explicit module names.
+''' Kept so existing callers (e.g. ExcelAi/DeepseekControl) continue to compile.
+''' </summary>
 Public Module SimpleLogger
-    Private ReadOnly LogFile As String = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ExcelAi\logs\app.log"
-    )
+    ''' <summary>Historical path retained for callers that read it; new writes go to AppLogger path.</summary>
+    Public ReadOnly Property LogFile As String
+        Get
+            Return AppLogger.GetLogFilePath()
+        End Get
+    End Property
 
     Public Sub LogInfo(msg As String)
-        WriteLog("INFO", msg)
+        AppLogger.Info("SimpleLogger", msg)
     End Sub
 
     Public Sub LogError(msg As String, Optional ex As Exception = Nothing)
-        WriteLog("ERROR", msg & If(ex IsNot Nothing, " | " & ex.ToString(), ""))
+        AppLogger.Error("SimpleLogger", msg, ex)
     End Sub
 
-    Private Sub WriteLog(level As String, msg As String)
-        Try
-            Dim dir = Path.GetDirectoryName(LogFile)
-            If Not Directory.Exists(dir) Then Directory.CreateDirectory(dir)
-            File.AppendAllText(LogFile, $"{Now:yyyy-MM-dd HH:mm:ss} [{level}] {msg}{vbCrLf}")
-        Catch
-            ' 忽略日志写入错误
-        End Try
+    Public Sub LogWarn(msg As String)
+        AppLogger.Warn("SimpleLogger", msg)
+    End Sub
+
+    Public Sub LogDebug(msg As String)
+        AppLogger.Debug("SimpleLogger", msg)
     End Sub
 End Module

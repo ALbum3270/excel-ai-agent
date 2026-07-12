@@ -437,9 +437,20 @@ Public Class ReformatCoordinator
                 End Select
 
                 ' 根据用户决策处理临时文档：接受/拒绝时关闭；另存为时保留
+                ' decision already known from MessageBox above — do not block on tcs.Task.Result
                 Try
                     If tempDoc IsNot Nothing Then
-                        Dim decision = tcs.Task.Result
+                        Dim decision As ReformatUserDecision
+                        Select Case result
+                            Case DialogResult.Yes
+                                decision = ReformatUserDecision.Accept
+                            Case DialogResult.No
+                                decision = ReformatUserDecision.Reject
+                            Case DialogResult.Cancel
+                                decision = ReformatUserDecision.SaveAs
+                            Case Else
+                                decision = ReformatUserDecision.Reject
+                        End Select
                         If decision = ReformatUserDecision.Accept OrElse decision = ReformatUserDecision.Reject Then
                             tempDoc.Close(SaveChanges:=False)
                         End If

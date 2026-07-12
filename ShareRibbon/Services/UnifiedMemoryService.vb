@@ -127,16 +127,13 @@ Public Class UnifiedMemoryService
         Optional endTime As DateTime? = Nothing,
         Optional appType As String = Nothing) As List(Of MemoryWithScore)
 
-        ' 1. 获取查询向量
+        ' 1. 获取查询向量（SyncOverAsync：线程池 + 超时，避免 UI 上下文 .Result 死锁）
         Dim queryEmbedding As Single() = Nothing
         Try
             If Not String.IsNullOrWhiteSpace(query) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
                MemoryRepository.HasMemoriesWithEmbedding(appType) Then
-                Debug.WriteLine($"[UnifiedMemoryService] 生成查询向量...")
-                Dim embTask = Task.Run(Function() EmbeddingService.GetEmbeddingAsync(query))
-                If embTask.Wait(3000) Then
-                    queryEmbedding = embTask.Result
-                End If
+                Debug.WriteLine("[UnifiedMemoryService] 生成查询向量...")
+                queryEmbedding = SyncOverAsync.Run(Function() EmbeddingService.GetEmbeddingAsync(query), 3000)
             End If
         Catch ex As Exception
             Debug.WriteLine($"[UnifiedMemoryService] 生成查询向量失败: {ex.Message}")

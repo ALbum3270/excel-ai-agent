@@ -15,7 +15,7 @@ Imports ScrollBars = System.Windows.Forms.ScrollBars
 Imports TextBox = System.Windows.Forms.TextBox
 
 Public Class EnhancedPreviewAndConfirm
-    ' ÓÃÓÚ±£´æ¹¤×÷±í×´Ì¬ÐÅÏ¢µÄÀà
+    ' ï¿½ï¿½ï¿½Ú±ï¿½ï¿½æ¹¤ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½
     Private Class WorksheetState
         Public Name As String
         Public Cells As Dictionary(Of String, Object)
@@ -29,13 +29,13 @@ Public Class EnhancedPreviewAndConfirm
         End Sub
     End Class
 
-    ' ÓÃÓÚ±íÊ¾µ¥Ôª¸ñ²îÒìµÄÀà
+    ' ï¿½ï¿½ï¿½Ú±ï¿½Ê¾ï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     Private Class CellDifference
         Public Address As String
         Public SheetName As String
         Public OldValue As Object
         Public NewValue As Object
-        Public ChangeType As String ' "Ìí¼Ó", "ÐÞ¸Ä", "É¾³ý"
+        Public ChangeType As String ' "ï¿½ï¿½ï¿½ï¿½", "ï¿½Þ¸ï¿½", "É¾ï¿½ï¿½"
 
         Public Sub New(sheetName As String, address As String, oldValue As Object, newValue As Object, changeType As String)
             Me.SheetName = sheetName
@@ -46,10 +46,10 @@ Public Class EnhancedPreviewAndConfirm
         End Sub
     End Class
 
-    ' ÓÃÓÚ±íÊ¾¹¤×÷±í²îÒìµÄÀà
+    ' ï¿½ï¿½ï¿½Ú±ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     Private Class SheetDifference
         Public SheetName As String
-        Public ChangeType As String ' "Ìí¼Ó", "É¾³ý", "ÐÞ¸Ä"
+        Public ChangeType As String ' "ï¿½ï¿½ï¿½ï¿½", "É¾ï¿½ï¿½", "ï¿½Þ¸ï¿½"
 
         Public Sub New(sheetName As String, changeType As String)
             Me.SheetName = sheetName
@@ -58,57 +58,57 @@ Public Class EnhancedPreviewAndConfirm
     End Class
 
 
-    ' Ê¹ÓÃÒì²½·½Ê½´¦Àí£¬±ÜÃâ½çÃæ¿¨ËÀ
+    ' Ê¹ï¿½ï¿½ï¿½ì²½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½æ¿¨ï¿½ï¿½
     Public Async Function PreviewAndConfirmVbaExecutionAsync(vbaCode As String) As Task(Of Boolean)
         Dim application As Microsoft.Office.Interop.Excel.Application = Globals.ThisAddIn.Application
         Dim originalWorkbook As Workbook = application.ActiveWorkbook
 
         If originalWorkbook Is Nothing Then
-            MessageBox.Show("Ã»ÓÐ´ò¿ªµÄ¹¤×÷²¾£¬ÎÞ·¨Ô¤ÀÀ±ä¸ü¡£", "Ô¤ÀÀ´íÎó", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show("Ã»ï¿½Ð´ò¿ªµÄ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Þ·ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", "Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Return False
         End If
 
-        ' ²½Öè1: ²¶»ñµ±Ç°¹¤×÷²¾×´Ì¬
+        ' ï¿½ï¿½ï¿½ï¿½1: ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
         Dim beforeState = Await Task.Run(Function() CaptureWorkbookState(originalWorkbook))
 
-        ' ²½Öè2: ´´½¨ÁÙÊ±¹¤×÷²¾¸±±¾À´Ö´ÐÐ´úÂë
+        ' ï¿½ï¿½ï¿½ï¿½2: ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ð´ï¿½ï¿½ï¿½
         Dim tempWorkbookPath As String = Nothing
         Dim tempWorkbook As Workbook = Nothing
         Dim tempFileName As String = IO.Path.GetTempFileName()
 
         Try
-            ' Ê¹ÓÃSaveCopyAs´úÌæSaveAs£¬ÕâÑù²»»á¸Ä±äÔ­Ê¼¹¤×÷²¾µÄÂ·¾¶
+            ' Ê¹ï¿½ï¿½SaveCopyAsï¿½ï¿½ï¿½ï¿½SaveAsï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä±ï¿½Ô­Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½
             tempWorkbookPath = IO.Path.ChangeExtension(tempFileName, ".xlsx")
             application.DisplayAlerts = False
             originalWorkbook.SaveCopyAs(tempWorkbookPath)
             application.DisplayAlerts = True
 
-            ' ´ò¿ª¸Õ¸Õ´´½¨µÄ¸±±¾
+            ' ï¿½ò¿ª¸Õ¸Õ´ï¿½ï¿½ï¿½ï¿½Ä¸ï¿½ï¿½ï¿½
             tempWorkbook = application.Workbooks.Open(tempWorkbookPath)
-            tempWorkbook.Activate() ' È·±£²Ù×÷ÔÚÁÙÊ±¹¤×÷²¾ÉÏÖ´ÐÐ
+            tempWorkbook.Activate() ' È·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½ï¿½
 
-            ' Òì²½Ö´ÐÐVBA
+            ' ï¿½ì²½Ö´ï¿½ï¿½VBA
             Dim executionResult = Await Task.Run(Function() ExecuteCodeInTemporaryModule(tempWorkbook, vbaCode))
             If Not executionResult Then Return False
 
-            ' ²½Öè4: ²¶»ñÖ´ÐÐºóµÄ×´Ì¬
+            ' ï¿½ï¿½ï¿½ï¿½4: ï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ðºï¿½ï¿½×´Ì¬
             Dim afterState = Await Task.Run(Function() CaptureWorkbookState(tempWorkbook))
 
-            ' ²½Öè5: ±È½Ï×´Ì¬
+            ' ï¿½ï¿½ï¿½ï¿½5: ï¿½È½ï¿½×´Ì¬
             Dim cellDifferences As New List(Of CellDifference)()
             Dim sheetDifferences As New List(Of SheetDifference)()
             CompareWorkbookStates(beforeState, afterState, cellDifferences, sheetDifferences)
 
-            ' ²½Öè6: ÏÔÊ¾ÓÅ»¯ºóµÄÔ¤ÀÀµ¯´°
+            ' ï¿½ï¿½ï¿½ï¿½6: ï¿½ï¿½Ê¾ï¿½Å»ï¿½ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             Dim userConfirmed = ShowDifferencePreview(vbaCode, cellDifferences, sheetDifferences)
             Return userConfirmed
 
         Catch ex As Exception
-            MessageBox.Show("Ô¤ÀÀ´úÂëÖ´ÐÐÊ±³ö´í: " & ex.Message, "Ô¤ÀÀ´íÎó", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show("Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½: " & ex.Message, "Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Return False
         Finally
             application.DisplayAlerts = False
-            ' ¹Ø±ÕÁÙÊ±¹¤×÷²¾
+            ' ï¿½Ø±ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             If tempWorkbook IsNot Nothing Then
                 Try
                     tempWorkbook.Close(SaveChanges:=False)
@@ -117,17 +117,17 @@ Public Class EnhancedPreviewAndConfirm
                 End Try
             End If
 
-            ' ÖØÐÂ¼¤»îÔ­Ê¼¹¤×÷²¾
+            ' ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½Ô­Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             If originalWorkbook IsNot Nothing Then
                 Try
                     originalWorkbook.Activate()
                 Catch
-                    ' ºöÂÔ¼¤»î´íÎó
+                    ' ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
                 End Try
             End If
             application.DisplayAlerts = True
 
-            ' É¾³ýÁÙÊ±ÎÄ¼þ
+            ' É¾ï¿½ï¿½ï¿½ï¿½Ê±ï¿½Ä¼ï¿½
             Try
                 If tempWorkbookPath IsNot Nothing AndAlso IO.File.Exists(tempWorkbookPath) Then
                     IO.File.Delete(tempWorkbookPath)
@@ -136,21 +136,22 @@ Public Class EnhancedPreviewAndConfirm
                     IO.File.Delete(tempFileName)
                 End If
             Catch
-                ' ºöÂÔÉ¾³ýÁÙÊ±ÎÄ¼þµÄ´íÎó
+                ' ï¿½ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½Ê±ï¿½Ä¼ï¿½ï¿½Ä´ï¿½ï¿½ï¿½
             End Try
         End Try
     End Function
 
-    ' ½«Ô­ÓÐÍ¬²½·½·¨¸ÄÎªµ÷ÓÃÒì²½·½·¨£¬±ÜÃâ¿¨UI
+    ' ï¿½ï¿½Ô­ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½ï¿½ì²½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â¿¨UI
     Public Function PreviewAndConfirmVbaExecution(vbaCode As String) As Boolean
-        Return PreviewAndConfirmVbaExecutionAsync(vbaCode).GetAwaiter().GetResult()
+        Dim ok = ShareRibbon.SyncOverAsync.Run(Function() PreviewAndConfirmVbaExecutionAsync(vbaCode), 300000)
+        Return ok
     End Function
-    ' ÓÅ»¯Ô¤ÀÀµ¯´°²¼¾Ö
+    ' ï¿½Å»ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     Private Function ShowDifferencePreview(code As String,
                                           cellDifferences As List(Of CellDifference),
                                           sheetDifferences As List(Of SheetDifference)) As Boolean
         Dim previewForm As New Form() With {
-            .Text = "VBA´úÂëÖ´ÐÐÔ¤ÀÀ",
+            .Text = "VBAï¿½ï¿½ï¿½ï¿½Ö´ï¿½ï¿½Ô¤ï¿½ï¿½",
             .Size = New Size(950, 650),
             .StartPosition = FormStartPosition.CenterScreen,
             .MinimizeBox = False,
@@ -158,13 +159,13 @@ Public Class EnhancedPreviewAndConfirm
             .FormBorderStyle = FormBorderStyle.Sizable
         }
 
-        ' Ö÷TabControlÈÝÆ÷
+        ' ï¿½ï¿½TabControlï¿½ï¿½ï¿½ï¿½
         Dim tabControl As New TabControl() With {
             .Dock = DockStyle.Fill
         }
 
-        ' ´úÂëÇø
-        Dim codeTab As New TabPage("VBA´úÂë")
+        ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        Dim codeTab As New TabPage("VBAï¿½ï¿½ï¿½ï¿½")
         Dim codeTextBox As New TextBox() With {
             .Multiline = True,
             .ReadOnly = True,
@@ -176,76 +177,76 @@ Public Class EnhancedPreviewAndConfirm
         }
         codeTab.Controls.Add(codeTextBox)
 
-        ' ¹¤×÷±í±ä¸ü
-        Dim sheetTab As New TabPage("¹¤×÷±í±ä¸ü")
+        ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        Dim sheetTab As New TabPage("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½")
         Dim sheetListView As New ListView() With {
             .View = View.Details,
             .FullRowSelect = True,
             .GridLines = True,
             .Dock = DockStyle.Fill
         }
-        sheetListView.Columns.Add("¹¤×÷±íÃû³Æ", 150)
-        sheetListView.Columns.Add("±ä¸üÀàÐÍ", 100)
+        sheetListView.Columns.Add("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", 150)
+        sheetListView.Columns.Add("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", 100)
 
         For Each diff In sheetDifferences
             Dim item As New ListViewItem(diff.SheetName)
             item.SubItems.Add(diff.ChangeType)
             Select Case diff.ChangeType
-                Case "Ìí¼Ó"
+                Case "ï¿½ï¿½ï¿½ï¿½"
                     item.BackColor = Color.LightGreen
-                Case "É¾³ý"
+                Case "É¾ï¿½ï¿½"
                     item.BackColor = Color.LightPink
             End Select
             sheetListView.Items.Add(item)
         Next
         If sheetDifferences.Count = 0 Then
-            sheetListView.Items.Add(New ListViewItem("ÎÞ¹¤×÷±í±ä¸ü"))
+            sheetListView.Items.Add(New ListViewItem("ï¿½Þ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½"))
         End If
         sheetTab.Controls.Add(sheetListView)
 
-        ' µ¥Ôª¸ñ±ä¸ü
-        Dim cellTab As New TabPage("µ¥Ôª¸ñ±ä¸ü")
+        ' ï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½
+        Dim cellTab As New TabPage("ï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½")
         Dim cellListView As New ListView() With {
             .View = View.Details,
             .FullRowSelect = True,
             .GridLines = True,
             .Dock = DockStyle.Fill
         }
-        cellListView.Columns.Add("¹¤×÷±í", 80)
-        cellListView.Columns.Add("µ¥Ôª¸ñ", 80)
-        cellListView.Columns.Add("±ä¸üÀàÐÍ", 80)
+        cellListView.Columns.Add("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", 80)
+        cellListView.Columns.Add("ï¿½ï¿½Ôªï¿½ï¿½", 80)
+        cellListView.Columns.Add("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½", 80)
         cellListView.Columns.Add("Ô­Öµ", 150)
-        cellListView.Columns.Add("ÐÂÖµ", 150)
+        cellListView.Columns.Add("ï¿½ï¿½Öµ", 150)
 
         For Each diff In cellDifferences
             Dim item As New ListViewItem(diff.SheetName)
             item.SubItems.Add(diff.Address)
             item.SubItems.Add(diff.ChangeType)
-            item.SubItems.Add(If(diff.OldValue Is Nothing, "(¿Õ)", diff.OldValue.ToString()))
-            item.SubItems.Add(If(diff.NewValue Is Nothing, "(¿Õ)", diff.NewValue.ToString()))
+            item.SubItems.Add(If(diff.OldValue Is Nothing, "(ï¿½ï¿½)", diff.OldValue.ToString()))
+            item.SubItems.Add(If(diff.NewValue Is Nothing, "(ï¿½ï¿½)", diff.NewValue.ToString()))
             Select Case diff.ChangeType
-                Case "Ìí¼Ó"
+                Case "ï¿½ï¿½ï¿½ï¿½"
                     item.BackColor = Color.LightGreen
-                Case "É¾³ý"
+                Case "É¾ï¿½ï¿½"
                     item.BackColor = Color.LightPink
-                Case "ÐÞ¸Ä"
+                Case "ï¿½Þ¸ï¿½"
                     item.BackColor = Color.LightYellow
             End Select
             cellListView.Items.Add(item)
         Next
         If cellDifferences.Count = 0 Then
-            cellListView.Items.Add(New ListViewItem("ÎÞµ¥Ôª¸ñ±ä¸ü"))
+            cellListView.Items.Add(New ListViewItem("ï¿½Þµï¿½Ôªï¿½ï¿½ï¿½ï¿½"))
         End If
         cellTab.Controls.Add(cellListView)
 
         ' ÕªÒª
-        Dim summaryTab As New TabPage("±ä¸üÕªÒª")
+        Dim summaryTab As New TabPage("ï¿½ï¿½ï¿½ÕªÒª")
         Dim summaryTextBox As New TextBox() With {
             .Multiline = True,
             .ReadOnly = True,
             .ScrollBars = ScrollBars.Vertical,
             .Dock = DockStyle.Fill,
-            .Font = New Font("Î¢ÈíÑÅºÚ", 10)
+            .Font = New Font("Î¢ï¿½ï¿½ï¿½Åºï¿½", 10)
         }
         summaryTextBox.Text = GenerateSummary(sheetDifferences, cellDifferences)
         summaryTab.Controls.Add(summaryTextBox)
@@ -260,7 +261,7 @@ Public Class EnhancedPreviewAndConfirm
             .Height = 50
         }
 
-        ' ¸ø buttonPanel ¼ÓÒ»¸ö FlowLayoutPanel£¬¼ò»¯°´Å¥²¼¾Ö
+        ' ï¿½ï¿½ buttonPanel ï¿½ï¿½Ò»ï¿½ï¿½ FlowLayoutPanelï¿½ï¿½ï¿½ò»¯°ï¿½Å¥ï¿½ï¿½ï¿½ï¿½
         Dim flowLayout As New FlowLayoutPanel() With {
             .FlowDirection = FlowDirection.RightToLeft,
             .Dock = DockStyle.Fill
@@ -268,26 +269,26 @@ Public Class EnhancedPreviewAndConfirm
         buttonPanel.Controls.Add(flowLayout)
 
         Dim acceptButton As New Button() With {
-            .Text = "Ó¦ÓÃ±ä¸ü",
+            .Text = "Ó¦ï¿½Ã±ï¿½ï¿½",
             .DialogResult = DialogResult.Yes,
             .AutoSize = True
         }
         Dim cancelButton As New Button() With {
-            .Text = "È¡Ïû",
+            .Text = "È¡ï¿½ï¿½",
             .DialogResult = DialogResult.No,
             .AutoSize = True
         }
 
-        ' Á÷Ê½²¼¾ÖÏÂ´ÓÓÒÖÁ×óÌí¼Ó
+        ' ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½ï¿½Â´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         flowLayout.Controls.Add(cancelButton)
         flowLayout.Controls.Add(acceptButton)
 
-        ' ÒÀ´Î½« panel¡¢tabControl ·Åµ½ form
+        ' ï¿½ï¿½ï¿½Î½ï¿½ panelï¿½ï¿½tabControl ï¿½Åµï¿½ form
         previewForm.Controls.Add(buttonPanel)
         previewForm.Controls.Add(tabControl)
 
 
-        ' ×Ô¶¯¶¨Î»
+        ' ï¿½Ô¶ï¿½ï¿½ï¿½Î»
         'acceptButton.Anchor = AnchorStyles.Right Or AnchorStyles.Top
         'cancelButton.Anchor = AnchorStyles.Right Or AnchorStyles.Top
         'acceptButton.Location = New Point(previewForm.ClientSize.Width - 240, 10)
@@ -298,20 +299,20 @@ Public Class EnhancedPreviewAndConfirm
         'previewForm.Controls.Add(buttonPanel)
         'previewForm.Controls.Add(tabControl)
 
-        ' Ä¬ÈÏÈ·ÈÏ°´Å¥
+        ' Ä¬ï¿½ï¿½È·ï¿½Ï°ï¿½Å¥
         previewForm.AcceptButton = cancelButton
-        ' ÏÔÊ¾¶Ô»°¿òºó£¬ÈôÓÃ»§µã¡°Ó¦ÓÃ±ä¸ü¡±Ôò·µ»Ø True
+        ' ï¿½ï¿½Ê¾ï¿½Ô»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã»ï¿½ï¿½ã¡°Ó¦ï¿½Ã±ï¿½ï¿½ï¿½ï¿½ï¿½ò·µ»ï¿½ True
         Return (previewForm.ShowDialog() = DialogResult.Yes)
     End Function
 
     Private Function GenerateSummary(sheetDiffs As List(Of SheetDifference),
                                     cellDiffs As List(Of CellDifference)) As String
         Dim sb As New StringBuilder()
-        sb.AppendLine("# ±ä¸üÕªÒª")
+        sb.AppendLine("# ï¿½ï¿½ï¿½ÕªÒª")
         sb.AppendLine()
 
         If sheetDiffs.Count > 0 Then
-            sb.AppendLine("## ¹¤×÷±í±ä¸ü")
+            sb.AppendLine("## ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½")
             For Each diff In sheetDiffs
                 sb.AppendLine($"- {diff.SheetName}: {diff.ChangeType}")
             Next
@@ -320,34 +321,34 @@ Public Class EnhancedPreviewAndConfirm
 
         If cellDiffs.Count > 0 Then
             Dim grouped = cellDiffs.GroupBy(Function(d) d.SheetName)
-            sb.AppendLine("## µ¥Ôª¸ñ±ä¸ü")
+            sb.AppendLine("## ï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½")
             For Each group In grouped
-                sb.AppendLine($"### ¹¤×÷±í: {group.Key}")
-                Dim addCount = group.Count(Function(d) d.ChangeType = "Ìí¼Ó")
-                Dim modifyCount = group.Count(Function(d) d.ChangeType = "ÐÞ¸Ä")
-                Dim deleteCount = group.Count(Function(d) d.ChangeType = "É¾³ý")
+                sb.AppendLine($"### ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: {group.Key}")
+                Dim addCount = group.Count(Function(d) d.ChangeType = "ï¿½ï¿½ï¿½ï¿½")
+                Dim modifyCount = group.Count(Function(d) d.ChangeType = "ï¿½Þ¸ï¿½")
+                Dim deleteCount = group.Count(Function(d) d.ChangeType = "É¾ï¿½ï¿½")
 
                 If addCount > 0 Then
-                    sb.AppendLine($"- Ìí¼Ó: {addCount} ¸öµ¥Ôª¸ñ")
+                    sb.AppendLine($"- ï¿½ï¿½ï¿½ï¿½: {addCount} ï¿½ï¿½ï¿½ï¿½Ôªï¿½ï¿½")
                 End If
                 If modifyCount > 0 Then
-                    sb.AppendLine($"- ÐÞ¸Ä: {modifyCount} ¸öµ¥Ôª¸ñ")
+                    sb.AppendLine($"- ï¿½Þ¸ï¿½: {modifyCount} ï¿½ï¿½ï¿½ï¿½Ôªï¿½ï¿½")
                 End If
                 If deleteCount > 0 Then
-                    sb.AppendLine($"- É¾³ý: {deleteCount} ¸öµ¥Ôª¸ñ")
+                    sb.AppendLine($"- É¾ï¿½ï¿½: {deleteCount} ï¿½ï¿½ï¿½ï¿½Ôªï¿½ï¿½")
                 End If
                 sb.AppendLine()
             Next
         End If
 
         If sheetDiffs.Count = 0 AndAlso cellDiffs.Count = 0 Then
-            sb.AppendLine("´Ë´úÂëÖ´ÐÐºóÃ»ÓÐ·¢ÏÖÊý¾Ý±ä¸ü.")
+            sb.AppendLine("ï¿½Ë´ï¿½ï¿½ï¿½Ö´ï¿½Ðºï¿½Ã»ï¿½Ð·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý±ï¿½ï¿½.")
         End If
         Return sb.ToString()
     End Function
 
 
-    ' ²éÕÒÄ£¿éÖÐµÄµÚÒ»¸ö¹ý³ÌÃû
+    ' ï¿½ï¿½ï¿½ï¿½Ä£ï¿½ï¿½ï¿½ÐµÄµï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     Private Function FindFirstProcedureName(comp As VBComponent) As String
         Try
             Dim codeModule As CodeModule = comp.CodeModule
@@ -364,7 +365,7 @@ Public Class EnhancedPreviewAndConfirm
 
             Return String.Empty
         Catch
-            ' Èç¹û³ö´í£¬³¢ÊÔÊ¹ÓÃÕýÔò±í´ïÊ½´Ó´úÂëÖÐÌáÈ¡
+            ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½Ó´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡
             Dim code As String = comp.CodeModule.Lines(1, comp.CodeModule.CountOfLines)
             Dim match As Match = Regex.Match(code, "^\s*(Sub|Function)\s+(\w+)", RegexOptions.Multiline Or RegexOptions.IgnoreCase)
 
@@ -377,18 +378,18 @@ Public Class EnhancedPreviewAndConfirm
     End Function
 
 
-    ' ¼ì²é´úÂëÊÇ·ñ°üº¬¹ý³ÌÉùÃ÷
+    ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     Private Function ContainsProcedureDeclaration(code As String) As Boolean
-        ' Ê¹ÓÃ¼òµ¥µÄÕýÔò±í´ïÊ½¼ì²éÊÇ·ñ°üº¬ Sub »ò Function ÉùÃ÷
+        ' Ê¹ï¿½Ã¼òµ¥µï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ Sub ï¿½ï¿½ Function ï¿½ï¿½ï¿½ï¿½
         Return Regex.IsMatch(code, "^\s*(Sub|Function)\s+\w+", RegexOptions.Multiline Or RegexOptions.IgnoreCase)
     End Function
 
-    ' Ö´ÐÐÇ°¶Ë´«À´µÄ VBA ´úÂëÆ¬¶Î
+    ' Ö´ï¿½ï¿½Ç°ï¿½Ë´ï¿½ï¿½ï¿½ï¿½ï¿½ VBA ï¿½ï¿½ï¿½ï¿½Æ¬ï¿½ï¿½
     Private Function ExecuteCodeInTemporaryModule(workbook As Workbook, vbaCode As String)
-        ' »ñÈ¡ VBA ÏîÄ¿
+        ' ï¿½ï¿½È¡ VBA ï¿½ï¿½Ä¿
         Dim vbProj As VBProject = workbook.VBProject
 
-        ' Ìí¼Ó¿ÕÖµ¼ì²é
+        ' ï¿½ï¿½ï¿½Ó¿ï¿½Öµï¿½ï¿½ï¿½
         If vbProj Is Nothing Then
             Return Nothing
         End If
@@ -397,61 +398,61 @@ Public Class EnhancedPreviewAndConfirm
         Dim tempModuleName As String = "TempPreviewMod" & DateTime.Now.Ticks.ToString().Substring(0, 8)
 
         Try
-            ' ´´½¨ÁÙÊ±Ä£¿é
+            ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±Ä£ï¿½ï¿½
             vbComp = vbProj.VBComponents.Add(vbext_ComponentType.vbext_ct_StdModule)
             vbComp.Name = tempModuleName
 
-            ' ¼ì²é´úÂëÊÇ·ñÒÑ°üº¬ Sub/Function ÉùÃ÷
+            ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½Ñ°ï¿½ï¿½ï¿½ Sub/Function ï¿½ï¿½ï¿½ï¿½
             If ContainsProcedureDeclaration(vbaCode) Then
-                ' ´úÂëÒÑ°üº¬¹ý³ÌÉùÃ÷£¬Ö±½ÓÌí¼Ó
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½Ñ°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
                 vbComp.CodeModule.AddFromString(vbaCode)
 
-                ' ²éÕÒµÚÒ»¸ö¹ý³ÌÃû²¢Ö´ÐÐ
+                ' ï¿½ï¿½ï¿½Òµï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½ï¿½
                 Dim procName As String = FindFirstProcedureName(vbComp)
                 If Not String.IsNullOrEmpty(procName) Then
                     workbook.Application.Run(tempModuleName & "." & procName)
                 Else
-                    'MessageBox.Show("ÎÞ·¨ÔÚ´úÂëÖÐÕÒµ½¿ÉÖ´ÐÐµÄ¹ý³Ì")
-                    GlobalStatusStrip.ShowWarning("ÎÞ·¨ÔÚ´úÂëÖÐÕÒµ½¿ÉÖ´ÐÐµÄ¹ý³Ì")
+                    'MessageBox.Show("ï¿½Þ·ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òµï¿½ï¿½ï¿½Ö´ï¿½ÐµÄ¹ï¿½ï¿½ï¿½")
+                    GlobalStatusStrip.ShowWarning("ï¿½Þ·ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òµï¿½ï¿½ï¿½Ö´ï¿½ÐµÄ¹ï¿½ï¿½ï¿½")
                 End If
             Else
-                ' ´úÂë²»°üº¬¹ý³ÌÉùÃ÷£¬½«Æä°ü×°ÔÚ Auto_Run ¹ý³ÌÖÐ
+                ' ï¿½ï¿½ï¿½ë²»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×°ï¿½ï¿½ Auto_Run ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
                 Dim wrappedCode As String = "Sub Auto_Run()" & vbNewLine &
                                            vbaCode & vbNewLine &
                                            "End Sub"
                 vbComp.CodeModule.AddFromString(wrappedCode)
 
-                ' Ö´ÐÐ Auto_Run ¹ý³Ì
+                ' Ö´ï¿½ï¿½ Auto_Run ï¿½ï¿½ï¿½ï¿½
                 workbook.Application.Run(tempModuleName & ".Auto_Run")
             End If
 
         Catch ex As Exception
-            MessageBox.Show("Ö´ÐÐ ÁÙÊ±VBA ´úÂëÊ±³ö´í: " & ex.Message, "´íÎó", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            MessageBox.Show("Ö´ï¿½ï¿½ ï¿½ï¿½Ê±VBA ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½: " & ex.Message, "ï¿½ï¿½ï¿½ï¿½", MessageBoxButtons.OK, MessageBoxIcon.Error)
         Finally
-            ' ÎÞÂÛ³É¹¦»¹ÊÇÊ§°Ü£¬¶¼É¾³ýÁÙÊ±Ä£¿é
+            ' ï¿½ï¿½ï¿½Û³É¹ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½Ê±Ä£ï¿½ï¿½
             Try
                 If vbProj IsNot Nothing AndAlso vbComp IsNot Nothing Then
                     vbProj.VBComponents.Remove(vbComp)
                 End If
             Catch
-                ' ºöÂÔÇåÀí´íÎó
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             End Try
         End Try
         Return True
     End Function
 
-    ' ²¶»ñ¹¤×÷²¾×´Ì¬
+    ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
     Private Function CaptureWorkbookState(workbook As Workbook) As Dictionary(Of String, WorksheetState)
         Dim state As New Dictionary(Of String, WorksheetState)
 
         For Each worksheet As Worksheet In workbook.Worksheets
             Dim sheetState As New WorksheetState(worksheet.Name)
 
-            ' »ñÈ¡Ê¹ÓÃ·¶Î§
+            ' ï¿½ï¿½È¡Ê¹ï¿½Ã·ï¿½Î§
             Dim usedRange As Range = worksheet.UsedRange
             sheetState.UsedRangeAddress = usedRange.Address
 
-            ' ²¶»ñËùÓÐµ¥Ôª¸ñµÄÖµ
+            ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ðµï¿½Ôªï¿½ï¿½ï¿½Öµ
             For Each cell As Range In usedRange
                 Dim address As String = cell.Address(RowAbsolute:=False, ColumnAbsolute:=False)
                 sheetState.Cells(address) = cell.Value2
@@ -463,36 +464,36 @@ Public Class EnhancedPreviewAndConfirm
         Return state
     End Function
 
-    ' ±È½Ï¹¤×÷²¾×´Ì¬
+    ' ï¿½È½Ï¹ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
     Private Sub CompareWorkbookStates(
         beforeState As Dictionary(Of String, WorksheetState),
         afterState As Dictionary(Of String, WorksheetState),
         cellDifferences As List(Of CellDifference),
         sheetDifferences As List(Of SheetDifference))
 
-        ' ¼ì²é¹¤×÷±í¼¶±ðµÄ¸ü¸Ä£¨Ìí¼Ó/É¾³ý¹¤×÷±í£©
+        ' ï¿½ï¿½é¹¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¸ï¿½ï¿½Ä£ï¿½ï¿½ï¿½ï¿½ï¿½/É¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         For Each beforeSheet In beforeState.Values
             If Not afterState.ContainsKey(beforeSheet.Name) Then
-                ' ¹¤×÷±í±»É¾³ý
-                sheetDifferences.Add(New SheetDifference(beforeSheet.Name, "É¾³ý"))
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É¾ï¿½ï¿½
+                sheetDifferences.Add(New SheetDifference(beforeSheet.Name, "É¾ï¿½ï¿½"))
             End If
         Next
 
         For Each afterSheet In afterState.Values
             If Not beforeState.ContainsKey(afterSheet.Name) Then
-                ' ¹¤×÷±í±»Ìí¼Ó
-                sheetDifferences.Add(New SheetDifference(afterSheet.Name, "Ìí¼Ó"))
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+                sheetDifferences.Add(New SheetDifference(afterSheet.Name, "ï¿½ï¿½ï¿½ï¿½"))
 
-                ' Ìí¼ÓËùÓÐÐÂ¹¤×÷±íµÄµ¥Ôª¸ñ×÷Îª"Ìí¼Ó"
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Äµï¿½Ôªï¿½ï¿½ï¿½ï¿½Îª"ï¿½ï¿½ï¿½ï¿½"
                 For Each cell In afterSheet.Cells
                     cellDifferences.Add(New CellDifference(
-                        afterSheet.Name, cell.Key, Nothing, cell.Value, "Ìí¼Ó"))
+                        afterSheet.Name, cell.Key, Nothing, cell.Value, "ï¿½ï¿½ï¿½ï¿½"))
                 Next
             Else
-                ' ¹¤×÷±í´æÔÚÓÚÁ½¸ö×´Ì¬ÖÐ£¬±È½Ïµ¥Ôª¸ñ
+                ' ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Ð£ï¿½ï¿½È½Ïµï¿½Ôªï¿½ï¿½
                 Dim beforeSheet = beforeState(afterSheet.Name)
 
-                ' ¼ì²éµ¥Ôª¸ñ¸ü¸Ä
+                ' ï¿½ï¿½éµ¥Ôªï¿½ï¿½ï¿½ï¿½ï¿½
                 For Each afterCell In afterSheet.Cells
                     Dim address As String = afterCell.Key
                     Dim newValue As Object = afterCell.Value
@@ -500,31 +501,31 @@ Public Class EnhancedPreviewAndConfirm
                     If beforeSheet.Cells.ContainsKey(address) Then
                         Dim oldValue As Object = beforeSheet.Cells(address)
 
-                        ' ±È½ÏÖµÊÇ·ñÏàµÈ
+                        ' ï¿½È½ï¿½Öµï¿½Ç·ï¿½ï¿½ï¿½ï¿½
                         If Not AreValuesEqual(oldValue, newValue) Then
                             cellDifferences.Add(New CellDifference(
-                                afterSheet.Name, address, oldValue, newValue, "ÐÞ¸Ä"))
+                                afterSheet.Name, address, oldValue, newValue, "ï¿½Þ¸ï¿½"))
                         End If
                     Else
-                        ' ÐÂÌí¼ÓµÄµ¥Ôª¸ñ
+                        ' ï¿½ï¿½ï¿½ï¿½ï¿½ÓµÄµï¿½Ôªï¿½ï¿½
                         cellDifferences.Add(New CellDifference(
-                            afterSheet.Name, address, Nothing, newValue, "Ìí¼Ó"))
+                            afterSheet.Name, address, Nothing, newValue, "ï¿½ï¿½ï¿½ï¿½"))
                     End If
                 Next
 
-                ' ¼ì²éÉ¾³ýµÄµ¥Ôª¸ñ
+                ' ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½Äµï¿½Ôªï¿½ï¿½
                 For Each beforeCell In beforeSheet.Cells
                     Dim address As String = beforeCell.Key
                     If Not afterSheet.Cells.ContainsKey(address) Then
                         cellDifferences.Add(New CellDifference(
-                            beforeSheet.Name, address, beforeCell.Value, Nothing, "É¾³ý"))
+                            beforeSheet.Name, address, beforeCell.Value, Nothing, "É¾ï¿½ï¿½"))
                     End If
                 Next
             End If
         Next
     End Sub
 
-    ' ±È½ÏÁ½¸öÖµÊÇ·ñÏàµÈ
+    ' ï¿½È½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½Ç·ï¿½ï¿½ï¿½ï¿½
     Private Function AreValuesEqual(value1 As Object, value2 As Object) As Boolean
         If value1 Is Nothing AndAlso value2 Is Nothing Then
             Return True

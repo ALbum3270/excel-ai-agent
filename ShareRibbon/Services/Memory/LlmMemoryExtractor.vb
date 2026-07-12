@@ -31,7 +31,8 @@ Public Class LlmMemoryExtractor
         End If
 
         Try
-            Dim llmMemories = ExtractMemoriesAsync(events, contextJson).GetAwaiter().GetResult()
+            ' Sync IMemoryExtractor boundary: run async extractor off UI SynchronizationContext.
+            Dim llmMemories = SyncOverAsync.Run(Function() ExtractMemoriesAsync(events, contextJson), 60000)
             If llmMemories Is Nothing OrElse llmMemories.Count = 0 Then Return fallbackMemories
             Return MergeMemories(llmMemories, fallbackMemories)
         Catch ex As Exception

@@ -113,11 +113,13 @@ Public Class ModelApiClient
     End Function
 
     ''' <summary>
-    ''' 同步获取模型列表 (供UI线程调用)
+    ''' 同步获取模型列表。P0-3: SyncOverAsync 线程池桥接，避免 UI 上下文 GetResult 死锁。
+    ''' Prefer GetModelsAsync from async UI handlers when possible.
     ''' </summary>
     Public Shared Function GetModelsSync(apiUrl As String, apiKey As String) As List(Of String)
         Try
-            Return GetModelsAsync(apiUrl, apiKey).GetAwaiter().GetResult()
+            Dim models = SyncOverAsync.Run(Function() GetModelsAsync(apiUrl, apiKey), 60000)
+            Return If(models, New List(Of String)())
         Catch ex As Exception
             Debug.WriteLine($"同步获取模型列表异常: {ex.Message}")
             Return New List(Of String)()

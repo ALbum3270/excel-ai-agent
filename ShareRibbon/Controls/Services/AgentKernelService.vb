@@ -12,7 +12,7 @@ Public Class AgentKernelService
     Private ReadOnly _executeScript As Func(Of String, Task)
     Private ReadOnly _escapeJs As Func(Of String, String)
     Private ReadOnly _sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
-    Private ReadOnly _executeCode As Action(Of String, String, Boolean)
+    Private ReadOnly _executeCode As Func(Of String, String, Boolean, Boolean)
     Private ReadOnly _chatStateService As ChatStateService
     Private ReadOnly _historyMessages As List(Of HistoryMessage)
     Private ReadOnly _manageHistorySize As Action
@@ -42,7 +42,7 @@ Public Class AgentKernelService
         executeScript As Func(Of String, Task),
         escapeJs As Func(Of String, String),
         sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String)),
-        executeCode As Action(Of String, String, Boolean),
+        executeCode As Func(Of String, String, Boolean, Boolean),
         chatStateService As ChatStateService,
         historyMessages As List(Of HistoryMessage),
         manageHistorySize As Action,
@@ -72,6 +72,9 @@ Public Class AgentKernelService
                                       End Function
 
         ' 绑定代码执行委托
+        _agentKernel.ExecuteCodeWithResult = Function(code, lang, preview)
+                                                 Return _executeCode(code, lang, preview)
+                                             End Function
         _agentKernel.ExecuteCode = Sub(code, lang, preview)
                                        _executeCode(code, lang, preview)
                                    End Sub
@@ -118,9 +121,17 @@ Public Class AgentKernelService
             ' 执行 Agent 任务
             Dim result = Await _agentKernel.ExecuteAsync(userRequest, appType, currentContent, officeContext)
 
+            If result Is Nothing Then
+                AppLogger.Warn("AgentKernelService", "StartAgentAsync returned null result")
+                Return False
+            End If
+            If Not result.Success Then
+                AppLogger.Warn("AgentKernelService", $"StartAgentAsync agent failed: {result.Message}")
+            End If
             Return result.Success
         Catch ex As Exception
-            Debug.WriteLine($"[AgentKernelService] StartAgentAsync 出错: {ex.Message}")
+            AppLogger.Error("AgentKernelService", "StartAgentAsync exception", ex)
+            GlobalStatusStrip.ShowWarning(ExceptionClassifier.ToUserMessage(ex, "Agent 启动失败，请重试"))
             Return False
         End Try
     End Function
@@ -145,7 +156,7 @@ Public Class AgentKernelService
 
             GlobalStatusStrip.ShowInfo("已终止Agent")
         Catch ex As Exception
-            Debug.WriteLine($"[AgentKernelService] AbortAgent 出错: {ex.Message}")
+            AppLogger.Error("AgentKernelService", "AbortAgent exception", ex)
         End Try
     End Sub
 

@@ -139,42 +139,19 @@ Public Class LLMUtil
             Return $"错误: {ex.Message}"
         End Try
     End Function
-    ' 添加同步版本的HTTP请求方法
+    ''' <summary>
+    ''' Sync HTTP for true sync boundaries (e.g. ExcelDna UDF).
+    ''' Uses SyncOverAsync so the request does not capture WinForms SynchronizationContext.
+    ''' Prefer SendHttpRequest (async) on chat/agent paths.
+    ''' </summary>
     Public Shared Function SendHttpRequestSync(apiUrl As String, apiKey As String, requestBody As String) As String
         Try
-
-            ' 强制使用 TLS 1.2
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
-
-            Dim client = HttpClientPool.GetClient(apiUrl)
-            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
-                request.Headers.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey)
-                request.Content = New StringContent(requestBody, Encoding.UTF8, "application/json")
-
-                ' 使用 .Result 进行同步调用
-                Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(120))
-                    Using response As HttpResponseMessage = client.SendAsync(request, timeoutCts.Token).Result
-
-                Debug.WriteLine($"HTTP响应状态码: {response.StatusCode}")
-
-                If Not response.IsSuccessStatusCode Then
-                    Dim errorContent As String = response.Content.ReadAsStringAsync().Result
-                    Debug.WriteLine($"HTTP错误响应内容: {errorContent}")
-                    Return $"错误: HTTP请求失败 - {response.StatusCode} {response.ReasonPhrase}"
-                End If
-
-                Dim responseContent As String = response.Content.ReadAsStringAsync().Result
-                Return responseContent
-                    End Using
-                End Using
-            End Using
-
-        Catch ex As AggregateException
-            ' 处理 .Result 可能产生的 AggregateException
-            Dim innerEx = ex.GetBaseException()
-            Return $"错误: {innerEx.Message}"
+            Dim result = SyncOverAsync.Run(
+                Function() SendHttpRequest(apiUrl, apiKey, requestBody),
+                120000)
+            Return If(result, "错误: 请求超时或无响应")
         Catch ex As Exception
-            Debug.WriteLine($"异常类型: {ex.GetType().Name}")
+            Debug.WriteLine($"[LLMUtil.SendHttpRequestSync] {ex.GetType().Name}: {ex.Message}")
             Return $"错误: {ex.Message}"
         End Try
     End Function

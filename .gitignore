@@ -64,12 +64,32 @@ OfficeAgent/Release
 /Debug/
 /Release/
 
-# 不提交 docs 目录（设计文档除外）
+# 不提交 docs 目录（设计文档与构建/审计说明除外）
 docs/*
 !docs/design/
 !docs/design/**
 !docs/VS2026-InstallerProjects.md
 !docs/project-assessment-optimization-plan.md
+!docs/build-and-installer.md
+!docs/signing-and-certificates.md
+!docs/project-issues-and-optimization-audit.md
+!docs/ai-native-harness-design.md
+!docs/design/
+!docs/design/**
+
+# 签名密钥：禁止提交私钥材料（P0-6）
+# VSTO 开发用 TemporaryKey 仅保留在本机，用 scripts/ensure-vsto-temp-keys.ps1 生成
+*.pfx
+*.p12
+*.key
+*.snk
+!**/packages/**/*.pfx
+
+# 正式签名 PFX 路径约定（若本地放置）
+/secrets/
+/**/release-signing.*
+/**/*CodeSign*.pfx
+/**/*Release*.pfx
 
 # 不提交 IDE/CI 配置目录
 .github/

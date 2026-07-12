@@ -205,11 +205,16 @@ AI: 知道在 B 列计算，不需要再问
 # 还原依赖
 msbuild AiHelper.sln -t:Restore
 
-# 构建全部代码项目
-msbuild AiHelper.sln
+# 推荐：只构建四个代码项目（不含安装包 vdproj）
+.\build-code.bat
+# 或
+powershell -File .\scripts\build-code-projects.ps1 -Configuration Debug
 
-# 或在 Visual Studio 中打开 AiHelper.sln 后 Rebuild Solution
+# 打 MSI 前准备（Release 代码 + SourcePath 审计，不生成 MSI）
+.\build-installer-prep.bat
 ```
+
+**不要**用整解决方案 Debug Rebuild 判断代码是否可编：`OfficeAgent.vdproj` 的 SourcePath 指向 `bin\Release`，安装项目失败常被误判为代码编译失败。完整说明见 [docs/build-and-installer.md](docs/build-and-installer.md)。
 
 调试 VSTO 插件时，建议用 Visual Studio 启动对应 Office 宿主进程。Debug 构建通常用于开发调试；生产分发建议使用 Release 构建并通过 MSI 安装。
 
@@ -227,6 +232,14 @@ msbuild AiHelper.sln
 ### Excel XLL 数字签名提示
 
 Debug 环境下 `ExcelAi-AddIn64.xll` 可能提示没有可用的数字签名。开发阶段可通过 Office 信任位置、启用加载项或内部安装路径解决；公开分发时再考虑代码签名。没有付费证书不影响本地开发和功能验证。
+
+### VSTO 开发证书与发布签名
+
+- **开发**：各插件使用本地 `*_TemporaryKey.pfx` 签 VSTO 清单。克隆仓库后若签名失败，运行：
+  `powershell -File .\scripts\ensure-vsto-temp-keys.ps1`
+- **禁止**将 `*.pfx` / `*.snk` / 正式签名私钥提交到 Git。
+- **发布**：使用 `build/SignArtifacts.ps1` 与环境变量 `OFFICE_AI_SIGN_CERT_THUMBPRINT` 或 `OFFICE_AI_SIGN_PFX`，不要用 TemporaryKey 签对外 MSI。
+- 详见 [docs/signing-and-certificates.md](docs/signing-and-certificates.md)。
 
 ---
 
@@ -302,11 +315,11 @@ git clone https://github.com/it235/office-ai-agent.git
 # 还原依赖
 msbuild AiHelper.sln -t:Restore
 
-# 构建解决方案
-msbuild AiHelper.sln
+# 构建代码项目（推荐）
+.\build-code.bat
 ```
 
-构建安装包前，请先确认 Visual Studio 已安装 `Microsoft Visual Studio Installer Projects` 扩展，否则 `OfficeAgent.vdproj` 无法加载。
+构建安装包前：先 `.\build-installer-prep.bat`，再确认 Visual Studio 已安装 `Microsoft Visual Studio Installer Projects` 扩展并 Build `OfficeAgent.vdproj`。详见 [docs/build-and-installer.md](docs/build-and-installer.md)。
 
 ---
 

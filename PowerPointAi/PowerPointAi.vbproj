@@ -1,4 +1,4 @@
-<Project ToolsVersion="17.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+﻿<Project ToolsVersion="17.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <!--
     This section defines project-level properties.
@@ -45,7 +45,7 @@
       <Install>true</Install>
     </BootstrapperPackage>
   </ItemGroup>
-  <!-- e_sqlite3.dll：与 WebView2Loader 同级，供 vdproj ContentFiles 收集 -->
+  <!-- e_sqlite3.dll锛氫笌 WebView2Loader 鍚岀骇锛屼緵 vdproj ContentFiles 鏀堕泦 -->
   <ItemGroup Condition="Exists('..\packages\SQLitePCLRaw.lib.e_sqlite3.2.1.11\runtimes\win-x64\native\e_sqlite3.dll')">
     <Content Include="..\packages\SQLitePCLRaw.lib.e_sqlite3.2.1.11\runtimes\win-x64\native\e_sqlite3.dll">
       <Link>runtimes\win-x64\native\e_sqlite3.dll</Link>
@@ -57,7 +57,7 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <!-- Markdig.dll 通过 PostBuild 复制，避�?VSTO 清单签名验证失败 (MSB3178) -->
+    <!-- Markdig.dll 閫氳繃 PostBuild 澶嶅埗锛岄伩锟?VSTO 娓呭崟绛惧悕楠岃瘉澶辫触 (MSB3178) -->
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ShareRibbon\ShareRibbon.vbproj">
@@ -341,7 +341,7 @@
     <ManifestKeyFile>PowerPointAi_TemporaryKey.pfx</ManifestKeyFile>
   </PropertyGroup>
   <PropertyGroup>
-    <ManifestCertificateThumbprint>3EDA84195BFB8FB2A33799B91C6CF89077184134</ManifestCertificateThumbprint>
+    <ManifestCertificateThumbprint>CC712E3EB9808F685FF35D0636DEA656DFE44F7F</ManifestCertificateThumbprint>
   </PropertyGroup>
   <!-- PostBuild: copy unsigned Markdig.dll to output (avoids VSTO manifest signing error MSB3178) -->
   <Target Name="CopyUnsignedDllsAfterBuild" AfterTargets="Build">
@@ -350,7 +350,7 @@
   <!-- Include the build rules for a Visual Basic project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
   <!-- Include additional build rules for an Office application add-in. -->
-  <!-- 使用 VisualStudioVersion 变量替代硬编码版本号，兼�?VS 2022/2025/2026 -->
+  <!-- 浣跨敤 VisualStudioVersion 鍙橀噺鏇夸唬纭紪鐮佺増鏈彿锛屽吋锟?VS 2022/2025/2026 -->
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets" Condition="Exists('$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets')" />
   <!-- This section defines VSTO properties that describe the host-changeable project properties. -->
   <ProjectExtensions>
@@ -366,7 +366,7 @@
   <Import Project="..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets" Condition="Exists('..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets')" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
-      <ErrorText>这台计算机上缺少此项目引用的 NuGet 程序包。使用“NuGet 程序包还原”可下载这些程序包。有关更多信息，请参�?http://go.microsoft.com/fwlink/?LinkID=322105。缺少的文件�?{0}�?</ErrorText>
+      <ErrorText>杩欏彴璁＄畻鏈轰笂缂哄皯姝ら」鐩紩鐢ㄧ殑 NuGet 绋嬪簭鍖呫€備娇鐢ㄢ€淣uGet 绋嬪簭鍖呰繕鍘熲€濆彲涓嬭浇杩欎簺绋嬪簭鍖呫€傛湁鍏虫洿澶氫俊鎭紝璇峰弬锟?http://go.microsoft.com/fwlink/?LinkID=322105銆傜己灏戠殑鏂囦欢锟?{0}锟?</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Web.WebView2.1.0.3240.44\build\Microsoft.Web.WebView2.targets'))" />
   </Target>

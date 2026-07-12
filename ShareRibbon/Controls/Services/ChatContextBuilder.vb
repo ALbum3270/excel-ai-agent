@@ -2,6 +2,8 @@
 ' 分层上下文组装：[0]～[6]
 
 Imports System.Collections.Generic
+Imports System.Linq
+Imports System.Text
 
 ''' <summary>
 ''' Chat 上下文构建器：按 roadmap 2.5 分层组装消息
@@ -153,6 +155,11 @@ Public Class ChatContextBuilder
 
             Dim structuredMemories = MemoryService.GetRelevantStructuredMemories(currentQuery, Nothing, appNorm)
             If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
+                structuredMemories = structuredMemories.
+                    Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Summary, ""))).
+                    ToList()
+            End If
+            If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
                 ragCountOut = structuredMemories.Count
                 Debug.WriteLine($"[ChatContextBuilder] 找到 {structuredMemories.Count} 条结构化记忆")
                 Dim memLines As New List(Of String)()
@@ -172,6 +179,11 @@ Public Class ChatContextBuilder
                 memParts.Add(String.Join(vbCrLf, memLines))
             Else
                 Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appNorm)
+                If memories IsNot Nothing AndAlso memories.Count > 0 Then
+                    memories = memories.
+                        Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Tags, ""))).
+                        ToList()
+                End If
                 If memories IsNot Nothing AndAlso memories.Count > 0 Then
                     ragCountOut = memories.Count
                     Debug.WriteLine($"[ChatContextBuilder] 找到 {memories.Count} 条原子记忆")
@@ -197,9 +209,15 @@ Public Class ChatContextBuilder
 
             Dim summaries = MemoryService.GetRecentSessionSummaries(Nothing)
             If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
-                Debug.WriteLine($"[ChatContextBuilder] 找到 {summaries.Count} 条近期会话")
+                summaries = summaries.
+                    Where(Function(s) IsRelevantToQuery(currentQuery, If(s.Title, "") & " " & If(s.Snippet, ""))).
+                    Take(2).
+                    ToList()
+            End If
+            If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
+                Debug.WriteLine($"[ChatContextBuilder] 找到 {summaries.Count} 条相关近期会话")
                 Dim sumLines As New List(Of String)()
-                sumLines.Add("#### 近期会话")
+                sumLines.Add("#### 相关近期会话")
                 For Each s In summaries
                     sumLines.Add($"- {s.Title}: {s.Snippet}")
                     trace.RecentSessions.Add(New ChatContextSessionTrace With {
@@ -268,15 +286,25 @@ Public Class ChatContextBuilder
         End If
         Dim structuredMemories = MemoryService.GetRelevantStructuredMemories(currentQuery, Nothing, appType)
         If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
+            structuredMemories = structuredMemories.
+                Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Summary, ""))).
+                ToList()
+        End If
+        If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
             parts.Add("[相关记忆]")
             For Each m In structuredMemories
                 Dim label = If(String.IsNullOrWhiteSpace(m.MemoryType), "memory", m.MemoryType)
                 parts.Add($"- [{label}] {m.Content}")
             Next
-        Else
-            Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appType)
-            If memories IsNot Nothing AndAlso memories.Count > 0 Then
-                parts.Add("[相关记忆]")
+            Else
+                Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appType)
+                If memories IsNot Nothing AndAlso memories.Count > 0 Then
+                    memories = memories.
+                        Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Tags, ""))).
+                        ToList()
+                End If
+                If memories IsNot Nothing AndAlso memories.Count > 0 Then
+                    parts.Add("[相关记忆]")
                 For Each m In memories
                     parts.Add("- " & m.Content)
                 Next
@@ -284,7 +312,13 @@ Public Class ChatContextBuilder
         End If
         Dim summaries = MemoryService.GetRecentSessionSummaries(Nothing)
         If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
-            parts.Add("[近期会话]")
+            summaries = summaries.
+                Where(Function(s) IsRelevantToQuery(currentQuery, If(s.Title, "") & " " & If(s.Snippet, ""))).
+                Take(2).
+                ToList()
+        End If
+        If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
+            parts.Add("[相关近期会话]")
             For Each s In summaries
                 parts.Add($"- {s.Title}: {s.Snippet}")
             Next
@@ -292,6 +326,82 @@ Public Class ChatContextBuilder
 
         If parts.Count <= 1 Then Return baseSystem
         Return String.Join(vbCrLf & vbCrLf, parts)
+    End Function
+
+    Private Shared Function IsRelevantToQuery(query As String, text As String) As Boolean
+        If String.IsNullOrWhiteSpace(query) OrElse String.IsNullOrWhiteSpace(text) Then Return False
+
+        Dim queryNorm = NormalizeForMatch(query)
+        Dim textNorm = NormalizeForMatch(text)
+        If queryNorm.Length < 2 OrElse textNorm.Length < 2 Then Return False
+        If textNorm.Contains(queryNorm) Then Return True
+
+        Dim tokens = BuildQueryTokens(queryNorm)
+        If tokens.Count = 0 Then Return False
+
+        Dim hits = 0
+        For Each token In tokens
+            If textNorm.Contains(token) Then
+                hits += 1
+                If hits >= 1 Then Return True
+            End If
+        Next
+
+        Return False
+    End Function
+
+    Private Shared Function NormalizeForMatch(value As String) As String
+        If String.IsNullOrWhiteSpace(value) Then Return ""
+        Dim sb As New StringBuilder()
+        For Each ch In value.Trim().ToLowerInvariant()
+            If Char.IsLetterOrDigit(ch) OrElse IsCjk(ch) Then
+                sb.Append(ch)
+            Else
+                sb.Append(" "c)
+            End If
+        Next
+        Return String.Join(" ", sb.ToString().Split({" "c}, StringSplitOptions.RemoveEmptyEntries))
+    End Function
+
+    Private Shared Function BuildQueryTokens(queryNorm As String) As List(Of String)
+        Dim tokens As New List(Of String)()
+        For Each part In queryNorm.Split({" "c}, StringSplitOptions.RemoveEmptyEntries)
+            If part.Length >= 2 AndAlso Not IsWeakQueryToken(part) Then AddToken(tokens, part)
+
+            If ContainsCjk(part) AndAlso part.Length >= 3 Then
+                For i = 0 To part.Length - 2
+                    Dim gram = part.Substring(i, 2)
+                    If Not IsWeakQueryToken(gram) Then AddToken(tokens, gram)
+                Next
+            End If
+        Next
+        Return tokens.Take(16).ToList()
+    End Function
+
+    Private Shared Sub AddToken(tokens As List(Of String), token As String)
+        If String.IsNullOrWhiteSpace(token) Then Return
+        If tokens.Any(Function(t) String.Equals(t, token, StringComparison.OrdinalIgnoreCase)) Then Return
+        tokens.Add(token)
+    End Sub
+
+    Private Shared Function IsWeakQueryToken(token As String) As Boolean
+        Select Case token
+            Case "给我", "帮我", "我要", "请帮", "一封", "写一", "生成", "创建", "实现", "当前", "文档"
+                Return True
+        End Select
+        Return token.Length < 2
+    End Function
+
+    Private Shared Function ContainsCjk(value As String) As Boolean
+        If String.IsNullOrEmpty(value) Then Return False
+        Return value.Any(Function(ch) IsCjk(ch))
+    End Function
+
+    Private Shared Function IsCjk(ch As Char) As Boolean
+        Dim code = AscW(ch)
+        Return (code >= &H4E00 AndAlso code <= &H9FFF) OrElse
+               (code >= &H3400 AndAlso code <= &H4DBF) OrElse
+               (code >= &HF900 AndAlso code <= &HFAFF)
     End Function
 
     Private Shared Sub AppendSkillScriptInfo(skillParts As List(Of String), skill As SkillFileDefinition)

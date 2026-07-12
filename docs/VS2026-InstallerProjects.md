@@ -1,5 +1,8 @@
 # Visual Studio 2026 打开 OfficeAgent.vdproj 失败处理
 
+> 构建链路总览（code vs installer）见 [build-and-installer.md](./build-and-installer.md)。
+> 打 MSI 前请先跑 `.\build-installer-prep.bat`（Release 代码 + SourcePath 审计）。
+
 ## 现象
 
 在 Visual Studio 2026 打开 `AiHelper.sln` 时，`OfficeAgent/OfficeAgent.vdproj` 可能提示：

@@ -9,43 +9,12 @@ Imports System.Threading.Tasks
 Public Class MemoryService
 
     ''' <summary>
-    ''' 被动 RAG：按 query 检索 top-N 条相关原子记忆（使用向量相似度）
+    ''' Sync RAG entry for legacy callers. Prefer GetRelevantMemoriesAsync on chat/agent paths.
+    ''' Embedding is resolved via SyncOverAsync (thread-pool, timeout) — never UI-context .Result.
     ''' </summary>
     Public Shared Function GetRelevantMemories(query As String, Optional topN As Integer? = Nothing, Optional startTime As DateTime? = Nothing, Optional endTime As DateTime? = Nothing, Optional appType As String = Nothing) As List(Of AtomicMemoryRecord)
-        Dim n = If(topN.HasValue, topN.Value, MemoryConfig.RagTopN)
-
-        Dim queryEmbedding As Single() = Nothing
-        Try
-            ' 优化：仅在数据库中确实存在带 embedding 的记忆时才调用向量 API，避免浪费
-            If Not String.IsNullOrWhiteSpace(query) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
-               MemoryRepository.HasMemoriesWithEmbedding(appType) Then
-                Debug.WriteLine($"[MemoryService] 检测到带 embedding 的记忆，生成查询向量...")
-                ' 用 Task.Run 将 async 任务派发到线程池线程执行：
-                ' 直接在同步方法里对 async Task 调用 .Wait() 会捕获当前 SynchronizationContext，
-                ' 若调用方在 UI 线程（WinForms/VSTO），极易造成死锁。
-                ' Task.Run 的包装让 async 代码运行在无 SynchronizationContext 的线程池线程，
-                ' .Wait(timeout) 只是普通的线程阻塞，不会死锁。
-                Dim embTask = Task.Run(Async Function()
-                    Return Await EmbeddingService.GetEmbeddingAsync(query)
-                End Function)
-                If embTask.Wait(3000) Then
-                    queryEmbedding = embTask.Result
-                    If queryEmbedding IsNot Nothing Then
-                        Debug.WriteLine($"[MemoryService] 查询向量生成成功，维度: {queryEmbedding.Length}")
-                    End If
-                Else
-                    Debug.WriteLine($"[MemoryService] 查询向量生成超时或失败")
-                End If
-            ElseIf Not EmbeddingService.IsEmbeddingAvailable() Then
-                Debug.WriteLine($"[MemoryService] Embedding 不可用，直接使用关键词检索")
-            Else
-                Debug.WriteLine($"[MemoryService] 数据库中无带 embedding 的记忆，跳过向量 API 调用")
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"[MemoryService] 生成查询向量失败: {ex.Message}")
-        End Try
-
-        Return MemoryRepository.GetRelevantMemories(query, n, queryEmbedding, startTime, endTime, appType)
+        Dim result = SyncOverAsync.Run(Function() GetRelevantMemoriesAsync(query, topN, startTime, endTime, appType), 5000)
+        Return If(result, New List(Of AtomicMemoryRecord)())
     End Function
 
     ''' <summary>
@@ -58,43 +27,49 @@ Public Class MemoryService
         Try
             If Not String.IsNullOrWhiteSpace(query) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
                MemoryRepository.HasMemoriesWithEmbedding(appType) Then
-                queryEmbedding = Await Task.Run(Async Function()
-                    Return Await EmbeddingService.GetEmbeddingAsync(query)
-                End Function)
+                Debug.WriteLine("[MemoryService] generating query embedding (async)...")
+                queryEmbedding = Await EmbeddingService.GetEmbeddingAsync(query).ConfigureAwait(False)
+                If queryEmbedding IsNot Nothing Then
+                    Debug.WriteLine($"[MemoryService] query embedding dim={queryEmbedding.Length}")
+                End If
+            ElseIf Not EmbeddingService.IsEmbeddingAvailable() Then
+                Debug.WriteLine("[MemoryService] Embedding unavailable; keyword search only")
+            Else
+                Debug.WriteLine("[MemoryService] No embedded memories; skip vector API")
             End If
         Catch ex As Exception
-            Debug.WriteLine($"[MemoryService] 异步生成查询向量失败: {ex.Message}")
+            Debug.WriteLine($"[MemoryService] async embedding failed: {ex.Message}")
         End Try
 
-        Return Await Task.Run(Function() MemoryRepository.GetRelevantMemories(query, n, queryEmbedding, startTime, endTime, appType))
+        Return Await Task.Run(Function() MemoryRepository.GetRelevantMemories(query, n, queryEmbedding, startTime, endTime, appType)).ConfigureAwait(False)
     End Function
 
     Public Shared Function GetRelevantStructuredMemories(query As String, Optional topN As Integer? = Nothing, Optional appType As String = Nothing, Optional documentId As String = Nothing, Optional projectId As String = Nothing) As List(Of MemoryItemRecord)
+        Dim result = SyncOverAsync.Run(Function() GetRelevantStructuredMemoriesAsync(query, topN, appType, documentId, projectId), 5000)
+        Return If(result, New List(Of MemoryItemRecord)())
+    End Function
+
+    Public Shared Async Function GetRelevantStructuredMemoriesAsync(query As String, Optional topN As Integer? = Nothing, Optional appType As String = Nothing, Optional documentId As String = Nothing, Optional projectId As String = Nothing) As Task(Of List(Of MemoryItemRecord))
         Dim n = If(topN.HasValue, topN.Value, MemoryConfig.RagTopN)
         Dim queryEmbedding As Single() = Nothing
 
         Try
             If Not String.IsNullOrWhiteSpace(query) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
                AgentMemoryRepository.HasReadyMemoryEmbeddings(appType) Then
-                Dim embTask = Task.Run(Async Function()
-                    Return Await EmbeddingService.GetEmbeddingAsync(query)
-                End Function)
-                If embTask.Wait(3000) Then
-                    queryEmbedding = embTask.Result
-                End If
+                queryEmbedding = Await EmbeddingService.GetEmbeddingAsync(query).ConfigureAwait(False)
             End If
         Catch ex As Exception
-            Debug.WriteLine($"[MemoryService] 生成结构化记忆查询向量失败: {ex.Message}")
+            Debug.WriteLine($"[MemoryService] structured embedding failed: {ex.Message}")
         End Try
 
         If queryEmbedding IsNot Nothing AndAlso queryEmbedding.Length > 0 Then
-            Dim vectorResults = AgentMemoryRepository.RetrieveMemoryItemsByVector(queryEmbedding, query, appType, documentId, projectId, n)
+            Dim vectorResults = Await Task.Run(Function() AgentMemoryRepository.RetrieveMemoryItemsByVector(queryEmbedding, query, appType, documentId, projectId, n)).ConfigureAwait(False)
             If vectorResults IsNot Nothing AndAlso vectorResults.Count > 0 Then
                 Return vectorResults
             End If
         End If
 
-        Return AgentMemoryRepository.RetrieveMemoryItems(query, appType, documentId, projectId, n)
+        Return Await Task.Run(Function() AgentMemoryRepository.RetrieveMemoryItems(query, appType, documentId, projectId, n)).ConfigureAwait(False)
     End Function
 
     ''' <summary>
@@ -192,26 +167,24 @@ Public Class MemoryService
     ''' 主动 RAG 工具：按 keyword 和可选时间范围检索
     ''' </summary>
     Public Shared Function SearchMemories(keyword As String, Optional startTime As DateTime? = Nothing, Optional endTime As DateTime? = Nothing, Optional appType As String = Nothing) As List(Of AtomicMemoryRecord)
+        Dim result = SyncOverAsync.Run(Function() SearchMemoriesAsync(keyword, startTime, endTime, appType), 5000)
+        Return If(result, New List(Of AtomicMemoryRecord)())
+    End Function
+
+    Public Shared Async Function SearchMemoriesAsync(keyword As String, Optional startTime As DateTime? = Nothing, Optional endTime As DateTime? = Nothing, Optional appType As String = Nothing) As Task(Of List(Of AtomicMemoryRecord))
         Dim queryEmbedding As Single() = Nothing
         Try
-            ' 优化：仅在数据库中存在带 embedding 的记忆时才调用向量 API
             If Not String.IsNullOrWhiteSpace(keyword) AndAlso EmbeddingService.IsEmbeddingAvailable() AndAlso
                MemoryRepository.HasMemoriesWithEmbedding(appType) Then
-                ' 同 GetRelevantMemories：用 Task.Run 包装避免在 UI 线程上死锁
-                Dim embTask = Task.Run(Async Function()
-                    Return Await EmbeddingService.GetEmbeddingAsync(keyword)
-                End Function)
-                If embTask.Wait(3000) Then
-                    queryEmbedding = embTask.Result
-                End If
+                queryEmbedding = Await EmbeddingService.GetEmbeddingAsync(keyword).ConfigureAwait(False)
             Else
-                Debug.WriteLine($"[MemoryService] SearchMemories: 无带 embedding 记忆或 embedding 不可用，跳过向量 API")
+                Debug.WriteLine("[MemoryService] SearchMemoriesAsync: skip vector API")
             End If
         Catch ex As Exception
-            Debug.WriteLine($"[MemoryService] SearchMemories 生成向量失败: {ex.Message}")
+            Debug.WriteLine($"[MemoryService] SearchMemoriesAsync embedding failed: {ex.Message}")
         End Try
 
-        Return MemoryRepository.GetRelevantMemories(keyword, MemoryConfig.RagTopN, queryEmbedding, startTime, endTime, appType)
+        Return Await Task.Run(Function() MemoryRepository.GetRelevantMemories(keyword, MemoryConfig.RagTopN, queryEmbedding, startTime, endTime, appType)).ConfigureAwait(False)
     End Function
 
     Public Shared Function PromoteMemoryToLongTerm(memoryId As Long) As Boolean

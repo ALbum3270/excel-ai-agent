@@ -148,8 +148,8 @@ Public Module ExcelDnaFunctions
             ' 创建请求体
             Dim requestBody As String = LLMUtil.CreateLlmRequestBody(prompt, useModel, systemPrompt, temperature, maxTokens)
 
-            ' 调用API并获取结果
-            Dim response As String = LLMUtil.SendHttpRequest(apiUrl, apiKey, requestBody).Result
+            ' ExcelDna UDF 必须同步返回；走专用同步桥（线程池，无 UI SynchronizationContext）
+            Dim response As String = LLMUtil.SendHttpRequestSync(apiUrl, apiKey, requestBody)
 
             ' 如果响应为空，返回错误信息
             If String.IsNullOrEmpty(response) Then

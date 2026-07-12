@@ -214,6 +214,7 @@
     <Compile Include="Common\ErrorHandler.vb" />
     <Compile Include="Common\PerformanceMonitor.vb" />
     <Compile Include="Common\LLMUtil.vb" />
+    <Compile Include="Common\SyncOverAsync.vb" />
     <Compile Include="Common\JsUtil.vb" />
     <Compile Include="Config\ConfigApiForm.vb">
       <SubType>Form</SubType>
@@ -305,6 +306,7 @@
     <Compile Include="Loop\RalphLoopMemory.vb" />
     <Compile Include="Agent\AgentKernel.vb" />
     <Compile Include="Agent\AiNativeRuntime.vb" />
+    <Compile Include="Agent\ExecutionPathPolicy.vb" />
     <Compile Include="Agent\LoopEngine.vb" />
     <Compile Include="Agent\AgentSession.vb" />
     <Compile Include="Agent\AgentMemory.vb" />
@@ -357,7 +359,9 @@
     <Compile Include="Controls\CommandPreviewForm.vb">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Log\AppLogger.vb" />
     <Compile Include="Log\SimpleLogger.vb" />
+    <Compile Include="Common\ExceptionClassifier.vb" />
     <Compile Include="Mcp\ApiKeyConfigForm.vb">
       <SubType>Form</SubType>
     </Compile>
@@ -416,6 +420,7 @@
     <Compile Include="Controls\Services\ChatFormatterAgent.vb" />
     <Compile Include="Controls\Services\ChatSystemPromptResolver.vb" />
     <Compile Include="Controls\Services\ChatRequestOrchestrator.vb" />
+    <Compile Include="Controls\Services\ChatRoutingOrchestrator.vb" />
     <Compile Include="Controls\Services\ChatSendValidator.vb" />
     <Compile Include="Controls\Services\MemoryTurnRecorder.vb" />
     <Compile Include="Controls\Services\ReformatService.vb" />

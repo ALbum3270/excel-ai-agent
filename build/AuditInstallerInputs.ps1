@@ -66,3 +66,4 @@ if ($missing.Count -gt 0) {
 }
 
 Write-Host "Installer input audit passed. Checked $checked file references."
+exit 0
