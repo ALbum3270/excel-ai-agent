@@ -48,18 +48,6 @@
         </div>
     </div>
 
-    <!-- Agent 模式指示器 -->
-    <div id="agent-mode-indicator" style="display:none; padding: 6px 16px; background: linear-gradient(90deg, #4a6fa5 0%, #3d5a7c 100%); color: white; font-size: 12px; align-items: center; gap: 8px;">
-        <span class="agent-dot" style="width: 8px; height: 8px; background: #4ade80; border-radius: 50%; display: inline-block; animation: pulse 2s infinite;"></span>
-        <span>Agent 模式运行中</span>
-        <style>
-            @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.4; }
-            }
-        </style>
-    </div>
-
     <div id="chat-container">
         <!-- message content list -->
     </div>
@@ -416,8 +404,6 @@
     <script src="http://officeai.local/js/settings-manager.js"></script>
     <script src="http://officeai.local/js/mcp-manager.js"></script>
     <script src="http://officeai.local/js/history-manager.js"></script>
-    <script src="http://officeai.local/js/config-panel.js"></script>
-
     <script src="http://officeai.local/js/revision-manager.js"></script>
     <script src="http://officeai.local/js/autocomplete.js"></script>
     <script src="http://officeai.local/js/agent-protocol.js"></script>
@@ -429,11 +415,6 @@
 
     <!-- 工具函数 -->
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            if (window.configPanel && typeof window.configPanel.init === 'function') {
-                window.configPanel.init();
-            }
-        });
         // 设置输入框文本（由VB.NET调用）
         function setInputText(text) {
             var smartInput = document.getElementById('smart-input');

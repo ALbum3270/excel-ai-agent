@@ -219,14 +219,14 @@ H1 不要求完整 `DocumentDiff`，只要求读工具 `Data` 可被 `ToolResult
 
 ### 6.3 建议改法
 
-旧 native tool 曾通过 `ExecuteCodeWithResult` 返回 Boolean，无法带数据；当前 Agent 主路径已改为强制 `ExecuteCodeWithToolResult`，Boolean 只保留给非 Agent 的手动代码执行兼容入口。
+旧 native tool 曾通过 `ExecuteCodeWithResult` 返回 Boolean，无法带数据；当前所有 JSON/手动代码执行入口均已收敛到 `ExecuteCodeWithToolResult` / `ExecuteJsonCommandWithToolResult`，旧 Boolean 兼容接口已删除。
 
 | 类型 | 动作 |
 |---|---|
 | `CodeExecutionService` | 新增 `ExecuteCodeWithToolResult` 委托，返回 `ToolResult` |
 | `AgentKernelService` | 绑定 `ExecuteCodeWithToolResult`，不再回退 Boolean |
 | `ToolRegistry` | native tool 执行时只消费 ToolResult |
-| `WordAi.ChatControl.ExecuteJsonCommand` | 保留 Boolean override；新增内部 `ExecuteJsonCommandForToolResult` |
+| 三端 `ChatControl` | 只 override `ExecuteJsonCommandWithToolResult`；Boolean Core 为私有宿主实现细节，不再形成共享接口 |
 
 ### 6.4 Data 结构
 
@@ -531,15 +531,15 @@ Prompt 必须注入：
 | H1-2 | H1 | 执行期 `allowed-tools` 硬拒绝 | `ToolRegistry`, `LoopEngine` | 已完成：越权工具 `TOOL_NOT_ALLOWED` |
 | H1-3 | H1 | VisibleTools 收紧 Prompt | `PromptManager`, `AgentKernel` | 已完成：Prompt/repair 使用可见工具 |
 | H1-4 | H1 | Word 读工具 Data 回传 | `WordAi/ChatControl.vb`, `CodeExecutionService` | 已完成：`ListParagraphs/GetParagraphInfo` 返回 data |
-| H1-5 | H1 | 最小 Observation 字段 | `ToolResult`, 三端 executor | 部分完成：字段已加，Word 基础写工具已回 before/after/diff observation；Excel/PPT 待补 |
+| H1-5 | H1 | 最小 Observation 字段 | `ToolResult`, 三端 executor | 已完成最小版：Word 读/写结构化回执；Excel/PPT 命令级 before/after Observation；细粒度领域 Diff 后续增强 |
 | H1-6 | H1 | Safety 最小裁决 | `SafetyGate`, `ToolRegistry` | 已完成最小版：VBA 默认 `VBA_DISABLED`；risky/删除/全文替换返回 `SAFETY_NEEDS_APPROVAL`，不进入 COM |
 | H2-1 | H2 | `agent_run`/`agent_run_step` 迁移 | DB 初始化/迁移 | 已完成：schema version 11，schema drift/empty DB smoke 通过 |
 | H2-2 | H2 | `IRunTraceStore` | `ShareRibbon/Agent/Harness/RunTraceStore.vb` | 已完成轻量版：每次 Harness run 写 `agent_run`，step explanation 写 `agent_run_step` |
 | H2-3 | H2 | Word 最小 Diff | `WordAi/ChatControl.vb`, `LoopEngine` | 已完成：基础写工具 Observation 含 before/after/diff，Explanation/RunTrace 可读取 |
-| H2-4 | H2 | Excel/PPT 最小 Diff | `ExcelAi`, `PowerPointAi` | range/slide delta 可观察 |
+| H2-4 | H2 | Excel/PPT 最小 Diff | `ExcelAi`, `PowerPointAi` | 已完成最小版：Range hash/公式错误/UsedRange/chart delta 与 slide/shape/text/notes delta 可观察 |
 | H3-1 | H3 | `ExcelActionHarness` | `ExcelAi/Services` | U3 跑通 |
 | H3-2 | H3 | `PptActionHarness` | `PowerPointAi/Services` | U4 跑通 |
-| H3-3 | H3 | Golden runner 初版 | `scripts`, `fixtures` | P0 场景可回归 |
+| H3-3 | H3 | Golden runner 初版 | `scripts`, `fixtures` | 已完成 L0：8 个门禁/合同案例接入 code checks，含 ToolResult-only 防回归；L1 真宿主后续 |
 
 ---
 

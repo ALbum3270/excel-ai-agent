@@ -51,12 +51,6 @@ window.enterReformatTemplateMode = function() {
         wrapper.innerHTML = '<div class="template-empty-hint">正在加载排版模板...</div>';
     }
 
-    const quickIndicator = document.getElementById('quick-reformat-indicator');
-    if (quickIndicator) quickIndicator.remove();
-    const quickGuide = document.getElementById('quick-reformat-guide');
-    if (quickGuide) quickGuide.remove();
-    document.body.classList.remove('smart-reformat-mode');
-    
     // 重置状态
     isManageMode = false;
     currentResourceType = 'template';
@@ -450,19 +444,6 @@ window.closeStyleGuidePreview = function() {
  * 从卡片编辑按钮进入编辑（先打开预览再切换到编辑模式）
  * @param {string} guideId - 规范ID
  */
-window.editStyleGuide = function(guideId) {
-    const guide = currentStyleGuides.find(g => g.Id === guideId);
-    if (!guide) return;
-    if (guide.IsPreset) {
-        alert('预置规范不可编辑');
-        return;
-    }
-    // 先打开预览
-    previewStyleGuide(guideId);
-    // 然后进入编辑模式
-    enterStyleGuideEditMode();
-};
-
 /**
  * 进入规范编辑模式（预览 → 编辑）
  */
@@ -841,21 +822,6 @@ function createTemplateCard(template) {
 }
 
 /**
- * 获取分类图标
- * @param {string} category - 分类名称
- * @returns {string} SVG图标
- */
-function getCategoryIcon(category) {
-    const icons = {
-        '通用': '<svg viewBox="0 0 24 24" width="48" height="48"><path fill="#667eea" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>',
-        '行政': '<svg viewBox="0 0 24 24" width="48" height="48"><path fill="#e53935" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>',
-        '学术': '<svg viewBox="0 0 24 24" width="48" height="48"><path fill="#1976d2" d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z"/></svg>',
-        '商务': '<svg viewBox="0 0 24 24" width="48" height="48"><path fill="#2e5090" d="M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-6 0h-4V4h4v2z"/></svg>'
-    };
-    return icons[category] || icons['通用'];
-}
-
-/**
  * 预览模板
  * @param {string} templateId - 模板ID
  */
@@ -1108,14 +1074,6 @@ function updateManageModeUI() {
  * 编辑模板
  * @param {string} templateId - 模板ID
  */
-window.editTemplate = function(templateId) {
-    sendMessageToVB({
-        type: 'openTemplateEditor',
-        templateId: templateId
-    });
-    
-    };
-
 /**
  * 复制模板
  * @param {string} templateId - 模板ID
@@ -1226,46 +1184,6 @@ window.createNewTemplate = function() {
  * 使用AI助手创建模板
  * Plan A: 直接在聊天中与AI对话，AI返回的模板JSON会自动渲染为交互式卡片
  */
-window.createAiTemplate = function() {
-    // 发送消息到VB，请求开始AI模板创建对话
-    if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.postMessage({
-            type: 'startAiTemplateChat',
-            mode: 'create'
-        });
-        } else {
-        console.error('[ReformatTemplate] WebView2 不可用');
-        alert('请在Office插件中使用此功能');
-    }
-};
-
-/**
- * 从当前选区创建AI模板
- * Plan A: 分析当前文档/选区，在聊天中与AI对话生成模板
- */
-window.createAiTemplateFromSelection = function() {
-    // 发送消息到VB，请求分析选区并开始AI模板创建对话
-    if (window.chrome && window.chrome.webview) {
-        window.chrome.webview.postMessage({
-            type: 'startAiTemplateChat',
-            mode: 'fromSelection'
-        });
-        } else {
-        console.error('[ReformatTemplate] WebView2 不可用');
-        alert('请在Office插件中使用此功能');
-    }
-};
-
-/**
- * 刷新模板列表（供VB调用）
- */
-window.refreshReformatTemplates = function() {
-    sendMessageToVB({
-        type: 'getReformatTemplates'
-    });
-    
-    };
-
 /**
  * 发送消息到VB.NET后端
  * @param {Object} payload - 消息负载
@@ -1285,18 +1203,6 @@ function sendMessageToVB(payload) {
 /**
  * 折叠/展开模板列表区域
  */
-window.toggleTemplateListCollapse = function() {
-    const container = document.getElementById('template-list-container');
-    const toggleBtn = document.getElementById('toggle-template-list-btn');
-    
-    if (container) {
-        const isCollapsed = container.classList.toggle('collapsed');
-        if (toggleBtn) {
-            toggleBtn.textContent = isCollapsed ? '展开模板' : '折叠模板';
-        }
-    }
-};
-
 // 初始化事件绑定
 document.addEventListener('DOMContentLoaded', function() {
     // 退出按钮（用户主动点击，强制退出）
@@ -1338,10 +1244,6 @@ document.addEventListener('DOMContentLoaded', function() {
  * 检查是否处于排版模板模式
  * @returns {boolean} 是否处于模板模式
  */
-window.isInReformatTemplateMode = function() {
-    return window.reformatTemplateActive === true;
-};
-
 // ============================================================
 // docx映射卡片预览渲染
 // ============================================================

@@ -28,7 +28,6 @@ Public MustInherit Class BaseChat
 
     ' 公共字段 - 子类可以覆盖
     Public MustOverride ReadOnly Property ChatUrl As String
-    Public MustOverride ReadOnly Property SessionFileName As String
 
     ' 公共属性
     Protected Property ChatBrowser As Microsoft.Web.WebView2.WinForms.WebView2
@@ -521,38 +520,6 @@ Public MustInherit Class BaseChat
     End Function
 
 
-    ' 执行js脚本的异步方法
-    Private Async Function ExecuteJavaScriptAsyncJS(js As String) As Task
-        If ChatBrowser.InvokeRequired Then
-            Dim tcs As New TaskCompletionSource(Of Boolean)()
-            ChatBrowser.BeginInvoke(New Action(Async Sub()
-                                                   Try
-                                                       Await ChatBrowser.ExecuteScriptAsync(js)
-                                                       tcs.TrySetResult(True)
-                                                   Catch ex As Exception
-                                                       tcs.TrySetException(ex)
-                                                   End Try
-                                               End Sub))
-            Await tcs.Task
-        Else
-            Await ChatBrowser.ExecuteScriptAsync(js)
-        End If
-    End Function
-
-    Private Function DecodeBase64(base64 As String) As String
-        Dim bytes As Byte() = System.Convert.FromBase64String(base64)
-        Return System.Text.Encoding.UTF8.GetString(bytes)
-    End Function
-
-    Private Function EscapeJavaScriptString(input As String) As String
-        Return input _
-        .Replace("\", "\\") _
-        .Replace("'", "\'") _
-        .Replace(vbCr, "") _
-        .Replace(vbLf, "\n") _
-        .Replace("</script>", "<\/script>")  ' 避免脚本注入
-    End Function
-
 
     Protected Shared Sub VBAxceptionHandle(ex As Runtime.InteropServices.COMException)
         ' 处理信任中心权限问题
@@ -608,15 +575,5 @@ Public MustInherit Class BaseChat
     Protected MustOverride Function RunCode(vbaCode As String)
     Protected MustOverride Sub SendChatMessage(message As String)
     Protected MustOverride Sub GetSelectionContent(target As Object)
-
-    ' 注入脚本
-    Private Async Sub InjectScript(scriptContent As String)
-        If ChatBrowser.CoreWebView2 IsNot Nothing Then
-            Dim escapedScript = JsonConvert.SerializeObject(scriptContent)
-            Await ChatBrowser.CoreWebView2.ExecuteScriptAsync($"eval({escapedScript})")
-        Else
-            MessageBox.Show("CoreWebView2 未初始化，无法注入脚本。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-        End If
-    End Sub
 
 End Class

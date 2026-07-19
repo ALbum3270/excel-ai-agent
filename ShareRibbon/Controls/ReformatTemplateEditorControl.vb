@@ -51,7 +51,6 @@ Public Class ReformatTemplateEditorControl
     Private cboElementFontSize As ComboBox
     Private chkElementBold As CheckBox
     Private cboElementAlignment As ComboBox
-    Private pnlElementColor As Panel
     Private lblElementColor As Label
     Private btnElementColor As Button
     Private txtElementPlaceholder As TextBox
@@ -59,7 +58,6 @@ Public Class ReformatTemplateEditorControl
     Private btnRemoveElement As Button
     
     ' 占位符预览区
-    Private pnlPlaceholderPreview As Panel
     Private lblPlaceholderTitle As Label
     Private txtPlaceholderContent As TextBox
     Private btnUpdatePlaceholder As Button
@@ -73,7 +71,6 @@ Public Class ReformatTemplateEditorControl
     Private cboStyleAlignment As ComboBox
     Private numStyleFirstIndent As NumericUpDown
     Private numStyleLineSpacing As NumericUpDown
-    Private pnlStyleColor As Panel
     Private lblStyleColor As Label
     Private btnStyleColor As Button
     Private btnAddStyle As Button
@@ -105,14 +102,6 @@ Public Class ReformatTemplateEditorControl
 
         InitializeControl()
         LoadTemplateData()
-    End Sub
-
-    Public Sub SetPreviewCallback(callback As PreviewStyleCallback)
-        _previewCallback = callback
-    End Sub
-    
-    Public Sub SetPlaceholderPreviewCallback(callback As TemplatePlaceholderPreviewCallback)
-        _placeholderPreviewCallback = callback
     End Sub
 
     Private Sub InitializeControl()

@@ -34,6 +34,33 @@ Public Class UiDispatcher
                                          End Sub))
     End Sub
 
+    ''' <summary>
+    ''' Synchronous UI marshal with a return value. This is the single entry used by
+    ''' background Agent execution before it touches WinForms/WebView2/Office COM.
+    ''' </summary>
+    Public Shared Function InvokeSync(Of T)(control As Control,
+                                            func As Func(Of T),
+                                            Optional handleTimeoutMs As Integer = DefaultHandleTimeoutMs) As T
+        If func Is Nothing Then Return Nothing
+        If control Is Nothing OrElse control.IsDisposed Then Return Nothing
+
+        If Not control.InvokeRequired Then
+            Return func()
+        End If
+
+        If Not WaitForHandleSync(control, handleTimeoutMs) Then
+            Throw New InvalidOperationException("Cannot dispatch to UI thread before the control handle is created.")
+        End If
+        If control.IsDisposed Then Return Nothing
+
+        Dim result As Object = control.Invoke(New Func(Of T)(Function()
+                                                                  If control.IsDisposed Then Return Nothing
+                                                                  Return func()
+                                                              End Function))
+        If result Is Nothing Then Return Nothing
+        Return CType(result, T)
+    End Function
+
     Private Shared Function WaitForHandleSync(control As Control, timeoutMs As Integer) As Boolean
         If control Is Nothing OrElse control.IsDisposed Then Return False
         If control.IsHandleCreated Then Return True

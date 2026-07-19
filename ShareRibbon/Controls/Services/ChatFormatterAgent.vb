@@ -1,6 +1,5 @@
 ' ShareRibbon\Controls\Services\ChatFormatterAgent.vb
-' Chat格式化代理 - 处理Chat中的排版对话消息、生成排版卡片HTML、解析自然语言排版指令
-' Phase 2改进：AI语义标注成为必经步骤，分析-确认模式，LLM驱动的微调
+' Chat格式化代理 - 处理Chat中的排版对话消息并生成排版卡片HTML。
 
 Imports System.Collections.Generic
 Imports System.Linq
@@ -12,31 +11,15 @@ Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
 
 ''' <summary>
-''' 微调指令 - 从用户自然语言中解析出的排版微调操作
-''' </summary>
-Public Class RefinementCommand
-    ''' <summary>目标区域: "title" / "body" / "page" / "heading" / "all"</summary>
-    Public Property Target As String = ""
-    ''' <summary>操作: "fontSize" / "alignment" / "color" / "spacing" / "fontFamily" / "indent"</summary>
-    Public Property Action As String = ""
-    ''' <summary>操作值: "+2pt" / "center" / "#FF0000" / "1.5"</summary>
-    Public Property Value As String = ""
-    ''' <summary>用户原始消息</summary>
-    Public Property OriginalText As String = ""
-End Class
-
-''' <summary>
 ''' Chat格式化代理 - 在Chat对话中处理排版相关的用户交互
 ''' Phase 2改进：
 ''' 1. AI语义标注为必经步骤（无AI时明确告知用户）
 ''' 2. 先分析后确认：先展示AI分析结果，用户确认后才应用
-''' 3. LLM驱动的微调：模糊指令通过RefinementPromptBuilder发送给LLM
 ''' </summary>
 Public Class ChatFormatterAgent
 
     Private ReadOnly _orchestrator As SmartFormattingOrchestrator
     Private ReadOnly _executeScript As Func(Of String, Task)
-    Private ReadOnly _escapeJs As Func(Of String, String)
     Private ReadOnly _textAnalyzer As Func(Of String, String, Task(Of String))
 
     ''' <summary>
@@ -49,12 +32,10 @@ Public Class ChatFormatterAgent
     ''' </summary>
     Public Sub New(
         executeScript As Func(Of String, Task),
-        escapeJs As Func(Of String, String),
         Optional textAnalyzer As Func(Of String, String, Task(Of String)) = Nothing,
         Optional orchestrator As SmartFormattingOrchestrator = Nothing)
 
         _executeScript = executeScript
-        _escapeJs = escapeJs
         _textAnalyzer = textAnalyzer
         _orchestrator = If(orchestrator, New SmartFormattingOrchestrator())
     End Sub
@@ -63,13 +44,6 @@ Public Class ChatFormatterAgent
     Public ReadOnly Property Orchestrator As SmartFormattingOrchestrator
         Get
             Return _orchestrator
-        End Get
-    End Property
-
-    ''' <summary>是否有AI分析器可用</summary>
-    Public ReadOnly Property HasAIAnalyzer As Boolean
-        Get
-            Return _textAnalyzer IsNot Nothing
         End Get
     End Property
 
@@ -165,209 +139,6 @@ Public Class ChatFormatterAgent
         Catch ex As Exception
             Debug.WriteLine($"[ChatFormatterAgent] 处理排版消息失败: {ex.Message}")
             Return False
-        End Try
-    End Function
-
-    ''' <summary>
-    ''' 使用LLM驱动的微调（替代纯正则的ApplyTweakToTags）
-    ''' 当AI可用时，将模糊指令发送给LLM获取精确的映射调整
-    ''' </summary>
-    ''' <param name="userCommand">用户微调指令</param>
-    ''' <param name="paragraphs">文档段落文本列表</param>
-    ''' <param name="wordParagraphs">Word段落对象列表</param>
-    ''' <param name="responseUuid">响应的UUID</param>
-    Public Async Function HandleLLMRefinementAsync(
-        userCommand As String,
-        paragraphs As List(Of String),
-        wordParagraphs As List(Of Object),
-        responseUuid As String) As Task(Of Boolean)
-
-        If _textAnalyzer Is Nothing Then
-            ' 无AI，降级到正则微调
-            Dim plan = _orchestrator.ApplyRefinement(userCommand)
-            If plan IsNot Nothing Then
-                Dim html = GenerateRefinementCardHtml(plan, plan)
-                Await PushCardHtml(html, responseUuid)
-            End If
-            Return True
-        End If
-
-        Dim fallbackNeeded As Boolean = False
-
-        Try
-            ' 构建微调提示词
-            Dim mapping = _orchestrator.RefinementContext.CurrentMapping
-            If mapping Is Nothing Then
-                ' 没有活动上下文，走完整排版流程
-                Return Await HandleFormattingMessage(userCommand, paragraphs, wordParagraphs, responseUuid)
-            End If
-
-            Dim prompt = RefinementPromptBuilder.BuildRefinementPrompt(
-                userCommand,
-                mapping,
-                _orchestrator.RefinementContext.ConversationHistory,
-                _orchestrator.RefinementContext.CurrentStandard?.Name)
-
-            ' 调用LLM
-            Dim aiResponse = Await _textAnalyzer("refinement", prompt)
-
-            If String.IsNullOrWhiteSpace(aiResponse) Then
-                ' AI返回为空，降级到正则微调
-                fallbackNeeded = True
-            Else
-                ' 解析LLM返回的调整后的映射
-                Dim adjustedMapping = ParseRefinementResponse(aiResponse, mapping)
-
-                ' 用调整后的映射重新生成预览方案
-                Dim beforePlan = _orchestrator.RefinementContext.CurrentPreviewPlan
-                _orchestrator.RefinementContext.CurrentMapping = adjustedMapping
-
-                Dim analysis = _orchestrator.RefinementContext.CurrentAnalysis
-                Dim standard = _orchestrator.RefinementContext.CurrentStandard
-                Dim afterPlan As ReformatPreviewPlan = Nothing
-
-                If analysis IsNot Nothing AndAlso standard IsNot Nothing Then
-                    afterPlan = _orchestrator.GeneratePreviewPlan(analysis, standard, paragraphs)
-                    afterPlan.SemanticMapping = adjustedMapping
-                Else
-                    afterPlan = _orchestrator.ApplyRefinement(userCommand)
-                End If
-
-                ' 记录对话历史
-                _orchestrator.RefinementContext.AddConversation(userCommand)
-                _orchestrator.RefinementContext.CurrentPreviewPlan = afterPlan
-
-                Dim html2 = GenerateRefinementCardHtml(beforePlan, afterPlan)
-                Await PushCardHtml(html2, responseUuid)
-
-                Return True
-            End If
-
-        Catch ex As Exception
-            Debug.WriteLine($"[ChatFormatterAgent] LLM微调失败: {ex.Message}")
-            fallbackNeeded = True
-        End Try
-
-        ' 降级到正则微调（在Try/Catch外部执行Await）
-        If fallbackNeeded Then
-            Dim plan = _orchestrator.ApplyRefinement(userCommand)
-            If plan IsNot Nothing Then
-                Dim html = GenerateRefinementCardHtml(plan, plan)
-                Await PushCardHtml(html, responseUuid)
-            End If
-        End If
-
-        Return True
-    End Function
-
-    ''' <summary>
-    ''' 解析LLM微调响应，合并到当前映射
-    ''' </summary>
-    Private Function ParseRefinementResponse(aiResponse As String, originalMapping As SemanticStyleMapping) As SemanticStyleMapping
-        ' 深拷贝原始映射
-        Dim result As New SemanticStyleMapping()
-        result.Name = originalMapping.Name
-        result.SourceType = originalMapping.SourceType
-        result.SourceId = originalMapping.SourceId
-        result.PageConfig = originalMapping.PageConfig
-
-        Try
-            ' 清理响应
-            Dim clean = aiResponse.Trim()
-            If clean.StartsWith("```json") Then clean = clean.Substring(7)
-            If clean.StartsWith("```") Then clean = clean.Substring(3)
-            If clean.EndsWith("```") Then clean = clean.Substring(0, clean.Length - 3)
-            clean = clean.Trim()
-
-            ' 解析为JArray
-            Dim tagsArray As JArray = Nothing
-            If clean.StartsWith("[") Then
-                tagsArray = JArray.Parse(clean)
-            Else
-                ' 尝试提取数组
-                Dim firstBracket = clean.IndexOf("[")
-                Dim lastBracket = clean.LastIndexOf("]")
-                If firstBracket >= 0 AndAlso lastBracket > firstBracket Then
-                    tagsArray = JArray.Parse(clean.Substring(firstBracket, lastBracket - firstBracket + 1))
-                End If
-            End If
-
-            If tagsArray Is Nothing OrElse tagsArray.Count = 0 Then
-                Debug.WriteLine("[ChatFormatterAgent] LLM微调响应解析为空，使用原始映射")
-                Return originalMapping
-            End If
-
-            ' 构建tagId→新tag的映射
-            Dim newTagsDict As New Dictionary(Of String, SemanticTag)()
-            For Each item In tagsArray
-                Dim tagId = item("tagId")?.ToString()
-                If String.IsNullOrEmpty(tagId) Then Continue For
-
-                Dim newTag As New SemanticTag()
-                newTag.TagId = tagId
-
-                ' 解析Font
-                Dim fontObj = item("font")
-                If fontObj IsNot Nothing Then
-                    newTag.Font = New FontConfig()
-                    newTag.Font.FontNameCN = If(fontObj("fontNameCN")?.ToString(), newTag.Font.FontNameCN)
-                    newTag.Font.FontNameEN = If(fontObj("fontNameEN")?.ToString(), newTag.Font.FontNameEN)
-                    Dim fontSizeVal = fontObj("fontSize")
-                    If fontSizeVal IsNot Nothing Then newTag.Font.FontSize = Convert.ToDouble(fontSizeVal)
-                    Dim boldVal = fontObj("bold")
-                    If boldVal IsNot Nothing Then newTag.Font.Bold = Convert.ToBoolean(boldVal)
-                    Dim italicVal = fontObj("italic")
-                    If italicVal IsNot Nothing Then newTag.Font.Italic = Convert.ToBoolean(italicVal)
-                    Dim underlineVal = fontObj("underline")
-                    If underlineVal IsNot Nothing Then newTag.Font.Underline = Convert.ToBoolean(underlineVal)
-                End If
-
-                ' 解析Paragraph
-                Dim paraObj = item("paragraph")
-                If paraObj IsNot Nothing Then
-                    newTag.Paragraph = New ParagraphConfig()
-                    newTag.Paragraph.Alignment = If(paraObj("alignment")?.ToString(), newTag.Paragraph.Alignment)
-                    Dim indentVal = paraObj("firstLineIndent")
-                    If indentVal IsNot Nothing Then newTag.Paragraph.FirstLineIndent = Convert.ToDouble(indentVal)
-                    Dim spacingVal = paraObj("lineSpacing")
-                    If spacingVal IsNot Nothing Then newTag.Paragraph.LineSpacing = Convert.ToDouble(spacingVal)
-                    Dim beforeVal = paraObj("spaceBefore")
-                    If beforeVal IsNot Nothing Then newTag.Paragraph.SpaceBefore = Convert.ToDouble(beforeVal)
-                    Dim afterVal = paraObj("spaceAfter")
-                    If afterVal IsNot Nothing Then newTag.Paragraph.SpaceAfter = Convert.ToDouble(afterVal)
-                End If
-
-                ' 解析Color
-                Dim colorObj = item("color")
-                If colorObj IsNot Nothing Then
-                    newTag.Color = New ColorConfig()
-                    newTag.Color.FontColor = If(colorObj("fontColor")?.ToString(), newTag.Color.FontColor)
-                End If
-
-                newTagsDict(tagId) = newTag
-            Next
-
-            ' 合并：LLM返回的标签覆盖原始映射中对应的标签，其余保留
-            For Each origTag In originalMapping.SemanticTags
-                If newTagsDict.ContainsKey(origTag.TagId) Then
-                    result.SemanticTags.Add(newTagsDict(origTag.TagId))
-                Else
-                    result.SemanticTags.Add(origTag)
-                End If
-            Next
-
-            ' LLM可能新增了标签
-            For Each kvp In newTagsDict
-                If Not result.SemanticTags.Any(Function(t) t.TagId = kvp.Key) Then
-                    result.SemanticTags.Add(kvp.Value)
-                End If
-            Next
-
-            Return result
-
-        Catch ex As Exception
-            Debug.WriteLine($"[ChatFormatterAgent] 解析LLM微调响应失败: {ex.Message}")
-            Return originalMapping
         End Try
     End Function
 
@@ -677,34 +448,6 @@ Public Class ChatFormatterAgent
     End Function
 
     ''' <summary>
-    ''' 解析用户消息中的微调指令
-    ''' </summary>
-    Public Shared Function ParseRefinementCommand(userMessage As String) As RefinementCommand
-        Dim cmd As New RefinementCommand()
-        cmd.OriginalText = userMessage
-
-        If String.IsNullOrWhiteSpace(userMessage) Then Return cmd
-
-        ' 简单文本解析微调指令
-        Dim msg = userMessage.ToLower().Trim()
-        If msg.Contains("大") OrElse msg.Contains("小") Then
-            cmd.Action = "fontSize"
-            cmd.Value = If(msg.Contains("大"), "+1pt", "-1pt")
-        ElseIf msg.Contains("行距") Then
-            cmd.Action = "spacing"
-            cmd.Value = "1.5"
-        ElseIf msg.Contains("红") OrElse msg.Contains("蓝") OrElse msg.Contains("颜色") Then
-            cmd.Action = "color"
-        ElseIf msg.Contains("居中") OrElse msg.Contains("对齐") Then
-            cmd.Action = "alignment"
-            cmd.Value = "center"
-        End If
-
-        cmd.Target = "all"
-        Return cmd
-    End Function
-
-    ''' <summary>
     ''' 判断消息是否与排版相关
     ''' </summary>
     Public Shared Function IsFormattingRelated(message As String) As Boolean
@@ -734,13 +477,6 @@ Public Class ChatFormatterAgent
         }
 
         Return newRequestKeywords.Any(Function(k) message.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
-    End Function
-
-    ''' <summary>
-    ''' 获取最后AI标注的段落结果（用于应用排版时）
-    ''' </summary>
-    Public Function GetLastTaggedParagraphs() As List(Of TaggedParagraph)
-        Return _lastTaggedParagraphs
     End Function
 
     ''' <summary>
@@ -821,18 +557,6 @@ Public Class ChatFormatterAgent
         For i = 0 To paragraphs.Count - 1
             Dim inferredTag = SmartFormattingOrchestrator.InferDefaultTagPublic(i, paragraphs.Count, paragraphs(i), Nothing)
             result.Add(New TaggedParagraph(i, inferredTag, "规则推断"))
-        Next
-        _lastTaggedParagraphs = result
-        Return Task.FromResult(result)
-    End Function
-
-    ''' <summary>
-    ''' 获取默认标注（全部标记为body.normal）- 仅作为最后降级
-    ''' </summary>
-    Private Function GetDefaultTaggingAsync(paragraphs As List(Of String)) As Task(Of List(Of TaggedParagraph))
-        Dim result As New List(Of TaggedParagraph)()
-        For i = 0 To paragraphs.Count - 1
-            result.Add(New TaggedParagraph(i, "body.normal", "默认降级"))
         Next
         _lastTaggedParagraphs = result
         Return Task.FromResult(result)

@@ -2,8 +2,9 @@
 name: word-document-agent
 description: Use for Word tasks that need document context, proofreading, formatting, heading and numbering restructuring, style application, translation, continuation, or multi-step document editing.
 application: Word
+default_for_application: true
 tags: word, docx, document, proofread, format, heading, numbering, style, translate, writing
-allowed-tools: ListParagraphs, GetParagraphInfo, SetParagraphFormat, FormatText, ApplyStyle, BeautifyDocument, ReplaceText, InsertText, GenerateTOC, InsertTable, FormatTable, ExecuteVBA
+allowed-tools: ListParagraphs, GetParagraphInfo, SetParagraphFormat, FormatText, ApplyStyle, BeautifyDocument, ReplaceText, InsertText, GenerateTOC, InsertTable
 intent_types: proofread, formatting, numbering, heading, writing, translation
 ---
 

@@ -112,60 +112,6 @@ Namespace Extensions
         End Function
 
         ''' <summary>
-        ''' 执行撤销操作
-        ''' </summary>
-        Public Function ExecuteUndo(appType As String, app As Object) As Boolean
-            Try
-                Dim undoManager As UndoManager = Nothing
-
-                Select Case appType.ToLower()
-                    Case "word"
-                        undoManager = GetWordUndoManager()
-                    Case "excel"
-                        undoManager = GetExcelUndoManager()
-                    Case "powerpoint"
-                        undoManager = GetPowerPointUndoManager()
-                    Case Else
-                        Return False
-                End Select
-
-                If undoManager IsNot Nothing Then
-                    Return undoManager.Undo(app, appType)
-                End If
-
-                Return False
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine("[UndoManagerExtension] 执行撤销失败: " & ex.Message)
-                Return False
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 显示撤销提示（状态栏或消息框）
-        ''' </summary>
-        Public Sub ShowUndoHint(appType As String, Optional showInMessageBox As Boolean = False)
-            Try
-                Dim hint As String = GetUndoHint(appType)
-
-                If showInMessageBox Then
-                    System.Windows.Forms.MessageBox.Show(
-                        hint,
-                        "撤销提示",
-                        System.Windows.Forms.MessageBoxButtons.OK,
-                        System.Windows.Forms.MessageBoxIcon.Information)
-                Else
-                    ' 显示在状态栏
-                    System.Diagnostics.Debug.WriteLine("[UndoManagerExtension] 撤销提示: " & hint)
-                    ' TODO: 如果有状态栏，在这里显示
-                End If
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine("[UndoManagerExtension] 显示撤销提示失败: " & ex.Message)
-            End Try
-        End Sub
-
-        ''' <summary>
         ''' 获取撤销历史
         ''' </summary>
         Public Function GetUndoHistory(appType As String) As List(Of UndoManager.UndoPoint)

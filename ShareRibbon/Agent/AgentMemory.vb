@@ -14,16 +14,20 @@ Namespace Agent
         Public Property IsSummary As Boolean = False
     End Class
 
-    ''' <summary>
-    ''' 记忆记录
-    ''' </summary>
-    Public Class MemoryRecord
+    Friend Class AgentLongTermMemoryData
+        Public Property TaskHistory As New List(Of AgentTaskRecord)()
+        Public Property LongTermMemory As New Dictionary(Of String, String)()
+    End Class
+
+    Friend Class AgentTaskRecord
         Public Property Id As String = Guid.NewGuid().ToString()
-        Public Property Content As String
-        Public Property Category As String
-        Public Property Tags As New List(Of String)()
         Public Property Timestamp As DateTime = DateTime.Now
-        Public Property RelevanceScore As Double = 0.0
+        Public Property UserInput As String
+        Public Property Intent As String
+        Public Property Plan As String
+        Public Property Result As String
+        Public Property Success As Boolean
+        Public Property ApplicationType As String
     End Class
 
     ''' <summary>
@@ -37,12 +41,11 @@ Namespace Agent
 
         ' === Short-term Memory (会话级，内存) ===
         Private ReadOnly _sessionHistory As New List(Of SessionMessage)()
-        Private Const MaxSessionMessages As Integer = 20
         Private Const CompactThreshold As Integer = 20
         Private Const CompactBatchSize As Integer = 10
 
         ' === Long-term Memory (跨会话，JSON文件) ===
-        Private _longTermData As RalphMemoryData
+        Private _longTermData As AgentLongTermMemoryData
         Private ReadOnly _memoryFilePath As String
         Private ReadOnly _lock As New Object()
 
@@ -121,18 +124,6 @@ Namespace Agent
             End SyncLock
         End Function
 
-        Public Function GetSessionMessageCount() As Integer
-            SyncLock _lock
-                Return _sessionHistory.Count
-            End SyncLock
-        End Function
-
-        Public Sub ClearSession()
-            SyncLock _lock
-                _sessionHistory.Clear()
-            End SyncLock
-        End Sub
-
         Private Async Function CompactOldMessagesAsync() As Task
             If SendAIRequest Is Nothing Then Return
 
@@ -179,7 +170,7 @@ Namespace Agent
                 SyncLock _lock
                     If File.Exists(_memoryFilePath) Then
                         Dim json = File.ReadAllText(_memoryFilePath)
-                        _longTermData = JsonConvert.DeserializeObject(Of RalphMemoryData)(json)
+                        _longTermData = JsonConvert.DeserializeObject(Of AgentLongTermMemoryData)(json)
                     End If
                 End SyncLock
             Catch ex As Exception
@@ -187,13 +178,12 @@ Namespace Agent
             End Try
 
             If _longTermData Is Nothing Then
-                _longTermData = New RalphMemoryData()
+                _longTermData = New AgentLongTermMemoryData()
             End If
 
             ' 确保集合初始化
-            If _longTermData.TaskHistory Is Nothing Then _longTermData.TaskHistory = New List(Of RalphTaskRecord)()
+            If _longTermData.TaskHistory Is Nothing Then _longTermData.TaskHistory = New List(Of AgentTaskRecord)()
             If _longTermData.LongTermMemory Is Nothing Then _longTermData.LongTermMemory = New Dictionary(Of String, String)()
-            If _longTermData.TaskTemplates Is Nothing Then _longTermData.TaskTemplates = New List(Of TaskTemplate)()
         End Sub
 
         Public Sub SaveLongTerm()
@@ -211,7 +201,7 @@ Namespace Agent
 
         Public Sub AddTaskRecord(result As AgentResult)
             SyncLock _lock
-                _longTermData.TaskHistory.Add(New RalphTaskRecord With {
+                _longTermData.TaskHistory.Add(New AgentTaskRecord With {
                     .UserInput = result.SessionId,
                     .Intent = "agent_task",
                     .Plan = $"迭代次数: {result.IterationsCompleted}",
@@ -225,13 +215,6 @@ Namespace Agent
                     _longTermData.TaskHistory.RemoveAt(0)
                 End If
 
-                SaveLongTerm()
-            End SyncLock
-        End Sub
-
-        Public Sub AddKnowledge(key As String, value As String)
-            SyncLock _lock
-                _longTermData.LongTermMemory(key) = value
                 SaveLongTerm()
             End SyncLock
         End Sub

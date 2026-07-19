@@ -63,14 +63,6 @@ Public Class Instruction
         Return String.Empty
     End Function
 
-    ''' <summary>获取目标类型</summary>
-    Public Function GetTargetType() As String
-        If Target IsNot Nothing AndAlso Target("type") IsNot Nothing Then
-            Return Target("type").ToString()
-        End If
-        Return String.Empty
-    End Function
-
     ''' <summary>获取操作描述（用于日志和展示）</summary>
     Public Function GetDescription() As String
         If Expected IsNot Nothing AndAlso Expected("description") IsNot Nothing Then

@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | **v0.2（评审修订）** |
 | 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：工具 JSON 有 `riskLevel` 字段；`Agent/Execution/SafetyGate.vb` 已接入 `ToolRegistry.ExecuteToolAsync`，在 COM 前同步裁决。当前最小版默认拒绝 VBA（`VBA_DISABLED`），risky/删除/全文替换返回 `SAFETY_NEEDS_APPROVAL` 且不执行；完整审批 UI、ContextPack 风险、影响面阈值和 RunTrace 事件仍待后续。 |
+| 实现状态 | **执行与审批主链已实现**：`SafetyGate` 在 COM 前裁决，VBA 默认拒绝；risky/删除/全文替换进入 Harness `awaiting_approval`，批准后以单次授权恢复执行，拒绝无副作用；Word capability fast-path 同样经过 Safety 并写 Trace。ContextPack 影响面阈值、企业策略和独立 RunTrace event 仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.6 |
 | 现有代码 | `Agent/Execution/SafetyGate.vb`、`Agent/Execution/SafetyChecker.vb`（VBA/代码字符串子模块）、工具 JSON 的 `riskLevel` 字段、`ToolRegistry` 执行前裁决 |
 | 关联 | [`tool-result-observation.md`](./tool-result-observation.md)、[`context-pack-schema.md`](./context-pack-schema.md) risks |

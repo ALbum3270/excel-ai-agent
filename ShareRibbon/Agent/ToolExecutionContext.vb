@@ -1,5 +1,9 @@
 Imports System.Collections.Generic
 Imports System.Linq
+Imports System.Security.Cryptography
+Imports System.Text
+Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq
 
 Namespace Agent
 
@@ -13,6 +17,8 @@ Namespace Agent
         Public Property CorrelationId As String
         Public Property PrimarySkillName As String
         Public Property AllowedTools As HashSet(Of String)
+        Public Property ApprovedTools As HashSet(Of String)
+        Public Property ApprovedToolCalls As HashSet(Of String)
         Public Property EnforceAllowedTools As Boolean = True
 
         Public Shared Function FromSession(session As AgentSession, skill As AgentSkill) As ToolExecutionContext
@@ -22,6 +28,8 @@ Namespace Agent
                 .CorrelationId = If(session?.Id, ""),
                 .PrimarySkillName = If(skill?.Name, ""),
                 .AllowedTools = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
+                .ApprovedTools = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
+                .ApprovedToolCalls = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
                 .EnforceAllowedTools = False
             }
 
@@ -53,6 +61,68 @@ Namespace Agent
         Public Function AllowedToolsText() As String
             If AllowedTools Is Nothing OrElse AllowedTools.Count = 0 Then Return ""
             Return String.Join(", ", AllowedTools.OrderBy(Function(id) id))
+        End Function
+
+        Public Sub ApproveTool(toolId As String, Optional params As JObject = Nothing)
+            If String.IsNullOrWhiteSpace(toolId) Then Return
+            If params IsNot Nothing Then
+                If ApprovedToolCalls Is Nothing Then ApprovedToolCalls = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                ApprovedToolCalls.Add(BuildApprovalKey(toolId, params))
+                Return
+            End If
+            If ApprovedTools Is Nothing Then ApprovedTools = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            ApprovedTools.Add(toolId.Trim())
+        End Sub
+
+        Public Function IsToolApproved(toolId As String, Optional params As JObject = Nothing) As Boolean
+            If params IsNot Nothing AndAlso ApprovedToolCalls IsNot Nothing Then
+                Return ApprovedToolCalls.Contains(BuildApprovalKey(toolId, params))
+            End If
+            Return ApprovedTools IsNot Nothing AndAlso
+                   Not String.IsNullOrWhiteSpace(toolId) AndAlso
+                   ApprovedTools.Contains(toolId.Trim())
+        End Function
+
+        Public Function ConsumeToolApproval(toolId As String, Optional params As JObject = Nothing) As Boolean
+            If params IsNot Nothing AndAlso ApprovedToolCalls IsNot Nothing Then
+                Dim approvalKey = BuildApprovalKey(toolId, params)
+                Return ApprovedToolCalls.Remove(approvalKey)
+            End If
+            If Not IsToolApproved(toolId, Nothing) Then Return False
+            Return ApprovedTools.Remove(toolId.Trim())
+        End Function
+
+        Public Shared Function BuildApprovalKey(toolId As String, params As JObject) As String
+            Dim normalizedToolId = If(toolId, "").Trim().ToLowerInvariant()
+            Dim canonicalParams = CanonicalizeToken(If(params, New JObject())).ToString(Formatting.None)
+            Dim bytes = Encoding.UTF8.GetBytes(canonicalParams)
+            Using sha = SHA256.Create()
+                Dim hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant()
+                Return normalizedToolId & ":" & hash
+            End Using
+        End Function
+
+        Private Shared Function CanonicalizeToken(token As JToken) As JToken
+            If token Is Nothing Then Return JValue.CreateNull()
+
+            If token.Type = JTokenType.Object Then
+                Dim source = DirectCast(token, JObject)
+                Dim result As New JObject()
+                For Each prop In source.Properties().OrderBy(Function(item) item.Name, StringComparer.Ordinal)
+                    result.Add(prop.Name, CanonicalizeToken(prop.Value))
+                Next
+                Return result
+            End If
+
+            If token.Type = JTokenType.Array Then
+                Dim result As New JArray()
+                For Each item In DirectCast(token, JArray)
+                    result.Add(CanonicalizeToken(item))
+                Next
+                Return result
+            End If
+
+            Return token.DeepClone()
         End Function
     End Class
 

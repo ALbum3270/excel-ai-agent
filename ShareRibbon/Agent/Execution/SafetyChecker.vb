@@ -69,19 +69,6 @@ Namespace Agent.Execution
             Return SafetyResult.Safe()
         End Function
 
-        ''' <summary>
-        ''' 批量检查多个代码片段
-        ''' </summary>
-        Public Shared Function CheckBatch(codes As List(Of String)) As List(Of SafetyResult)
-            Dim results As New List(Of SafetyResult)()
-            If codes IsNot Nothing Then
-                For Each code In codes
-                    results.Add(Check(code))
-                Next
-            End If
-            Return results
-        End Function
-
     End Class
 
     ''' <summary>

@@ -216,60 +216,6 @@ Namespace Handlers
             End Try
         End Function
 
-        ''' <summary>
-        ''' 应用设计主题
-        ''' </summary>
-        Public Sub ApplyTheme(themeName As String)
-            Try
-                If _app.ActivePresentation Is Nothing Then
-                    Return
-                End If
-
-                ' PowerPoint 主题路径通常在 Office 安装目录
-                ' 这里提供基础实现，实际可以扩展支持更多主题
-                Dim presentation As PowerPoint.Presentation = _app.ActivePresentation
-
-                System.Diagnostics.Debug.WriteLine(String.Format("[PptGenerationHandler] 应用主题: {0}", themeName))
-
-                ' 主题应用需要主题文件路径
-                ' presentation.ApplyTheme("C:\Program Files\Microsoft Office\root\Document Themes 16\" & themeName & ".thmx")
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine(String.Format("[PptGenerationHandler] 应用主题失败: {0}", ex.Message))
-            End Try
-        End Sub
-
-        ''' <summary>
-        ''' 批量设置幻灯片字体
-        ''' </summary>
-        Public Sub SetFontForAllSlides(fontName As String, Optional fontSize As Single = 0)
-            Try
-                If _app.ActivePresentation Is Nothing Then
-                    Return
-                End If
-
-                Dim presentation As PowerPoint.Presentation = _app.ActivePresentation
-
-                For Each slide As PowerPoint.Slide In presentation.Slides
-                    For Each shape As PowerPoint.Shape In slide.Shapes
-                        If shape.HasTextFrame Then
-                            If fontName <> "" Then
-                                shape.TextFrame.TextRange.Font.Name = fontName
-                            End If
-                            If fontSize > 0 Then
-                                shape.TextFrame.TextRange.Font.Size = fontSize
-                            End If
-                        End If
-                    Next
-                Next
-
-                System.Diagnostics.Debug.WriteLine(String.Format("[PptGenerationHandler] 设置字体: {0}", fontName))
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine(String.Format("[PptGenerationHandler] 设置字体失败: {0}", ex.Message))
-            End Try
-        End Sub
-
     End Class
 
 End Namespace

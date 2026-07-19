@@ -9,6 +9,8 @@ Namespace Agent.Harness
         Private ReadOnly _kernel As AgentKernel
         Private ReadOnly _runTraceStore As IRunTraceStore
         Private _currentRunId As String = ""
+        Private ReadOnly _runLock As New Object()
+        Private ReadOnly _pendingRuns As New Dictionary(Of String, PendingHarnessRun)(StringComparer.OrdinalIgnoreCase)
 
         Public Event PhaseChanged As EventHandler(Of HarnessPhaseChangedEventArgs) Implements IOfficeHarness.PhaseChanged
         Public Event StepChanged As EventHandler(Of HarnessStepChangedEventArgs) Implements IOfficeHarness.StepChanged
@@ -22,13 +24,27 @@ Namespace Agent.Harness
             AddHandler _kernel.OnStepCompleted, AddressOf HandleKernelStepCompleted
             AddHandler _kernel.OnPlanGenerated, AddressOf HandleKernelPlanGenerated
             AddHandler _kernel.OnExecutionExplained, AddressOf HandleKernelExecutionExplained
+            AddHandler _kernel.OnRequestApproval, AddressOf HandleKernelRequestApproval
         End Sub
 
         Public Async Function RunAsync(turn As UserTurn,
                                        cancellationToken As CancellationToken) As Task(Of HarnessRunResult) Implements IOfficeHarness.RunAsync
             Dim runId = Guid.NewGuid().ToString()
-            _currentRunId = runId
             Dim startedAt = DateTime.Now
+            Dim keepPending As Boolean = False
+
+            SyncLock _runLock
+                If _pendingRuns.Values.Any(Function(item) Not item.IsCompleted) Then
+                    Return New HarnessRunResult With {
+                        .RunId = runId,
+                        .Status = HarnessRunStatus.Failed,
+                        .UserMessage = "当前会话已有正在执行或等待审批的任务",
+                        .DebugMessage = "RUN_ALREADY_ACTIVE",
+                        .StartedAt = startedAt,
+                        .FinishedAt = DateTime.Now
+                    }
+                End If
+            End SyncLock
 
             If turn Is Nothing Then
                 Return New HarnessRunResult With {
@@ -40,6 +56,7 @@ Namespace Agent.Harness
                     .FinishedAt = DateTime.Now
                 }
             End If
+            _currentRunId = runId
 
             Try
                 cancellationToken.ThrowIfCancellationRequested()
@@ -50,18 +67,50 @@ Namespace Agent.Harness
                 If officeContext Is Nothing Then
                     officeContext = New Agent.Context.OfficeContext With {.AppType = turn.AppType}
                 End If
+                Dim contextPack = If(turn.ContextPack,
+                                     Agent.Context.ContextPack.FromOfficeContext(officeContext, turn.HostContextText))
+                turn.ContextPack = contextPack
 
                 RaiseEvent ContextReady(Me, New HarnessContextEventArgs With {
                     .RunId = runId,
                     .AppType = turn.AppType,
-                    .ContextText = If(turn.HostContextText, "")
+                    .ContextText = contextPack.ToPromptText(),
+                    .ContextPackJson = contextPack.ToJson()
                 })
 
                 RaisePhase(runId, "executing", "AgentKernel executing")
-                Dim agentResult = Await _kernel.ExecuteAsync(If(turn.Text, ""),
-                                                             If(turn.AppType, ""),
-                                                             If(turn.HostContextText, ""),
-                                                             officeContext)
+                Dim pending As New PendingHarnessRun With {
+                    .RunId = runId,
+                    .Turn = turn,
+                    .StartedAt = startedAt,
+                    .ApprovalSignal = New TaskCompletionSource(Of Boolean)(TaskCreationOptions.RunContinuationsAsynchronously)
+                }
+                SyncLock _runLock
+                    _pendingRuns(runId) = pending
+                End SyncLock
+
+                pending.AgentTask = _kernel.ExecuteAsync(If(turn.Text, ""),
+                                                         If(turn.AppType, ""),
+                                                         If(turn.HostContextText, ""),
+                                                         officeContext,
+                                                         contextPack,
+                                                         turn.TaskSpec,
+                                                         turn.SelectedSkills)
+                Dim first = Await Task.WhenAny(pending.AgentTask, pending.ApprovalSignal.Task)
+                If first Is pending.ApprovalSignal.Task AndAlso Not pending.AgentTask.IsCompleted Then
+                    keepPending = True
+                    SafeSetRunStatus(runId, "awaiting_approval", pending.ApprovalMessage, ExceptionClassifier.CodeSafetyNeedsApproval)
+                    RaisePhase(runId, "awaiting_approval", pending.ApprovalMessage)
+                    Return New HarnessRunResult With {
+                        .RunId = runId,
+                        .Status = HarnessRunStatus.AwaitingApproval,
+                        .UserMessage = pending.ApprovalMessage,
+                        .StartedAt = startedAt
+                    }
+                End If
+
+                Dim agentResult = Await pending.AgentTask
+                pending.IsCompleted = True
 
                 cancellationToken.ThrowIfCancellationRequested()
 
@@ -105,8 +154,77 @@ Namespace Agent.Harness
                     .FinishedAt = DateTime.Now
                 }
             Finally
-                _currentRunId = ""
+                If Not keepPending Then
+                    RemovePendingRun(runId)
+                    _currentRunId = ""
+                End If
             End Try
+        End Function
+
+        Public Async Function ApproveAsync(runId As String,
+                                           approved As Boolean,
+                                           cancellationToken As CancellationToken) As Task(Of HarnessRunResult) Implements IOfficeHarness.ApproveAsync
+            Dim pending = GetPendingRun(runId)
+            If pending Is Nothing OrElse pending.AgentTask Is Nothing Then
+                Return MissingRunResult(runId)
+            End If
+
+            cancellationToken.ThrowIfCancellationRequested()
+            Dim callback = pending.ApprovalCallback
+            pending.ApprovalCallback = Nothing
+            If callback Is Nothing Then Return MissingRunResult(runId)
+            SafeAppendApprovalStep(runId,
+                                   -2,
+                                   "approval.decision",
+                                   If(approved, "approved", "rejected"),
+                                   If(approved, "用户已批准高风险操作", "用户已拒绝高风险操作"),
+                                   If(approved, "", ExceptionClassifier.CodeSafetyBlocked),
+                                   New With {.approved = approved},
+                                   DateTime.Now)
+            callback(approved)
+            SafeSetRunStatus(runId, "running", If(approved, "审批通过，继续执行", "审批拒绝，正在收敛执行结果"), "")
+
+            Dim agentResult = Await pending.AgentTask
+            pending.IsCompleted = True
+            Dim succeeded = agentResult IsNot Nothing AndAlso agentResult.Success
+            Dim status = If(succeeded, HarnessRunStatus.Succeeded, HarnessRunStatus.Failed)
+            Dim message = If(agentResult?.Message, If(succeeded, "执行完成", "执行失败"))
+            SafeCompleteRun(runId, If(succeeded, "succeeded", "failed"), message, If(succeeded, "", ExceptionClassifier.CodeUnknown), DateTime.Now)
+            RaisePhase(runId, If(succeeded, "completed", "failed"), message)
+            RemovePendingRun(runId)
+            _currentRunId = ""
+            Return New HarnessRunResult With {
+                .RunId = runId,
+                .Status = status,
+                .UserMessage = message,
+                .DebugMessage = message,
+                .AgentSessionId = If(agentResult?.SessionId, ""),
+                .StartedAt = pending.StartedAt,
+                .FinishedAt = DateTime.Now
+            }
+        End Function
+
+        Public Async Function CancelAsync(runId As String,
+                                          cancellationToken As CancellationToken) As Task(Of HarnessRunResult) Implements IOfficeHarness.CancelAsync
+            Dim pending = GetPendingRun(runId)
+            If pending Is Nothing Then Return MissingRunResult(runId)
+            If pending.ApprovalCallback IsNot Nothing Then
+                Return Await ApproveAsync(runId, False, cancellationToken)
+            End If
+
+            Return New HarnessRunResult With {
+                .RunId = runId,
+                .Status = HarnessRunStatus.Failed,
+                .UserMessage = "当前步骤正在执行，尚不能安全中断宿主 COM 操作",
+                .DebugMessage = "CANCEL_NOT_AT_SAFE_POINT",
+                .StartedAt = pending.StartedAt,
+                .FinishedAt = DateTime.Now
+            }
+        End Function
+
+        Public Function ResumeAsync(runId As String,
+                                    cancellationToken As CancellationToken) As Task(Of HarnessRunResult) Implements IOfficeHarness.ResumeAsync
+            Return ApproveAsync(runId, True, cancellationToken)
         End Function
 
         Private Sub HandleKernelStatusChanged(status As String)
@@ -147,6 +265,84 @@ Namespace Agent.Harness
             End Try
         End Sub
 
+        Private Sub HandleKernelRequestApproval(message As String, callback As Action(Of Boolean))
+            Dim pending = GetPendingRun(_currentRunId)
+            If pending Is Nothing Then
+                callback(False)
+                Return
+            End If
+            pending.ApprovalMessage = If(message, "该操作需要用户确认")
+            pending.ApprovalCallback = callback
+            SafeAppendApprovalStep(pending.RunId,
+                                   -1,
+                                   "approval.request",
+                                   "awaiting_approval",
+                                   pending.ApprovalMessage,
+                                   ExceptionClassifier.CodeSafetyNeedsApproval,
+                                   New With {.message = pending.ApprovalMessage},
+                                   DateTime.Now)
+            pending.ApprovalSignal.TrySetResult(True)
+        End Sub
+
+        Private Sub SafeAppendApprovalStep(runId As String,
+                                           seq As Integer,
+                                           toolId As String,
+                                           status As String,
+                                           message As String,
+                                           errorCode As String,
+                                           observation As Object,
+                                           occurredAt As DateTime)
+            Try
+                _runTraceStore.AppendStep(runId,
+                                          seq,
+                                          toolId,
+                                          status,
+                                          message,
+                                          errorCode,
+                                          observation,
+                                          occurredAt,
+                                          occurredAt)
+            Catch ex As Exception
+                AppLogger.Warn("OfficeHarness", $"Append approval trace failed: {AppLogger.Redact(ex.Message)}")
+            End Try
+        End Sub
+
+        Private Function GetPendingRun(runId As String) As PendingHarnessRun
+            If String.IsNullOrWhiteSpace(runId) Then Return Nothing
+            SyncLock _runLock
+                Dim pending As PendingHarnessRun = Nothing
+                If _pendingRuns.TryGetValue(runId, pending) Then Return pending
+            End SyncLock
+            Return Nothing
+        End Function
+
+        Private Sub RemovePendingRun(runId As String)
+            SyncLock _runLock
+                _pendingRuns.Remove(runId)
+            End SyncLock
+        End Sub
+
+        Private Shared Function MissingRunResult(runId As String) As HarnessRunResult
+            Return New HarnessRunResult With {
+                .RunId = If(runId, ""),
+                .Status = HarnessRunStatus.Failed,
+                .UserMessage = "未找到等待审批的任务",
+                .DebugMessage = "RUN_NOT_AWAITING_APPROVAL",
+                .FinishedAt = DateTime.Now
+            }
+        End Function
+
+        Private Class PendingHarnessRun
+            Public Property RunId As String
+            Public Property Turn As UserTurn
+            Public Property StartedAt As DateTime
+            Public Property AgentTask As Task(Of AgentResult)
+            Public Property ApprovalSignal As TaskCompletionSource(Of Boolean)
+            Public Property ApprovalCallback As Action(Of Boolean)
+            Public Property ApprovalMessage As String = ""
+            Public Property IsCompleted As Boolean
+        End Class
+
         Private Sub SafeStartRun(runId As String, turn As UserTurn, startedAt As DateTime)
             Try
                 _runTraceStore.StartRun(runId, turn, startedAt)
@@ -160,6 +356,14 @@ Namespace Agent.Harness
                 _runTraceStore.CompleteRun(runId, status, finalMessage, errorCode, finishedAt)
             Catch ex As Exception
                 AppLogger.Warn("OfficeHarness", $"Complete run trace failed: {AppLogger.Redact(ex.Message)}")
+            End Try
+        End Sub
+
+        Private Sub SafeSetRunStatus(runId As String, status As String, message As String, errorCode As String)
+            Try
+                _runTraceStore.SetRunStatus(runId, status, message, errorCode)
+            Catch ex As Exception
+                AppLogger.Warn("OfficeHarness", $"Set run trace status failed: {AppLogger.Redact(ex.Message)}")
             End Try
         End Sub
 

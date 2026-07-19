@@ -79,16 +79,6 @@ Public Class StyleGuideResource
 End Class
 
 ''' <summary>
-''' 资源类型枚举
-''' </summary>
-Public Enum ReformatResourceType
-    ''' <summary>排版模板（结构化JSON配置）</summary>
-    Template = 0
-    ''' <summary>排版规范（文本规范说明）</summary>
-    StyleGuide = 1
-End Enum
-
-''' <summary>
 ''' 模板来源类型枚举
 ''' </summary>
 Public Enum TemplateSourceType

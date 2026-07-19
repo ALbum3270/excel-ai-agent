@@ -108,23 +108,6 @@ Namespace Services.Reformat
         End Function
 
         ''' <summary>
-        ''' 获取指定ID的场景
-        ''' </summary>
-        Public Function GetScenario(id As String) As FormattingScenario
-            If _scenarios.ContainsKey(id) Then
-                Return _scenarios(id)
-            End If
-            Return Nothing
-        End Function
-
-        ''' <summary>
-        ''' 获取所有场景列表
-        ''' </summary>
-        Public Function GetAllScenarios() As List(Of FormattingScenario)
-            Return _scenarios.Values.ToList()
-        End Function
-
-        ''' <summary>
         ''' 构建场景的结构指导文本
         ''' </summary>
         Public Shared Function BuildStructureGuidanceText(scenario As FormattingScenario) As String

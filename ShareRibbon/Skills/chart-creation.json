@@ -1,6 +1,7 @@
 {
   "id": "chart-creation",
   "name": "图表生成",
+  "application": "Excel",
   "description": "在Excel或PPT中创建各类数据可视化图表",
   "triggerPatterns": ["图表", "图形", "可视化", "柱状图", "折线图", "饼图", "散点图", "条形图", "面积图", "雷达图", "漏斗图"],
   "requiredTools": ["CreateChart", "FormatRange", "ApplyFormula", "DataAnalysis"],

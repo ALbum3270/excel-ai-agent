@@ -16,7 +16,11 @@ function Invoke-Step {
 
     Write-Host ""
     Write-Host "==> $Name"
+    $global:LASTEXITCODE = 0
     & $Action
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $LASTEXITCODE"
+    }
     Write-Host "PASS: $Name"
 }
 
@@ -36,7 +40,8 @@ try {
         "scripts\smoke-skills-registry.ps1",
         "scripts\smoke-skills-usage-migration.ps1",
         "scripts\smoke-word-capability-registry.ps1",
-        "scripts\smoke-ai-gateway-provider.ps1"
+        "scripts\smoke-ai-gateway-provider.ps1",
+        "scripts\run-golden-l0.ps1"
     )
 
     foreach ($smoke in $smokeScripts) {
@@ -46,7 +51,12 @@ try {
         }
 
         Invoke-Step $smoke {
-            powershell -NoProfile -ExecutionPolicy Bypass -File $fullPath
+            if ($smoke -eq "scripts\run-golden-l0.ps1") {
+                powershell -NoProfile -ExecutionPolicy Bypass -File $fullPath -Configuration $Configuration
+            }
+            else {
+                powershell -NoProfile -ExecutionPolicy Bypass -File $fullPath
+            }
         }
     }
 

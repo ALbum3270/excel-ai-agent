@@ -196,9 +196,6 @@
   <data name="autocomplete" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\autocomplete.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>
-  <data name="ralph_loop" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\js\ralph-loop.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
-  </data>
   <data name="agent_protocol" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\agent-protocol.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>
@@ -213,9 +210,6 @@
   </data>
   <data name="reformat_chat" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\reformat-chat.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
-  </data>
-  <data name="config_panel" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\js\config-panel.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
   </data>
   <data name="proofread_ui" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\js\proofread-ui.js;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
@@ -240,9 +234,6 @@
   </data>
   <data name="translate" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\translate.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
-  </data>
-  <data name="autocomplete1" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\autocomplete.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
   <data name="promptconfig" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\promptconfig.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>

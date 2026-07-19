@@ -15,11 +15,6 @@ Public Class Spotlight
     Private _currentRow As Integer = 0
     Private _currentColumn As Integer = 0
 
-    ' 条件格式名称
-    Private Const ROW_FORMAT_NAME As String = "SpotlightRow"
-    Private Const COLUMN_FORMAT_NAME As String = "SpotlightColumn"
-    Private Const CELL_FORMAT_NAME As String = "SpotlightCell"
-
     ' 聚光灯配置 - 修改默认颜色为浅灰色
     Private _rowColor As Integer = RGB(230, 230, 230) ' 浅灰色
     Private _columnColor As Integer = RGB(230, 230, 230) ' 浅灰色
@@ -40,41 +35,6 @@ Public Class Spotlight
 
     ' 私有构造函数，防止外部直接创建实例
     Private Sub New()
-    End Sub
-
-    ' 检查聚光灯是否激活
-    Public ReadOnly Property IsActive As Boolean
-        Get
-            Return _spotlightActive
-        End Get
-    End Property
-
-    ' 切换行显示
-    Public Sub ToggleRowDisplay()
-        _rowDisplay = Not _rowDisplay
-        If _spotlightActive Then
-            UpdateHighlight()
-        End If
-    End Sub
-
-    ' 切换列显示
-    Public Sub ToggleColumnDisplay()
-        _columnDisplay = Not _columnDisplay
-        If _spotlightActive Then
-            UpdateHighlight()
-        End If
-    End Sub
-
-    ' 设置聚光灯颜色
-    Public Sub SetColors(rowColor As Integer, columnColor As Integer, cellColor As Integer)
-        _rowColor = rowColor
-        _columnColor = columnColor
-        _cellColor = cellColor
-
-        ' 如果聚光灯已激活，立即应用新颜色
-        If _spotlightActive Then
-            ApplyHighlight()
-        End If
     End Sub
 
     ' 显示颜色选择对话框
@@ -345,10 +305,5 @@ Public Class Spotlight
             _appEvents.ScreenUpdating = True
             Debug.WriteLine("应用条件格式时出错: " & ex.Message)
         End Try
-    End Sub
-
-    ' 添加一个清除所有高亮的公共方法
-    Public Sub ClearAllHighlights()
-        RemoveHighlight()
     End Sub
 End Class

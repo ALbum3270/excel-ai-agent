@@ -10,11 +10,12 @@ Namespace Agent
     ''' ReAct 循环引擎 - 核心执行逻辑
     ''' Think -> Plan -> Act -> Observe -> Reflect
     ''' </summary>
-    Public Class LoopEngine
+    Public Partial Class LoopEngine
         Private ReadOnly _toolRegistry As ToolRegistry
         Private ReadOnly _memory As AgentMemory
         Private ReadOnly _promptManager As PromptManager
         Private ReadOnly _undoManager As Core.UndoManager
+        Private _multimodalRepairDisabledForRun As Boolean
 
         ' 循环限制
         Private Const MaxIterations As Integer = 15
@@ -29,12 +30,13 @@ Namespace Agent
         Public Property OnRequestApproval As Func(Of String, Task(Of Boolean))
         Public Property OnPlanGenerated As Action(Of ExecutionPlan)
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
+        Public Property SendAIRequestWithMessages As Func(Of JArray, Task(Of String))
 
         Public Sub New(toolRegistry As ToolRegistry, memory As AgentMemory, promptManager As PromptManager)
             _toolRegistry = toolRegistry
             _memory = memory
             _promptManager = promptManager
-            _undoManager = New Core.UndoManager(10) ' 最多保存 10 个撤销点
+            _undoManager = New Core.UndoManager()
         End Sub
 
         ''' <summary>
@@ -45,17 +47,33 @@ Namespace Agent
                                         Optional skill As AgentSkill = Nothing) As Task(Of AgentResult)
             Dim noProgressCount As Integer = 0
             Dim replanAttempts As Integer = 0
+            _multimodalRepairDisabledForRun = False
 
             Try
                 ' Phase 1: 生成 Spec
                 OnStatusChanged?.Invoke("正在分析任务...")
-                session.Spec = Await GenerateSpecAsync(session)
+                If session.Spec Is Nothing Then
+                    session.Spec = Await GenerateSpecAsync(session)
+                Else
+                    AppLogger.Info("LoopEngine", $"Use precomputed TaskSpec goal={AppLogger.Redact(session.Spec.Goal)}")
+                End If
 
                 ' Phase 2: 生成计划
                 OnStatusChanged?.Invoke("正在制定执行计划...")
                 session.Plan = Await GeneratePlanAsync(session, systemPrompt, skill)
                 If session.Plan Is Nothing OrElse session.Plan.Steps.Count = 0 Then
-                    Return AgentResult.Failed(session.Id, "规划失败：无法生成执行计划")
+                    Dim capabilityGap = If(session.Plan?.CapabilityGap, "")
+                    Dim planFailure = If(String.IsNullOrWhiteSpace(capabilityGap),
+                                         "规划失败：模型未生成可执行计划",
+                                         "当前能力无法完整执行：" & capabilityGap)
+                    OnStatusChanged?.Invoke(planFailure)
+                    Return AgentResult.Failed(session.Id, planFailure)
+                End If
+
+                Dim coverageError = ValidatePlanCoverage(session.Spec, session.Plan)
+                If Not String.IsNullOrWhiteSpace(coverageError) Then
+                    OnStatusChanged?.Invoke(coverageError)
+                    Return AgentResult.Failed(session.Id, coverageError)
                 End If
 
                 ' 通知计划已生成
@@ -129,7 +147,6 @@ Namespace Agent
                     Const MaxFixAttempts As Integer = 3
                     Dim fixAttempt As Integer = 0
                     Dim toolResult As ToolResult = Nothing
-                    Dim originalToolCall = toolCall
                     Dim stepStartedAt = DateTime.Now
 
                     ' 多轮修复循环
@@ -146,7 +163,34 @@ Namespace Agent
                         Else
                             If Not String.IsNullOrWhiteSpace(normalized) Then Debug.WriteLine($"[LoopEngine] {normalized}")
                             ' 执行工具
-                            toolResult = Await _toolRegistry.ExecuteToolAsync(executionContext, toolCall.ToolId, toolCall.Parameters)
+                            toolResult = ValidateObservedOutcome(
+                                Await _toolRegistry.ExecuteToolAsync(executionContext, toolCall.ToolId, toolCall.Parameters))
+                        End If
+
+                        If Not toolResult.Success AndAlso
+                           String.Equals(toolResult.ErrorCode, ExceptionClassifier.CodeSafetyNeedsApproval, StringComparison.OrdinalIgnoreCase) AndAlso
+                           OnRequestApproval IsNot Nothing Then
+                            OnStatusChanged?.Invoke($"工具 {toolCall.ToolId} 正在等待用户确认...")
+                            Dim approved = Await OnRequestApproval(If(toolResult.UserMessage, toolResult.Message))
+                            If approved Then
+                                executionContext.ApproveTool(toolCall.ToolId, toolCall.Parameters)
+                                OnStatusChanged?.Invoke($"用户已批准工具 {toolCall.ToolId}，继续执行...")
+                                toolResult = ValidateObservedOutcome(
+                                    Await _toolRegistry.ExecuteToolAsync(executionContext, toolCall.ToolId, toolCall.Parameters))
+                            Else
+                                toolResult = ToolResult.Failed(
+                                    toolCall.ToolId,
+                                    "用户拒绝高风险操作",
+                                    errorCode:=ExceptionClassifier.CodeSafetyBlocked,
+                                    userMessage:="已取消该高风险操作",
+                                    recoverable:=False,
+                                    observation:=New JObject From {
+                                        {"kind", "approval"},
+                                        {"summary", "用户拒绝高风险操作"},
+                                        {"changed", False},
+                                        {"warnings", New JArray("approval_rejected")}
+                                    })
+                            End If
                         End If
 
                         If toolResult.Success Then
@@ -190,7 +234,7 @@ Namespace Agent
 
                             Try
                                 ' 请求 AI 修复
-                                Dim fixedResponse = Await SendAIRequest(fixPrompt, systemPrompt, Nothing)
+                                Dim fixedResponse = Await SendRepairRequestAsync(fixPrompt, systemPrompt, toolResult)
                                 Dim fixedJson = ExtractJson(fixedResponse)
 
                                 If Not String.IsNullOrEmpty(fixedJson) Then
@@ -252,6 +296,14 @@ Namespace Agent
                         OnStepCompleted?.Invoke(stepIndex, False, If(toolResult.UserMessage, toolResult.Message))
                         AppLogger.Warn("LoopEngine", $"Step failed: {toolResult.ToObserveSummary()}")
 
+                        If Not toolResult.Recoverable Then
+                            Dim terminalFailure = $"任务因不可恢复错误停止: {toolResult.ToObserveSummary()}"
+                            session.Status = AgentStatus.Failed
+                            OnStatusChanged?.Invoke(terminalFailure)
+                            AppLogger.Warn("LoopEngine", terminalFailure)
+                            Return AgentResult.Failed(session.Id, terminalFailure)
+                        End If
+
                         ' 失败且多轮修复失败，提示可以撤销
                         If fixAttempt >= MaxFixAttempts AndAlso undoPoint IsNot Nothing Then
                             Dim undoHint = _undoManager.GetUndoHint(If(session.AppType, "Unknown"))
@@ -307,6 +359,14 @@ Namespace Agent
                     Return AgentResult.Failed(session.Id, failMsg)
                 End If
 
+                Dim outcomeError = ValidateExecutionOutcome(session)
+                If Not String.IsNullOrWhiteSpace(outcomeError) Then
+                    session.Status = AgentStatus.Failed
+                    OnStatusChanged?.Invoke(outcomeError)
+                    AppLogger.Warn("LoopEngine", outcomeError)
+                    Return AgentResult.Failed(session.Id, outcomeError)
+                End If
+
                 ' 完成
                 session.Status = AgentStatus.Completed
                 Dim finalMsg = $"任务完成，共执行 {session.CurrentIteration} 个迭代"
@@ -323,442 +383,6 @@ Namespace Agent
             End Try
         End Function
 
-#Region "Private Methods"
-
-        Private Function BuildExecutionExplanation(stepIndex As Integer,
-                                                   planStep As PlanStep,
-                                                   toolCall As ToolCall,
-                                                   toolResult As ToolResult,
-                                                   fixAttempts As Integer,
-                                                   undoPoint As Core.UndoManager.UndoPoint,
-                                                   observation As String,
-                                                   startedAt As DateTime,
-                                                   finishedAt As DateTime) As ExecutionExplanation
-            Dim tool = If(toolCall Is Nothing, Nothing, _toolRegistry.GetTool(toolCall.ToolId))
-            Dim toolId = If(toolCall?.ToolId, "")
-            Dim toolName = If(tool?.Name, toolId)
-            Dim category = If(tool?.Category, "")
-            Dim risk = If(tool?.RiskLevel, "unknown")
-            Dim paramsJson = If(toolCall?.Parameters Is Nothing, "{}", toolCall.Parameters.ToString(Formatting.None))
-            Dim success = toolResult IsNot Nothing AndAlso toolResult.Success
-            Dim message = If(toolResult?.Message, "")
-            Dim skillName = ExtractResultDataValue(toolResult, "skillName")
-            Dim scriptFileName = ExtractResultDataValue(toolResult, "scriptFileName")
-            Dim mcpToolName = ExtractResultDataValue(toolResult, "mcpToolName")
-            Dim mcpStatus = ExtractResultDataValue(toolResult, "mcpStatus")
-            Dim failureReason = If(success, "", ExtractResultDataValue(toolResult, "failureReason"))
-            If String.IsNullOrWhiteSpace(failureReason) AndAlso Not success Then failureReason = message
-            Dim verb = If(success, "已完成", "未完成")
-            Dim fixText = If(fixAttempts > 0, $"，期间自动修复 {fixAttempts} 次", "")
-            Dim skillText = If(String.IsNullOrWhiteSpace(skillName), "", $"，Skill: {skillName}")
-            Dim scriptText = If(String.IsNullOrWhiteSpace(scriptFileName), "", $"，脚本: {scriptFileName}")
-            Dim mcpText = If(String.IsNullOrWhiteSpace(mcpToolName), "", $"，MCP: {mcpToolName}")
-            Dim elapsedMs = CLng(Math.Max(0, (finishedAt - startedAt).TotalMilliseconds))
-            If toolResult IsNot Nothing AndAlso toolResult.ElapsedMs > 0 Then elapsedMs = toolResult.ElapsedMs
-            Dim undoHint = If(undoPoint Is Nothing, "", _undoManager.GetUndoHint(If(undoPoint.AppType, "")))
-            Dim undoPointName = If(undoPoint?.Name, "")
-            Dim canUndo = undoPoint IsNot Nothing AndAlso undoPoint.CanUndo
-            Dim beforeSummary = $"准备执行步骤 {stepIndex + 1}: {If(planStep?.Description, "")}；工具: {toolId}；参数: {paramsJson}"
-            Dim afterSummary = If(observation, message)
-            Dim observationJson = SerializeCompactJson(If(toolResult?.Observation, Nothing), 8192)
-            Dim dataSummaryJson = SerializeCompactJson(BuildDataSummary(toolResult), 4096)
-            Dim repairSummary = If(fixAttempts > 0,
-                                   If(success, $"AI 自动修复 {fixAttempts} 次后成功", $"AI 自动修复 {fixAttempts} 次后仍失败"),
-                                   "")
-            Dim text = $"步骤 {stepIndex + 1} {verb}：调用 {toolName}（{toolId}）{skillText}{scriptText}{mcpText}{fixText}。{message}"
-
-            Return New ExecutionExplanation With {
-                .StepIndex = stepIndex,
-                .StepDescription = If(planStep?.Description, ""),
-                .ToolId = toolId,
-                .ToolName = toolName,
-                .ToolCategory = category,
-                .RiskLevel = risk,
-                .ParametersJson = paramsJson,
-                .StartedAt = startedAt,
-                .FinishedAt = finishedAt,
-                .ElapsedMs = elapsedMs,
-                .BeforeSummary = beforeSummary,
-                .AfterSummary = afterSummary,
-                .ObservationJson = observationJson,
-                .DataSummaryJson = dataSummaryJson,
-                .Success = success,
-                .Message = message,
-                .SkillName = skillName,
-                .ScriptFileName = scriptFileName,
-                .McpToolName = mcpToolName,
-                .McpStatus = mcpStatus,
-                .FailureReason = failureReason,
-                .UndoPointName = undoPointName,
-                .UndoHint = undoHint,
-                .CanUndo = canUndo,
-                .AutoRepairSummary = repairSummary,
-                .FixAttempts = fixAttempts,
-                .ExplanationText = text
-            }
-        End Function
-
-        Private Function BuildDataSummary(toolResult As ToolResult) As Object
-            If toolResult Is Nothing OrElse toolResult.Data Is Nothing Then Return Nothing
-
-            Try
-                Dim token = JToken.FromObject(toolResult.Data)
-                If token.Type = JTokenType.Array Then
-                    Dim arr = CType(token, JArray)
-                    Return New JObject From {
-                        {"type", "array"},
-                        {"count", arr.Count},
-                        {"preview", CloneFirstItems(arr, 5)}
-                    }
-                End If
-
-                If token.Type = JTokenType.Object Then
-                    Dim obj = CType(token, JObject)
-                    Dim summary As New JObject From {
-                        {"type", "object"},
-                        {"keys", BuildStringArray(obj.Properties().Select(Function(p) p.Name).Take(20))}
-                    }
-
-                    If obj("total") IsNot Nothing Then summary("total") = obj("total")
-                    If obj("returned") IsNot Nothing Then summary("returned") = obj("returned")
-                    If obj("truncated") IsNot Nothing Then summary("truncated") = obj("truncated")
-                    If obj("items") IsNot Nothing AndAlso obj("items").Type = JTokenType.Array Then
-                        summary("itemsPreview") = CloneFirstItems(CType(obj("items"), JArray), 5)
-                    End If
-
-                    Return summary
-                End If
-
-                Return token
-            Catch ex As Exception
-                AppLogger.Debug("LoopEngine", "BuildDataSummary failed", ex)
-                Return Nothing
-            End Try
-        End Function
-
-        Private Function CloneFirstItems(items As JArray, maxItems As Integer) As JArray
-            Dim result As New JArray()
-            If items Is Nothing Then Return result
-
-            For Each item In items.Take(Math.Max(0, maxItems))
-                result.Add(item.DeepClone())
-            Next
-
-            Return result
-        End Function
-
-        Private Function BuildStringArray(items As IEnumerable(Of String)) As JArray
-            Dim result As New JArray()
-            If items Is Nothing Then Return result
-
-            For Each item In items
-                result.Add(If(item, ""))
-            Next
-
-            Return result
-        End Function
-
-        Private Function SerializeCompactJson(value As Object, maxLength As Integer) As String
-            If value Is Nothing Then Return ""
-
-            Try
-                Dim json = JsonConvert.SerializeObject(value, Formatting.None)
-                If maxLength > 0 AndAlso json.Length > maxLength Then
-                    Return json.Substring(0, maxLength) & "...(truncated)"
-                End If
-                Return json
-            Catch ex As Exception
-                AppLogger.Debug("LoopEngine", "SerializeCompactJson failed", ex)
-                Return ""
-            End Try
-        End Function
-
-        Private Function ExtractResultDataValue(toolResult As ToolResult, key As String) As String
-            If toolResult Is Nothing OrElse toolResult.Data Is Nothing OrElse String.IsNullOrWhiteSpace(key) Then Return ""
-
-            Try
-                Dim obj = JObject.FromObject(toolResult.Data)
-                Dim token = obj.SelectToken(key)
-                If token Is Nothing Then Return ""
-                Return token.ToString()
-            Catch ex As Exception
-                AppLogger.Debug("LoopEngine", $"ExtractResultDataValue key={key} failed", ex)
-                Return ""
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 生成任务 Spec
-        ''' </summary>
-        Private Async Function GenerateSpecAsync(session As AgentSession) As Task(Of AgentTaskSpec)
-            Dim spec As New AgentTaskSpec()
-            Try
-                Dim prompt = $"分析以下需求，提取结构化任务规格：
-
-需求: {session.UserRequest}
-
-返回 JSON：
-```json
-{{
-  ""goal"": ""一句话描述核心目标"",
-  ""constraints"": [""约束1""],
-  ""success_criteria"": [""成功标准1""],
-  ""complexity"": ""simple|medium|complex""
-}}
-```
-
-complexity 规则：
-- simple：单一操作，步骤数 <= 2，无需用户确认
-- medium：2-5个步骤，建议用户确认
-- complex：步骤多或逻辑复杂，必须用户确认"
-
-                Dim response = Await SendAIRequest(prompt,
-                    "你是一个任务分析专家。只返回JSON，不要解释。", Nothing)
-
-                Dim jsonStr = ExtractJson(response)
-                If Not String.IsNullOrEmpty(jsonStr) Then
-                    Dim obj = JObject.Parse(jsonStr)
-                    spec.Goal = If(obj("goal")?.ToString(), session.UserRequest)
-                    spec.Complexity = If(obj("complexity")?.ToString(), "medium")
-
-                    Dim constraints = TryCast(obj("constraints"), JArray)
-                    If constraints IsNot Nothing Then
-                        For Each c In constraints
-                            spec.Constraints.Add(c.ToString())
-                        Next
-                    End If
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"[LoopEngine] Spec生成失败: {ex.Message}")
-            End Try
-            Return spec
-        End Function
-
-        ''' <summary>
-        ''' 生成执行计划
-        ''' </summary>
-        Private Async Function GeneratePlanAsync(session As AgentSession,
-                                                  systemPrompt As String,
-                                                  skill As AgentSkill) As Task(Of ExecutionPlan)
-            Dim plan As New ExecutionPlan()
-            Try
-                Dim prompt = _promptManager.BuildPlanningPrompt(session, systemPrompt, skill)
-                Dim response = Await SendAIRequest(prompt, systemPrompt, _memory.GetRecentMessages(5))
-
-                Dim jsonStr = ExtractJson(response)
-                If String.IsNullOrEmpty(jsonStr) Then Return Nothing
-
-                Dim obj = JObject.Parse(jsonStr)
-                plan.Understanding = obj("understanding")?.ToString()
-                plan.Summary = obj("summary")?.ToString()
-
-                Dim stepsArray = TryCast(obj("steps"), JArray)
-                If stepsArray IsNot Nothing Then
-                    Dim stepNum = 1
-                    For Each item In stepsArray
-                        plan.Steps.Add(New PlanStep With {
-                            .StepNumber = stepNum,
-                            .Description = item("description")?.ToString(),
-                            .Code = item("code")?.ToString(),
-                            .Language = If(item("language")?.ToString(), "json")
-                        })
-                        stepNum += 1
-                    Next
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"[LoopEngine] 规划失败: {ex.Message}")
-                Return Nothing
-            End Try
-            Return plan
-        End Function
-
-        ''' <summary>
-        ''' Think：调用LLM生成思考+行动
-        ''' </summary>
-        Private Async Function ThinkAsync(session As AgentSession,
-                                           planStep As PlanStep,
-                                           systemPrompt As String) As Task(Of String)
-            Dim lastObservation = _memory.GetWorkingString("lastObservation")
-            Dim prompt = _promptManager.BuildReactPrompt(planStep, _memory, lastObservation)
-            Dim history = _memory.GetRecentMessages(10)
-            Return Await SendAIRequest(prompt, systemPrompt, history)
-        End Function
-
-        ''' <summary>
-        ''' 反思并重新规划
-        ''' </summary>
-        Private Async Function ReflectAndReplanAsync(session As AgentSession,
-                                                      observation As String,
-                                                      systemPrompt As String) As Task(Of ExecutionPlan)
-            Try
-                Dim prompt = _promptManager.BuildReflectionPrompt(session, observation)
-                Dim response = Await SendAIRequest(prompt, systemPrompt, Nothing)
-
-                Dim jsonStr = ExtractJson(response)
-                If String.IsNullOrEmpty(jsonStr) Then Return Nothing
-
-                Dim decision = JObject.Parse(jsonStr)
-                Dim strategy = decision("strategy")?.ToString()?.ToLower()
-
-                Select Case strategy
-                    Case "retry"
-                        ' 重试当前计划
-                        Return session.Plan
-                    Case "skip"
-                        ' 跳过当前步骤继续
-                        Return session.Plan
-                    Case "replan"
-                        ' 重新生成计划
-                        Return Await GeneratePlanAsync(session, systemPrompt, session.Skill)
-                    Case Else
-                        Return Nothing
-                End Select
-            Catch ex As Exception
-                Debug.WriteLine($"[LoopEngine] 反思失败: {ex.Message}")
-                Return Nothing
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 解析工具调用
-        ''' </summary>
-        Private Function ParseToolCall(response As String) As ToolCall
-            Try
-                Dim jsonStr = ExtractJson(response)
-                If String.IsNullOrEmpty(jsonStr) Then Return Nothing
-
-                Dim obj = JObject.Parse(jsonStr)
-                Dim action = obj("action")
-                If action Is Nothing Then Return Nothing
-
-                Dim toolId = action("tool")?.ToString()
-                Dim params = TryCast(action("params"), JObject)
-                If String.IsNullOrEmpty(toolId) Then Return Nothing
-                If params Is Nothing Then params = New JObject()
-
-                Return New ToolCall With {
-                    .ToolId = toolId,
-                    .Parameters = params
-                }
-            Catch ex As Exception
-                Debug.WriteLine($"[LoopEngine] 解析工具调用失败: {ex.Message}")
-                Return Nothing
-            End Try
-        End Function
-
-        Private Function ParseFixedToolCall(fixedObj As JObject, fallback As ToolCall) As ToolCall
-            If fixedObj Is Nothing Then Return fallback
-
-            Dim toolId = fixedObj("toolId")?.ToString()
-            Dim params = TryCast(fixedObj("parameters"), JObject)
-
-            If String.IsNullOrWhiteSpace(toolId) Then
-                Dim action = TryCast(fixedObj("action"), JObject)
-                If action IsNot Nothing Then
-                    toolId = action("tool")?.ToString()
-                    If params Is Nothing Then params = TryCast(action("params"), JObject)
-                End If
-            End If
-
-            If String.IsNullOrWhiteSpace(toolId) Then toolId = fallback.ToolId
-            If params Is Nothing Then params = If(fallback.Parameters, New JObject())
-
-            Return New ToolCall With {
-                .ToolId = toolId,
-                .Parameters = params
-            }
-        End Function
-
-        Private Function BuildAvailableToolHint(appType As String,
-                                                Optional executionContext As ToolExecutionContext = Nothing) As String
-            Dim tools = _toolRegistry.GetVisibleTools(appType, executionContext).
-                OrderBy(Function(t) t.Category).
-                ThenBy(Function(t) t.Id).
-                Take(40).
-                Select(Function(t) $"- {t.Id}: {t.Name}")
-            Return String.Join(vbCrLf, tools)
-        End Function
-
-        ''' <summary>
-        ''' 格式化观察结果
-        ''' </summary>
-        Private Function FormatObservation(result As ToolResult) As String
-            If result Is Nothing Then
-                Return "❌ [unknown] 无工具结果"
-            End If
-            If result.Success Then
-                Dim summary = result.ToObserveSummary()
-                Dim dataSummary = FormatResultData(result.Data)
-                If Not String.IsNullOrWhiteSpace(dataSummary) Then
-                    Return $"✅ [{result.ToolId}] 执行成功: {summary}{vbCrLf}data={dataSummary}"
-                End If
-                Return $"✅ [{result.ToolId}] 执行成功: {summary}"
-            End If
-            ' Structured observe payload for repair/reflect (P0-4).
-            Return $"❌ [{result.ToolId}] {result.ToObserveSummary()}"
-        End Function
-
-        Private Function FormatResultData(data As Object) As String
-            If data Is Nothing Then Return ""
-
-            Try
-                Dim text As String
-                If TypeOf data Is JToken Then
-                    text = DirectCast(data, JToken).ToString(Formatting.None)
-                Else
-                    text = JsonConvert.SerializeObject(data, Formatting.None)
-                End If
-
-                Const maxLen As Integer = 1800
-                If text.Length > maxLen Then
-                    Return text.Substring(0, maxLen) & "...(truncated)"
-                End If
-                Return text
-            Catch ex As Exception
-                Return ""
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 从响应中提取JSON
-        ''' </summary>
-        Private Function ExtractJson(response As String) As String
-            If String.IsNullOrWhiteSpace(response) Then Return Nothing
-
-            ' 查找 ```json 代码块
-            Dim start = response.IndexOf("```json")
-            If start >= 0 Then
-                start = response.IndexOf("{"c, start)
-                If start >= 0 Then
-                    Dim endIdx = response.LastIndexOf("}"c)
-                    If endIdx > start Then
-                        Return response.Substring(start, endIdx - start + 1)
-                    End If
-                End If
-            End If
-
-            ' 查找纯 JSON
-            start = response.IndexOf("{"c)
-            If start >= 0 Then
-                Dim endIdx = response.LastIndexOf("}"c)
-                If endIdx > start Then
-                    Return response.Substring(start, endIdx - start + 1)
-                End If
-            End If
-
-            Return Nothing
-        End Function
-
-        ''' <summary>
-        ''' 等待用户确认
-        ''' </summary>
-        Private Async Function WaitForApprovalAsync(message As String) As Task(Of Boolean)
-            If OnRequestApproval IsNot Nothing Then
-                Return Await OnRequestApproval(message)
-            End If
-            ' 无回调时默认批准
-            Return True
-        End Function
 
         ''' <summary>
         ''' 获取撤销管理器（供外部访问）
@@ -768,8 +392,6 @@ complexity 规则：
                 Return _undoManager
             End Get
         End Property
-
-#End Region
 
     End Class
 

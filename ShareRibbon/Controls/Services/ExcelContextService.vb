@@ -359,13 +359,6 @@ Public Class ExcelContextService
         Return sb.ToString()
     End Function
 
-    ''' <summary>
-    ''' 判断数据大小是否需要使用摘要模式
-    ''' </summary>
-    Public Function ShouldUseSummaryMode(cellCount As Integer) As Boolean
-        Return cellCount > SUMMARY_THRESHOLD
-    End Function
-
 #End Region
 
 #Region "辅助方法"

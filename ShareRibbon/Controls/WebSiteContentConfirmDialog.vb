@@ -5,7 +5,6 @@ Public Class WebSiteContentConfirmDialog
     Inherits Form
 
     Private _content As String
-        Private _previewText As String
         Private _tag As String
         Private _path As String
 
@@ -14,7 +13,6 @@ Public Class WebSiteContentConfirmDialog
         _content = content
             _tag = tag
             _path = path
-            _previewText = If(content.Length > 50, content.Substring(0, 50) & "...", content)
             InitializeUI()
         End Sub
 

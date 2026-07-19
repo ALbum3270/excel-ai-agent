@@ -2,6 +2,7 @@ Imports System.IO
 Imports System.Linq
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq
 
 Namespace Agent
 
@@ -26,6 +27,7 @@ Namespace Agent
 
         ' 外部回调（由 BaseChatControl 设置）
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
+        Public Property SendAIRequestWithMessages As Func(Of JArray, Task(Of String))
         Public Property ExecuteCodeWithToolResult As Func(Of String, String, Boolean, ToolResult)
 
         ' MCP 客户端（由外部设置，可选）
@@ -80,6 +82,10 @@ Namespace Agent
             _loopEngine.SendAIRequest = Function(prompt, system, history)
                                             Return SendAIRequest(prompt, system, history)
                                         End Function
+            _loopEngine.SendAIRequestWithMessages = Function(messages)
+                                                        If SendAIRequestWithMessages Is Nothing Then Return Task.FromResult(Of String)(Nothing)
+                                                        Return SendAIRequestWithMessages(messages)
+                                                    End Function
 
             _loopEngine.OnPlanGenerated = Sub(plan)
                                               RaiseEvent OnPlanGenerated(plan)
@@ -113,36 +119,14 @@ Namespace Agent
         End Sub
 
         Private Sub LoadToolDefinitions()
-            Dim loadedAny As Boolean = False
-            For Each candidateDir In GetToolDirectoryCandidates()
-                If Directory.Exists(candidateDir) Then
-                    _toolRegistry.LoadFromDirectory(candidateDir)
-                    loadedAny = True
-                End If
-            Next
+            Dim added = _toolRegistry.LoadFromRuntimeDirectories(ToolsDirectory)
 
-            If Not loadedAny Then
+            If added = 0 AndAlso _toolRegistry.ToolCount <= 4 Then
                 AppLogger.Warn("AgentKernel", $"Tools directory not found. Primary={ToolsDirectory}")
             Else
                 AppLogger.Info("AgentKernel", $"Tool registry initialized. Count={_toolRegistry.ToolCount}")
             End If
         End Sub
-
-        Private Function GetToolDirectoryCandidates() As List(Of String)
-            Dim candidates As New List(Of String)()
-            AddCandidate(candidates, ToolsDirectory)
-
-            For Each baseDir In GetRuntimeBaseDirectoryCandidates()
-                Dim currentDir = baseDir
-                While Not String.IsNullOrWhiteSpace(currentDir)
-                    AddCandidate(candidates, Path.Combine(currentDir, "Tools"))
-                    AddCandidate(candidates, Path.Combine(currentDir, "ShareRibbon", "Tools"))
-                    currentDir = Path.GetDirectoryName(currentDir)
-                End While
-            Next
-
-            Return candidates
-        End Function
 
         Private Shared Function ResolveRuntimeBaseDirectory() As String
             For Each candidate In GetRuntimeBaseDirectoryCandidates()
@@ -216,13 +200,17 @@ Namespace Agent
         Public Async Function ExecuteAsync(userRequest As String,
                                             appType As String,
                                             currentContent As String,
-                                            Optional officeContext As Context.OfficeContext = Nothing) As Task(Of AgentResult)
+                                            Optional officeContext As Context.OfficeContext = Nothing,
+                                            Optional contextPack As Context.ContextPack = Nothing,
+                                            Optional taskSpec As AgentTaskSpec = Nothing,
+                                            Optional selectedSkills As List(Of SkillFileDefinition) = Nothing) As Task(Of AgentResult)
             Dim cid = AppLogger.BeginScope()
             AppLogger.Info("AgentKernel", $"ExecuteAsync start appType={appType} cid={cid}")
 
             Try
                 ' 创建会话
                 _session = New AgentSession(userRequest, appType, currentContent)
+                _session.Spec = taskSpec
                 _memory.ClearWorking()
                 _memory.AddSessionMessage("user", userRequest)
 
@@ -234,17 +222,27 @@ Namespace Agent
 
                 ' 将上下文保存到记忆中（供多轮对话使用）
                 _memory.SetWorking("lastOfficeContext", officeContext)
+                If contextPack Is Nothing Then contextPack = Context.ContextPack.FromOfficeContext(officeContext, currentContent)
+                _memory.SetWorking("lastContextPack", contextPack)
 
                 ' 绑定执行回调。Agent 原生工具必须返回 ToolResult，禁止退回 Boolean 假成功。
                 _toolRegistry.ExecuteCodeWithToolResult = ExecuteCodeWithToolResult
 
                 ' 自动选择 Skill：优先使用 filesystem Skill 索引，旧 JSON SkillRegistry 作为兜底。
-                Dim matchedSkill = SelectSkillForRequest(userRequest, appType)
+                Dim matchedSkill As AgentSkill = Nothing
+                If selectedSkills IsNot Nothing AndAlso selectedSkills.Count > 0 Then
+                    Dim selectedDetail = SkillsDirectoryService.LoadSkillDetail(selectedSkills(0))
+                    If selectedDetail Is Nothing Then selectedDetail = selectedSkills(0)
+                    _session.SelectedSkill = selectedDetail
+                    matchedSkill = ConvertFileSkillToAgentSkill(selectedDetail)
+                    Debug.WriteLine($"[AgentKernel] 复用 AI Native 已选择 Skill: {matchedSkill.Name}")
+                End If
+                If matchedSkill Is Nothing Then matchedSkill = SelectSkillForRequest(userRequest, appType)
                 If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
                 Dim executionContext As ToolExecutionContext = ToolExecutionContext.FromSession(_session, matchedSkill)
 
                 ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
-                Dim contextText = officeContext.ToPromptText()
+                Dim contextText = contextPack.ToPromptText()
                 Dim systemPrompt = _promptManager.BuildSystemPrompt(
                     appType,
                     _toolRegistry.GetVisibleTools(appType, executionContext),
@@ -282,13 +280,6 @@ Namespace Agent
         End Function
 
         ''' <summary>
-        ''' 获取当前会话
-        ''' </summary>
-        Public Function GetCurrentSession() As AgentSession
-            Return _session
-        End Function
-
-        ''' <summary>
         ''' 添加历史消息到记忆（启动前预加载）
         ''' </summary>
         Public Sub AddHistoryMessage(role As String, content As String)
@@ -312,24 +303,6 @@ Namespace Agent
                 Return _skillRegistry.SkillCount
             End Get
         End Property
-
-        ''' <summary>
-        ''' 重新加载提示词（热加载）
-        ''' </summary>
-        Public Sub ReloadPrompts()
-            _promptManager.Reload()
-        End Sub
-
-        ''' <summary>
-        ''' 重新加载工具
-        ''' </summary>
-        Public Sub ReloadTools()
-            _toolRegistry.Clear()
-            If Directory.Exists(ToolsDirectory) Then
-                _toolRegistry.LoadFromDirectory(ToolsDirectory)
-            End If
-            _toolRegistry.LoadSkillScriptsAsTools()
-        End Sub
 
         Private Function SelectSkillForRequest(userRequest As String, appType As String) As AgentSkill
             Try

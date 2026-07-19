@@ -2,8 +2,9 @@
 name: excel-table-agent
 description: Use for Excel tasks that need table understanding, cleanup, calculation, formula repair, transpose, pivot tables, charts, reporting, or multi-step spreadsheet automation.
 application: Excel
+default_for_application: true
 tags: excel, spreadsheet, table, formula, chart, pivot, clean, transpose, statistics, data-analysis
-allowed-tools: ApplyFormula, WriteData, FormatRange, CreateChart, CleanData, SortData, FilterData, RemoveDuplicates, ConditionalFormat, MergeCells, AutoFit, FindReplace, CreatePivotTable, TransformData, DataAnalysis, GenerateReport, ExecuteVBA
+allowed-tools: ApplyFormula, WriteData, FormatRange, CreateChart, CleanData, SortData, FilterData, RemoveDuplicates, ConditionalFormat, MergeCells, AutoFit, FindReplace, CreatePivotTable, TransformData, DataAnalysis, GenerateReport
 intent_types: data_analysis, formula, chart, table_format, data_clean, transform
 ---
 

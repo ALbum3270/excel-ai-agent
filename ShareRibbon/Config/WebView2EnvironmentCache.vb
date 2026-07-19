@@ -62,19 +62,6 @@ Public NotInheritable Class WebView2EnvironmentCache
             End Function).Value
     End Function
 
-    Public Shared Async Function PrewarmDefaultAsync() As Task
-        ' ⚠️ 此方法已废弃，不应在后台线程调用
-        ' WebView2 Environment 必须在 UI 线程创建
-        Try
-            Dim defaultFolder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MyAppWebView2Cache")
-            Await GetOrCreateAsync(defaultFolder)
-        Catch ex As Exception
-            Debug.WriteLine($"[WebView2EnvironmentCache] Prewarm default environment failed: {ex.Message}")
-        End Try
-    End Function
-
     Private Shared Function BuildKey(userDataFolder As String, options As CoreWebView2EnvironmentOptions) As String
         Dim fullPath = Path.GetFullPath(userDataFolder)
         Dim args = If(options?.AdditionalBrowserArguments, String.Empty)

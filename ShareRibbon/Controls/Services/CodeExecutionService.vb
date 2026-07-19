@@ -134,57 +134,11 @@ Public Class CodeExecutionService
         ''' 根据语言类型执行代码
         ''' </summary>
         Public Sub ExecuteCode(code As String, language As String, preview As Boolean)
-            ExecuteCodeWithResult(code, language, preview)
+            Dim result = ExecuteCodeWithToolResult(code, language, preview)
+            If result IsNot Nothing AndAlso Not result.Success Then
+                GlobalStatusStrip.ShowWarning(If(result.UserMessage, result.Message))
+            End If
         End Sub
-
-        ''' <summary>
-        ''' 根据语言类型执行代码，并返回宿主执行结果。Agent ToolResult 使用该返回值做 observe。
-        ''' </summary>
-        Public Function ExecuteCodeWithResult(code As String, language As String, preview As Boolean) As Boolean
-            Dim lowerLang As String = If(language, "").ToLower().Trim()
-            
-            ' 调试日志
-            Debug.WriteLine($"[CodeExecutionService] 执行代码, 语言: '{language}' (规范化: '{lowerLang}')")
-            Debug.WriteLine($"[CodeExecutionService] 代码前100字符: {If(code.Length > 100, code.Substring(0, 100), code)}...")
-            
-            ' 自动检测JSON：如果代码看起来像JSON命令格式
-            If String.IsNullOrEmpty(lowerLang) OrElse lowerLang = "plaintext" OrElse lowerLang = "text" Then
-                Dim trimmedCode = code.Trim()
-                If trimmedCode.StartsWith("{") AndAlso trimmedCode.EndsWith("}") Then
-                    Try
-                        Dim testJson = Newtonsoft.Json.Linq.JObject.Parse(trimmedCode)
-                        If testJson("command") IsNot Nothing Then
-                            Debug.WriteLine("[CodeExecutionService] 自动检测为JSON命令格式")
-                            lowerLang = "json"
-                        End If
-                    Catch
-                        ' 不是有效的JSON命令
-                    End Try
-                End If
-            End If
-
-            If lowerLang.Contains("json") Then
-                Debug.WriteLine("[CodeExecutionService] 路由到JSON命令执行器")
-                Return ExecuteJsonCommand(code, preview)
-            ElseIf lowerLang.Contains("vbnet") OrElse lowerLang.Contains("vbscript") OrElse lowerLang.Contains("vba") Then
-                Debug.WriteLine("[CodeExecutionService] 路由到VBA执行器")
-                Return ExecuteVBACode(code, preview)
-            ElseIf lowerLang.Contains("js") OrElse lowerLang.Contains("javascript") Then
-                Debug.WriteLine("[CodeExecutionService] 路由到JavaScript执行器")
-                Return ExecuteJavaScript(code, preview)
-            ElseIf lowerLang.Contains("excel") OrElse lowerLang.Contains("formula") OrElse lowerLang.Contains("function") Then
-                Debug.WriteLine("[CodeExecutionService] 路由到Excel公式执行器")
-                Return ExecuteExcelFormula(code, preview)
-            ElseIf IsTextOnlyLanguage(lowerLang) Then
-                ' 文本类型语言（markdown、text等）静默跳过，不显示警告
-                Debug.WriteLine($"[CodeExecutionService] 跳过文本类型: '{language}'（不可执行）")
-                Return False
-            Else
-                Debug.WriteLine($"[CodeExecutionService] 不支持的语言类型: '{language}'")
-                GlobalStatusStrip.ShowWarning("不支持的语言类型: " & language)
-                Return False
-            End If
-        End Function
 
         Public Function ExecuteCodeWithToolResult(code As String, language As String, preview As Boolean) As Agent.ToolResult
             Dim lowerLang As String = If(language, "").ToLower().Trim()
@@ -206,33 +160,57 @@ Public Class CodeExecutionService
                 Return ExecuteJsonCommandWithToolResult(code, preview)
             End If
 
-            Dim ok = ExecuteCodeWithResult(code, language, preview)
-            If ok Then
-                Return Agent.ToolResult.Succeed("", "执行成功")
+            Dim toolId As String = "ExecuteCode"
+            Dim ok As Boolean
+            If lowerLang.Contains("vbnet") OrElse lowerLang.Contains("vbscript") OrElse lowerLang.Contains("vba") Then
+                toolId = "ExecuteVBA"
+                ok = ExecuteVBACode(code, preview)
+            ElseIf lowerLang.Contains("js") OrElse lowerLang.Contains("javascript") Then
+                toolId = "ExecuteJavaScript"
+                ok = ExecuteJavaScript(code, preview)
+            ElseIf lowerLang.Contains("excel") OrElse lowerLang.Contains("formula") OrElse lowerLang.Contains("function") Then
+                toolId = "ExecuteExcelFormula"
+                ok = ExecuteExcelFormula(code, preview)
+            ElseIf IsTextOnlyLanguage(lowerLang) Then
+                Return Agent.ToolResult.Failed(toolId,
+                                               $"文本类型 {language} 不可执行",
+                                               errorCode:=ExceptionClassifier.CodeArgument,
+                                               userMessage:="当前内容是文本，不是可执行命令",
+                                               recoverable:=False)
+            Else
+                Return Agent.ToolResult.Failed(toolId,
+                                               "不支持的语言类型: " & language,
+                                               errorCode:=ExceptionClassifier.CodeArgument,
+                                               userMessage:="不支持的语言类型: " & language,
+                                               recoverable:=False)
             End If
-            Return Agent.ToolResult.Failed("", "宿主执行器返回失败")
+
+            Dim observation = New With {
+                .kind = "code_execution",
+                .summary = If(ok, $"{toolId} 执行成功", $"{toolId} 执行失败"),
+                .changed = ok,
+                .targetRefs = New String() {"Office:ActiveDocument"},
+                .warnings = New String() {}
+            }
+            If ok Then Return Agent.ToolResult.Succeed(toolId, observation.summary, observation:=observation)
+            Return Agent.ToolResult.Failed(toolId,
+                                           observation.summary,
+                                           errorCode:=ExceptionClassifier.CodeUnknown,
+                                           userMessage:=observation.summary,
+                                           recoverable:=True,
+                                           observation:=observation)
         End Function
 
         ''' <summary>
         ''' JSON命令执行委托（由子类设置）
         ''' </summary>
-        Public Property JsonCommandExecutor As Func(Of String, Boolean, Boolean) = Nothing
         Public Property JsonCommandExecutorWithResult As Func(Of String, Boolean, Agent.ToolResult) = Nothing
-
-        ''' <summary>
-        ''' Execute host JSON tool/schema backend. P0-2: tool backend only, not NL product entry.
-        ''' </summary>
-        Public Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
-            Dim result = ExecuteJsonCommandWithToolResult(jsonCode, preview)
-            Return result IsNot Nothing AndAlso result.Success
-        End Function
 
         Public Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
             Debug.WriteLine($"[CodeExecutionService] ExecuteJsonCommand (tool backend) preview={preview}")
-            Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutor set: {JsonCommandExecutor IsNot Nothing}")
             Debug.WriteLine($"[CodeExecutionService] JsonCommandExecutorWithResult set: {JsonCommandExecutorWithResult IsNot Nothing}")
             
-            If JsonCommandExecutorWithResult IsNot Nothing OrElse JsonCommandExecutor IsNot Nothing Then
+            If JsonCommandExecutorWithResult IsNot Nothing Then
                 Try
                     Dim currentJsonCode As String = jsonCode
                     Dim parseSuccess As Boolean = False
@@ -262,25 +240,17 @@ Public Class CodeExecutionService
                         End Try
                     End If
 
-                    ' 执行命令
-                    If JsonCommandExecutorWithResult IsNot Nothing Then
-                        Dim result = JsonCommandExecutorWithResult.Invoke(currentJsonCode, preview)
-                        Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {If(result Is Nothing, "null", result.ToObserveSummary())}")
-                        If result Is Nothing Then Return Agent.ToolResult.Failed("", "JSON命令执行器未返回结果")
-                        Return result
-                    End If
-
-                    Dim ok = JsonCommandExecutor.Invoke(currentJsonCode, preview)
-                    Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {ok}")
-                    If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
-                    Return Agent.ToolResult.Failed("", "JSON命令执行失败")
+                    Dim result = JsonCommandExecutorWithResult.Invoke(currentJsonCode, preview)
+                    Debug.WriteLine($"[CodeExecutionService] JSON命令执行结果: {If(result Is Nothing, "null", result.ToObserveSummary())}")
+                    If result Is Nothing Then Return Agent.ToolResult.Failed("", "JSON命令执行器未返回结果")
+                    Return result
                 Catch ex As Exception
                     Debug.WriteLine($"[CodeExecutionService] JSON命令执行异常: {ex.Message}")
                     GlobalStatusStrip.ShowWarning($"JSON命令执行失败: {ex.Message}")
                     Return Agent.ToolResult.FromException("", ex)
                 End Try
             Else
-                Debug.WriteLine("[CodeExecutionService] JsonCommandExecutor 未设置!")
+                Debug.WriteLine("[CodeExecutionService] JsonCommandExecutorWithResult 未设置!")
                 GlobalStatusStrip.ShowWarning("当前应用不支持JSON命令执行，请使用VBA代码")
                 Return Agent.ToolResult.Failed("", "当前应用不支持JSON命令执行，请使用VBA代码")
             End If

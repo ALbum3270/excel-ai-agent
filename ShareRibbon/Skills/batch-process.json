@@ -1,6 +1,7 @@
 {
   "id": "batch-process",
   "name": "批量处理",
+  "application": "Excel",
   "description": "对多个工作表、多个文件或多个区域进行批量操作",
   "triggerPatterns": ["批量", "多个", "所有sheet", "全部工作表", "多文件", "统一处理", "循环", "遍历", "批量修改", "批量删除"],
   "requiredTools": ["CreateSheet", "DeleteSheet", "RenameSheet", "CopySheet", "ApplyFormula", "WriteData", "FormatRange", "FindReplace"],

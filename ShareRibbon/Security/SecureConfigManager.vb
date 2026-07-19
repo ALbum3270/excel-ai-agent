@@ -124,37 +124,6 @@ Namespace Security
         End Function
 
         ''' <summary>
-        ''' 删除 API Key
-        ''' </summary>
-        Public Shared Function DeleteApiKey(provider As String) As Boolean
-            Try
-                Dim configPath As String = GetConfigFilePath()
-                If Not File.Exists(configPath) Then
-                    Return True
-                End If
-
-                Dim key As String = String.Format("ApiKey_{0}", provider)
-                Dim lines As String() = File.ReadAllLines(configPath)
-                Dim newLines As New List(Of String)
-
-                For Each line In lines
-                    If Not line.StartsWith(key & "=") Then
-                        newLines.Add(line)
-                    End If
-                Next
-
-                File.WriteAllLines(configPath, newLines.ToArray())
-
-                System.Diagnostics.Debug.WriteLine(String.Format("[SecureConfigManager] API Key 已删除: {0}", provider))
-                Return True
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine(String.Format("[SecureConfigManager] 删除 API Key 失败: {0}", ex.Message))
-                Return False
-            End Try
-        End Function
-
-        ''' <summary>
         ''' 验证 API Key 格式
         ''' </summary>
         Public Shared Function ValidateApiKey(apiKey As String, provider As String) As Boolean
@@ -194,14 +163,6 @@ Namespace Security
             End If
 
             Return Path.Combine(configDir, "secure.config")
-        End Function
-
-        ''' <summary>
-        ''' 检查 API Key 是否已配置
-        ''' </summary>
-        Public Shared Function IsApiKeyConfigured(provider As String) As Boolean
-            Dim apiKey As String = LoadApiKey(provider)
-            Return Not String.IsNullOrEmpty(apiKey)
         End Function
 
         ''' <summary>

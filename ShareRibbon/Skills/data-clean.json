@@ -1,6 +1,7 @@
 {
   "id": "data-clean",
   "name": "数据清洗",
+  "application": "Excel",
   "description": "对Excel数据进行去重、填充、替换、格式化和异常值处理",
   "triggerPatterns": ["清洗", "去重", "填充", "替换", "删除空行", "删除空列", "格式统一", "空值", "重复", "合并", "拆分"],
   "requiredTools": ["CleanData", "RemoveDuplicates", "FindReplace", "FormatRange", "SortData", "FilterData", "MergeCells", "AutoFit", "TransformData"],

@@ -34,8 +34,22 @@ Namespace Agent
     End Class
 
     ''' <summary>
-    ''' 工具调用结果（P0-4 统一错误契约）。
-    ''' Success/Message 保持兼容；新增 ErrorCode/UserMessage/DebugDetail/Recoverable 供 observe/repair 使用。
+    ''' In-memory visual evidence produced by a host observer. The payload is deliberately
+    ''' excluded from normal ToolResult serialization so screenshots never enter logs,
+    ''' run traces, history, or textual observations.
+    ''' </summary>
+    Public Class AgentVisualEvidence
+        Public Property MimeType As String
+        Public Property DataUrl As String
+        Public Property Source As String
+        Public Property ItemIndex As Integer
+        Public Property Width As Integer
+        Public Property Height As Integer
+        Public Property ByteLength As Integer
+    End Class
+
+    ''' <summary>
+    ''' Unified tool execution result used by observe, repair, trace, and explanation.
     ''' </summary>
     Public Class ToolResult
         Public Property Success As Boolean
@@ -46,6 +60,12 @@ Namespace Agent
         Public Property ElapsedMs As Long
         ''' <summary>面向 Agent/用户解释的执行观察，H1 起用于描述改动范围、是否变更、警告等。</summary>
         Public Property Observation As Object
+        ''' <summary>
+        ''' Ephemeral multimodal evidence for the current observe/repair turn only.
+        ''' It must never be persisted or included in textual observation serialization.
+        ''' </summary>
+        <JsonIgnore>
+        Public Property VisualEvidence As New List(Of AgentVisualEvidence)()
         ''' <summary>宿主侧撤销点 ID；H1 先保留字段，具体执行器逐步填充。</summary>
         Public Property UndoPointId As String = ""
         ''' <summary>执行产生的附加产物，例如 chart/slide/range 引用。</summary>
@@ -267,6 +287,48 @@ Namespace Agent
         End Sub
 
         ''' <summary>
+        ''' 从 VSTO 宿主输出、共享程序集输出和开发仓库候选目录加载原生工具。
+        ''' AiNative 分析与 AgentKernel 执行必须调用同一入口，避免两阶段工具视图不一致。
+        ''' </summary>
+        Public Function LoadFromRuntimeDirectories(Optional preferredBaseDirectory As String = Nothing) As Integer
+            Dim before = ToolCount
+            Dim candidates As New List(Of String)()
+            Dim roots As New List(Of String) From {
+                preferredBaseDirectory,
+                Path.GetDirectoryName(GetType(ToolRegistry).Assembly.Location),
+                AppDomain.CurrentDomain.BaseDirectory
+            }
+
+            For Each root In roots.Where(Function(value) Not String.IsNullOrWhiteSpace(value))
+                Dim current = root
+                While Not String.IsNullOrWhiteSpace(current)
+                    AddToolDirectoryCandidate(candidates, Path.Combine(current, "Tools"))
+                    AddToolDirectoryCandidate(candidates, Path.Combine(current, "ShareRibbon", "Tools"))
+                    current = Path.GetDirectoryName(current)
+                End While
+            Next
+
+            For Each candidate In candidates
+                If Directory.Exists(candidate) Then LoadFromDirectory(candidate)
+            Next
+
+            Dim added = Math.Max(0, ToolCount - before)
+            Debug.WriteLine($"[ToolRegistry] runtime native tools added={added}, total={ToolCount}")
+            Return added
+        End Function
+
+        Private Shared Sub AddToolDirectoryCandidate(candidates As List(Of String), rawPath As String)
+            If candidates Is Nothing OrElse String.IsNullOrWhiteSpace(rawPath) Then Return
+            Dim fullPath = rawPath
+            Try
+                fullPath = System.IO.Path.GetFullPath(rawPath)
+            Catch
+            End Try
+            If candidates.Any(Function(existing) String.Equals(existing, fullPath, StringComparison.OrdinalIgnoreCase)) Then Return
+            candidates.Add(fullPath)
+        End Sub
+
+        ''' <summary>
         ''' 注册单个工具
         ''' </summary>
         Public Sub RegisterTool(tool As ToolDescriptor)
@@ -360,6 +422,13 @@ Namespace Agent
                     Return False
                 End If
 
+                ' VBA 是关闭状态时不应出现在规划器的候选工具中。否则模型会把一个
+                ' 必然被 SafetyGate 拒绝的回退工具误认为唯一执行路径。
+                If (t.IsVbaFallback OrElse String.Equals(t.Id, "ExecuteVBA", StringComparison.OrdinalIgnoreCase)) AndAlso
+                   Not _safetyGate.VbaEnabled Then
+                    Return False
+                End If
+
                 Return SupportsApp(t, appType)
             End Function).ToList()
             Return result
@@ -378,14 +447,32 @@ Namespace Agent
             If tool Is Nothing Then Return False
             Dim raw = If(tool.AppType, "")
             If String.IsNullOrWhiteSpace(raw) Then Return True
+            Dim normalizedRequestedApp = NormalizeAppType(appType)
             For Each part In raw.Split({","c, ";"c, "|"c}, StringSplitOptions.RemoveEmptyEntries)
                 Dim item = part.Trim()
                 If String.Equals(item, "common", StringComparison.OrdinalIgnoreCase) OrElse
-                   String.Equals(item, appType, StringComparison.OrdinalIgnoreCase) Then
+                   String.Equals(NormalizeAppType(item), normalizedRequestedApp, StringComparison.OrdinalIgnoreCase) Then
                     Return True
                 End If
             Next
             Return False
+        End Function
+
+        ''' <summary>
+        ''' 统一运行时宿主名与工具清单中的历史简称。
+        ''' </summary>
+        Private Shared Function NormalizeAppType(appType As String) As String
+            Dim value = If(appType, "").Trim().ToLowerInvariant()
+            Select Case value
+                Case "ppt", "powerpoint", "power point"
+                    Return "powerpoint"
+                Case "xls", "xlsx", "excel"
+                    Return "excel"
+                Case "doc", "docx", "word"
+                    Return "word"
+                Case Else
+                    Return value
+            End Select
         End Function
 
         ''' <summary>
@@ -394,13 +481,6 @@ Namespace Agent
         Public Function GetTool(toolId As String) As ToolDescriptor
             If _tools.ContainsKey(toolId) Then Return _tools(toolId)
             Return Nothing
-        End Function
-
-        ''' <summary>
-        ''' 检查工具是否存在
-        ''' </summary>
-        Public Function HasTool(toolId As String) As Boolean
-            Return _tools.ContainsKey(toolId)
         End Function
 
         Public Function TryNormalizeToolCall(appType As String, toolCall As ToolCall, ByRef message As String) As Boolean
@@ -477,47 +557,6 @@ Namespace Agent
                     Return "SetParagraphFormat"
             End Select
             Return Nothing
-        End Function
-
-        ''' <summary>
-        ''' 自动生成工具描述文本（注入 LLM Prompt）
-        ''' </summary>
-        Public Function GenerateToolDescriptions(appType As String) As String
-            Dim tools = GetAvailableTools(appType)
-            Dim sb As New StringBuilder()
-            sb.AppendLine($"【已注册工具 - 共 {tools.Count} 个】")
-            sb.AppendLine()
-
-            Dim grouped = tools.GroupBy(Function(t) t.Category).OrderBy(Function(g) g.Key)
-            For Each group In grouped
-                sb.AppendLine($"=== {group.Key} ({group.Count()}个) ===")
-                For Each tool In group.OrderBy(Function(t) t.Id)
-                sb.AppendLine($"{tool.Id} - {tool.Name}: {tool.Description}")
-                    If Not String.IsNullOrWhiteSpace(tool.AvailabilityStatus) AndAlso Not String.Equals(tool.AvailabilityStatus, "available", StringComparison.OrdinalIgnoreCase) Then
-                        sb.AppendLine($"  - 状态: {tool.AvailabilityStatus}{If(String.IsNullOrWhiteSpace(tool.LastError), "", "，错误: " & tool.LastError)}")
-                    End If
-                    For Each param In tool.Parameters
-                        Dim reqMark = If(param.Required, "必需", "可选")
-                        Dim defaultHint = If(param.DefaultValue IsNot Nothing, $", 默认: {param.DefaultValue}", "")
-                        sb.AppendLine($"  - {param.Name}({param.Type}, {reqMark}{defaultHint}): {param.Description}")
-                    Next
-                    sb.AppendLine()
-                Next
-            Next
-
-            sb.AppendLine()
-            sb.AppendLine("【命令格式要求】")
-            sb.AppendLine("每个步骤的 code 字段必须是完整 JSON 对象字符串，格式如下：")
-            sb.AppendLine("单命令: {""command"":""命令名"",""params"":{...}}")
-            sb.AppendLine("多命令: {""commands"":[{""command"":""命令名"",""params"":{...}},...]}")
-            sb.AppendLine()
-            sb.AppendLine("【绝对禁止】")
-            sb.AppendLine("- 禁止使用 actions/operations 数组")
-            sb.AppendLine("- 禁止省略 params 包装")
-            sb.AppendLine("- 禁止自创未注册的命令")
-            sb.AppendLine("- 禁止返回不带代码块的裸 JSON")
-
-            Return sb.ToString()
         End Function
 
         ''' <summary>
@@ -627,6 +666,16 @@ Namespace Agent
                 Return ToolResult.Failed(toolId, $"未找到工具: {toolId}")
             End If
 
+            ' VBA 默认禁用是全局安全边界，应先于宿主兼容性判断。
+            ' 显式开启 VBA 后，才继续判断当前宿主是否有执行器。
+            Dim safetyDecision = _safetyGate.Evaluate(tool, params)
+            If safetyDecision IsNot Nothing AndAlso
+               safetyDecision.Action <> Execution.SafetyAction.Allow AndAlso
+               String.Equals(safetyDecision.ErrorCode, ExceptionClassifier.CodeVbaDisabled, StringComparison.OrdinalIgnoreCase) Then
+                sw.Stop()
+                Return BuildSafetyFailure(tool, safetyDecision)
+            End If
+
             Dim appType = If(executionContext?.AppType, "")
             If Not String.IsNullOrWhiteSpace(appType) AndAlso Not SupportsApp(tool, appType) Then
                 sw.Stop()
@@ -657,27 +706,15 @@ Namespace Agent
                                          recoverable:=True)
             End If
 
-            Dim safetyDecision = _safetyGate.Evaluate(tool, params)
+            If safetyDecision IsNot Nothing AndAlso
+               safetyDecision.Action = Execution.SafetyAction.RequireApproval AndAlso
+               executionContext IsNot Nothing AndAlso
+               executionContext.ConsumeToolApproval(tool.Id, params) Then
+                safetyDecision = Execution.SafetyDecision.Allow(safetyDecision.RiskLevel)
+            End If
             If safetyDecision IsNot Nothing AndAlso safetyDecision.Action <> Execution.SafetyAction.Allow Then
                 sw.Stop()
-                Dim errorCode = If(String.IsNullOrWhiteSpace(safetyDecision.ErrorCode),
-                                   ExceptionClassifier.CodeSafetyBlocked,
-                                   safetyDecision.ErrorCode)
-                Dim message = If(String.IsNullOrWhiteSpace(safetyDecision.UserMessage),
-                                 safetyDecision.Reason,
-                                 safetyDecision.UserMessage)
-                AppLogger.Warn("ToolRegistry", $"Safety denied toolId={tool.Id} action={safetyDecision.Action} code={errorCode}: {AppLogger.Redact(safetyDecision.Reason)}")
-                Return ToolResult.Failed(tool.Id,
-                                         message,
-                                         New With {
-                                             .riskLevel = safetyDecision.RiskLevel,
-                                             .safetyAction = safetyDecision.Action.ToString(),
-                                             .reason = safetyDecision.Reason
-                                         },
-                                         errorCode,
-                                         message,
-                                         safetyDecision.Reason,
-                                         recoverable:=False)
+                Return BuildSafetyFailure(tool, safetyDecision)
             End If
 
             If toolId.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) Then
@@ -812,6 +849,28 @@ Namespace Agent
                                     errorCode:=ExceptionClassifier.CodeNotFound,
                                     userMessage:="未识别的工具类型",
                                     recoverable:=False)
+        End Function
+
+        Private Shared Function BuildSafetyFailure(tool As ToolDescriptor,
+                                                   decision As Execution.SafetyDecision) As ToolResult
+            Dim errorCode = If(String.IsNullOrWhiteSpace(decision.ErrorCode),
+                               ExceptionClassifier.CodeSafetyBlocked,
+                               decision.ErrorCode)
+            Dim message = If(String.IsNullOrWhiteSpace(decision.UserMessage),
+                             decision.Reason,
+                             decision.UserMessage)
+            AppLogger.Warn("ToolRegistry", $"Safety denied toolId={tool.Id} action={decision.Action} code={errorCode}: {AppLogger.Redact(decision.Reason)}")
+            Return ToolResult.Failed(tool.Id,
+                                     message,
+                                     New With {
+                                         .riskLevel = decision.RiskLevel,
+                                         .safetyAction = decision.Action.ToString(),
+                                         .reason = decision.Reason
+                                     },
+                                     errorCode,
+                                     message,
+                                     decision.Reason,
+                                     recoverable:=False)
         End Function
 
         Private Async Function ExecuteMemoryToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)

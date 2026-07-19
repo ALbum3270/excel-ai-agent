@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | **v0.2（评审修订）** |
 | 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：已有 `OfficeContext`、`ChatContextBuilder`、`ChatContextTrace` 与三端上下文采集；尚未实现统一 `ContextPack`、预算器、before/after `DocumentDiff`。 |
+| 实现状态 | **最小合同已实现**：已有统一可序列化 `ContextPack`、selection-first 字符预算、selection ref、`readerErrors`、三端 `OfficeContext` 转换，并由 Harness 同源注入 Prompt/UI trace。Excel TableRegion、PPT DeckModel、完整 Canonical Ref 与基于 Pack 的 before/after `DocumentDiff` 仍待增强。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §5.1 |
 | 现有代码 | `Agent/Context/OfficeContext.vb`、`ChatContextBuilder`、三端 `CaptureOfficeContext`、`ChatContextTrace` |
 

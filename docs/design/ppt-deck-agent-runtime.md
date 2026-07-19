@@ -1,14 +1,14 @@
-# 专项设计：PowerPoint Deck Agent 运行时
+# 专项设计：PowerPoint Professional Design Agent 运行时
 
 | 项 | 内容 |
 |---|---|
-| 版本 | **v0.2（评审修订）** |
-| 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：PPT 已有工具 JSON、生成 Handler、翻译/续写服务和 ChatControl 命令分发；尚无统一 `PptActionHarness`、幻灯片级 Observation/Diff、删除/结构变更审批闭环。 |
-| 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.3 |
-| Skill | `Skills/powerpoint-deck-agent/SKILL.md` |
-| 现有 | Tools/ppt（22）、生成 Handler、ChatControl 命令分发、翻译/续写服务 |
-| 关联 | ContextPack ppt_deck、Observe 幻灯片 Diff、Safety 删页、Golden U4 |
+| 状态 | 当前实现合同 |
+| 主入口 | `CreateSlides` |
+| 主链 | `OfficeHarness -> AgentKernel -> LoopEngine -> ToolRegistry -> CodeExecutionService -> PowerPoint host` |
+| 专业设计实现 | `PowerPointAi/Design/` |
+| Skill | `ShareRibbon/Skills/powerpoint-deck-agent/SKILL.md` |
+| Observe 合同 | [`tool-result-observation.md`](./tool-result-observation.md) |
+| 动态长尾能力 | [`office-object-operation-integration.md`](./office-object-operation-integration.md) |
 
 ---
 
@@ -16,292 +16,268 @@
 
 ### 1.1 目标
 
-1. 定义 PPT 从 **大纲 → 版式 → 填内容 → 美化 → 备注** 的标准管道。
-2. 对标「一句话生成演示」体验，同时保持工具级可观察与可撤销。
-3. 设计 `PptActionHarness` 与 Capability 地图。
-4. 消灭「暂不支持的 PPT 命令」式死胡同，改为 repair/换工具。
+1. 从用户目标和 Office 上下文生成具有叙事结构、专业构图和统一视觉语言的多页 Deck。
+2. 使用结构化 Scene 表达语义，由确定性布局引擎编译为可编辑 PowerPoint Shape。
+3. 在写入前完成整套 Deck 预检，在写入后验证真实 PowerPoint COM 渲染结果。
+4. 失败时提供结构化 Observation、视觉证据、安全回滚，并由现有 Loop 修复参数。
+5. 保持唯一 Harness/Loop/ToolRegistry/Safety 主链，不按页面类型扩展 Tool。
 
 ### 1.2 非目标
 
-- v1 不做设计师级自动配色网络模型训练。
-- 不做嵌入式视频智能剪辑。
-- 不保证跨主题模板像素级还原。
+- 不训练专用配色或版式模型。
+- 不保证任意第三方模板的像素级复刻。
+- 不在 Executor、Renderer 或 Verifier 内直接调用 LLM。
+- 不为 cover、timeline、architecture、SmartArt 等场景新增页面专用 Tool。
+- 不用位图替代所有内容；默认输出应保持 PowerPoint 对象可编辑。
 
 ---
 
-## 2. 运行时总览
+## 2. 当前运行时总览
 
 ```text
 UserTurn (PowerPoint)
-  → Context: slideCount, currentIndex, titles[], selection shapes
-  → Skill: powerpoint-deck-agent
-  → Planner 选择 pipeline:
-       generate | rewrite | beautify | notes | chart_table | structure | review
-  → 逐步工具（CreateSlides / Insert* / Format* / Beautify…）
-  → Observe: slideCount, titles, shapeCount, notes
-  → Repair（版式错误、空标题、溢出文本）
+  -> OfficeHarness 构建 ContextPack / 选择 powerpoint-deck-agent
+  -> AgentKernel / LoopEngine 生成 CreateSlides 调用
+  -> ToolRegistry / CodeExecutionService 进入 PowerPoint UI 线程
+  -> ProfessionalDeckExecutor
+       -> Parse DeckDesignSpec / SlideDesignSpec
+       -> Resolve DesignSystem
+       -> Compile all Scene plans
+       -> Deck preflight + composition rhythm verification
+       -> preview: return plan summary without COM write
+       -> execute: render slide -> observe real COM result -> pixel verification
+       -> pass: ToolResult.Succeed + structured Observation
+       -> fail: capture ephemeral screenshot -> safe rollback -> ToolResult.Failed
+  -> LoopEngine
+       -> multimodal Repair when evidence is available
+       -> text-only Repair fallback when image input is unavailable
+       -> retry registered CreateSlides with corrected parameters
 ```
+
+高频专业生成继续使用稳定工具 `CreateSlides`。SmartArt、艺术字等长尾对象能力通过 `DiscoverOfficeCapability + OfficeObjectOperation` 补充，不新增平行页面工具。
 
 ---
 
-## 3. 演示文稿结构模型（DeckModel）
+## 3. Scene 输入合同
 
-### 3.1 逻辑结构
+### 3.1 Deck
 
 ```json
 {
-  "title": "项目季度汇报",
-  "locale": "zh-CN",
-  "slides": [
-    {
-      "role": "title | section | content | two_column | agenda | ending | blank",
-      "title": "...",
-      "bullets": ["...", "..."],
-      "notes": "...",
-      "visual": null | { "type": "chart|table|image", "hint": "..." },
-      "layoutHint": "Title Slide | Title and Content | ..."
-    }
-  ]
+  "designSystem": "modern-tech",
+  "designTokens": {},
+  "slides": []
 }
 ```
 
-### 3.2 角色 → 版式映射（默认 16:9）
+- `designSystem` 必须是已注册设计系统；未知名称只有在提供完整 `designTokens` 时才允许。
+- 单批至少一页，最多 50 页。
+- `preview=true` 只编译和预检，不创建再删除幻灯片。
 
-| role | 默认 layoutHint |
-|---|---|
-| title | Title Slide |
-| agenda / section | Section Header |
-| content | Title and Content |
-| two_column | Two Content |
-| ending | Title Only / 空白+结束语 |
-| blank | Blank |
-
-若母版无对应 layout，降级为 Title and Content 并 warning。
-
----
-
-## 4. 任务管道
-
-| Pipeline | 步骤概要 | 主 Tools |
-|---|---|---|
-| **generate** | 大纲 → DeckModel → CreateSlides/InsertSlide 循环 → 填文本 → 可选美化 | CreateSlides, InsertSlide, InsertText, FormatText, BeautifySlides |
-| **rewrite** | 当前页/选中形状改写 | FormatText, InsertText |
-| **beautify** | 对齐、主题、字体层级 | BeautifySlides, ApplyTheme, FormatSlide, FormatText |
-| **notes** | 讲者备注 | AddSpeakerNotes |
-| **chart_table** | 插图/表 | InsertChart, InsertTable, InsertImage |
-| **structure** | 增删移复制页 | InsertSlide, DeleteSlide, MoveSlide, DuplicateSlide |
-| **motion** | 切换/动画（谨慎） | ApplyTransition, AddAnimation |
-| **review** | 只读检查建议 | （读上下文 + 聊天解释，少写） |
-
-### 4.1 generate 详细算法
-
-```text
-1. 输入源：用户文本 | 粘贴大纲 | Word 纪要引用 | 选中备注
-2. LLM → DeckModel JSON（校验：slides 1..30，title 非空）
-3. Safety：页数 > 15 → RequireApproval
-4. 若空演示：CreateSlides 批量；若已有内容：确认插入位置（当前后/末尾）
-5. For each slide in model:
-     ensure slide exists (InsertSlide)
-     SetSlideLayout(layoutHint)
-     InsertText/FormatText 标题与要点
-     optional visual
-     AddSpeakerNotes
-6. Observe 全稿：slideCount、每页 title 非空率
-7. 空标题率 > 20% → Repair 补标题
-8. 可选 BeautifySlides(scope=all|created)
-```
-
-### 4.2 页数策略
-
-| 用户说 | 页数 |
-|---|---|
-| 明确 N 页 | N（clamp 3..30） |
-| 「简短」 | 5–7 |
-| 「详细汇报」 | 10–15 |
-| 未说 | 由内容块数决定，默认 6–10 |
-
----
-
-## 5. 美化启发式（Beautify）
-
-不依赖「黑盒一次成功」，拆成可观察子目标：
-
-| 子目标 | 观察 |
-|---|---|
-| 标题字号 > 正文字号 | 抽样 shape 字号 |
-| 同级要点缩进一致 | |
-| 左右边距不过密 | 形状 Left/Width 相对 slide |
-| 主题一致 | ApplyTheme 一次 |
-| 过渡不过度 | 仅切换，不默认狂乱动画 |
-
-`BeautifySlides` 若过于原子化不足，运行时可展开为多个 Format* 步（Plan 可见）。
-
-**动画**：默认不添加；用户明确要求才 `AddAnimation`（medium/risky 视范围）。
-
----
-
-## 6. PptActionHarness（建议快路径）
-
-| CapabilityId | 场景 | 置信 |
-|---|---|---|
-| `ppt.add-notes` | 「加备注」+ 当前页 | 高 |
-| `ppt.duplicate-slide` | 「复制当前页」 | 高 |
-| `ppt.apply-theme` | 「换成 XX 主题」 | 中高 |
-| `ppt.delete-slide` | 「删掉这页」 | 高但 **risky 确认** |
-| `ppt.generate-outline` | 明确「生成 N 页」 | 中 → 常走全 Loop |
-
-快路径同样输出 ToolResult + Trace。
-
----
-
-## 7. Capability 与 Tool 地图
-
-### 7.1 Capability
-
-| Id | 说明 |
-|---|---|
-| ppt.read-deck | 读目录/当前页（Context 为主） |
-| ppt.generate | 生成页 |
-| ppt.rewrite | 改写文本 |
-| ppt.beautify | 美化 |
-| ppt.notes | 备注 |
-| ppt.visual | 图/表/图示/视频 |
-| ppt.structure | 增删移复制 |
-| ppt.theme | 主题与母版 |
-| ppt.motion | 切换动画 |
-| ppt.review | 审阅建议 |
-| ppt.vba | ExecuteVBA |
-
-### 7.2 Tool 映射（22）
-
-| Tool | Capability | risk 基线 |
-|---|---|---|
-| CreateSlides | ppt.generate | medium |
-| InsertSlide | ppt.generate / structure | medium |
-| DeleteSlide | ppt.structure | **risky** |
-| DuplicateSlide / MoveSlide | ppt.structure | medium |
-| SetSlideLayout | ppt.generate / beautify | medium |
-| InsertText / FormatText | ppt.rewrite / generate | medium |
-| FormatSlide / BeautifySlides | ppt.beautify | medium |
-| ApplyTheme | ppt.theme | medium |
-| EditSlideMaster | ppt.theme | risky |
-| InsertTable / InsertChart / InsertImage / InsertShape | ppt.visual | medium |
-| InsertVideo | ppt.visual | medium |
-| AddSpeakerNotes | ppt.notes | safe/medium |
-| ApplyTransition / AddAnimation | ppt.motion | medium |
-| SetSlideShow | ppt.structure | medium |
-| ExecuteVBA | ppt.vba | risky |
-
----
-
-## 8. Observe（PPT）
-
-### 8.1 全局
-
-- slideCount before/after
-- 标题列表 hash
-
-### 8.2 页级
+### 3.2 Slide
 
 ```json
 {
-  "ref": "Ppt:Slide:3",
-  "titleBefore": "",
-  "titleAfter": "市场进展",
-  "shapeCountDelta": 2,
-  "notesLenDelta": 120
+  "id": "slide-1",
+  "slideType": "content",
+  "variant": "feature-left",
+  "eyebrow": "SECTION",
+  "title": "结论式标题",
+  "subtitle": "辅助说明",
+  "keyMessage": "本页唯一核心结论",
+  "items": [],
+  "metrics": [],
+  "chart": null,
+  "table": null,
+  "imagePath": "",
+  "notes": "",
+  "source": ""
 }
 ```
 
-### 8.3 成功标准示例
+- 嵌套 `scene` 与顶层字段合并，Scene 字段覆盖同名顶层字段，未覆盖元数据继续保留。
+- 未识别的 `slideType`、`variant`、`designSystem` 显式返回可修复 schema 错误，不静默退化。
+- chart、table、imagePath 是 content 页面的互斥主视觉。
+- 长文本优先拆页、改变构图或压缩语义，不能无限缩小字号。
 
-| 任务 | 标准 |
+### 3.3 已注册 Scene 类型
+
+| slideType | 主要用途 |
 |---|---|
-| 生成 8 页 | slideCount 增加 8 或 =8（空稿） |
-| 美化 | 用户未删页；标题仍在 |
-| 备注 | notes 非空 |
-| 删页 | count-1 且需审批 |
+| `cover` | 封面和主题建立 |
+| `section` | 章节过渡 |
+| `statement` | 强结论与少量证据 |
+| `content` | 洞察、图文、chart、table |
+| `two-column` | 双对象并列 |
+| `comparison` | 双对象或比较表 |
+| `kpi` | 指标和业务结果 |
+| `process` | 流程、阶段和时间序列 |
+| `architecture` | 分层或中心辐射架构 |
+| `matrix` | 显式双轴四象限 |
+| `quote` | 引用和观点 |
+| `closing` | 总结与行动建议 |
+
+当前专业变体包括：
+
+- `content: feature-left`
+- `kpi: hero-left`
+- `process: vertical`
+- `architecture: hub-spoke`
+
+新增变体应扩展 Scene 编译器和验证器，不新增 Tool。
 
 ---
 
-## 9. Repair 策略
+## 4. 设计系统与专业构图
 
-| 观察 | 修复 |
-|---|---|
-| 标题空 | 根据 bullets 生成短标题再 InsertText |
-| 要点溢出 | 拆页或降字号（先拆页） |
-| 版式不存在 | 换 Title and Content |
-| 插图失败 | 去掉 visual 降级纯文本 |
-| 未知 tool 幻觉 | 用 VisibleTools 重选 |
-| 旧路径「暂不支持」 | **禁止**；改为 NOT_FOUND + replan |
+`DesignSystemCatalog` 提供颜色、字体、字号、表面、分隔线、正负语义色等 Token。所有组件从 Token 取值，不在页面实现中散落主题常量。
 
----
+专业构图至少满足：
 
-## 10. 内容安全与风格
-
-- 默认商务简报语体；用户可 Memory 偏好。
-- 每页要点建议 ≤ 5 条，每条 ≤ 40 字（生成时约束）。
-- 敏感删页/清稿：Safety RequireApproval。
+- 标题表达结论而非目录标签。
+- 每页存在明确视觉焦点和信息层级。
+- 同一 Deck 保持字体、颜色、间距和组件语言一致。
+- 连续三页不得使用相同的非焦点构图签名。
+- comparison 强调项允许非对称权重，但不能改变比较语义。
+- chart 支持正负值和跨零轴，table 根据内容动态分配列宽。
+- architecture hub-spoke 使用可编辑节点和连接线。
+- notes、source、chart/table 标签等 Scene 字段必须被真实消费或明确拒绝。
 
 ---
 
-## 11. 与 Word/Excel 跨宿主
+## 5. 编译、预览与写入事务
 
-| 场景 | 策略 |
-|---|---|
-| Word 纪要 → PPT | 用户在 PPT 打开或引用文件；Context 读文件摘要（非跨进程 COM） |
-| Excel 图 → PPT | 导出图片插入 or 用户复制；v1 可用 InsertImage 文件路径 |
-| 真跨 COM | v2 连接器，不在本专项 |
+### 5.1 Deck 级预编译
 
----
+正式写入前先编译所有 `SlideRenderPlan` 并执行 Preflight：
 
-## 12. 验收与 Golden
+- Scene node ID 完整且唯一。
+- Bounds 合法，无不可修复溢出和冲突。
+- 文本层级、局部对比度和视觉结构满足门槛。
+- 整套 Deck 的构图节奏不连续重复。
 
-| Case | 断言 |
-|---|---|
-| U4-deck-from-notes | slide_count_gte；标题非空率≥0.8 |
-| P-beautify-align | 页数不变；shapeCount 合理 |
-| P-delete-confirm | 无批准则不删 |
-| P-notes | notes 非空 |
-| 未知命令 | 无「暂不支持」用户死胡同；有 replan/tool |
+任一页面预检失败时，不开始部分写入。
 
----
+### 5.2 Preview
 
-## 13. 缺口优先级
+Preview 返回：
 
-| ID | 项 | P |
-|---|---|---|
-| P-GAP-1 | DeckModel 校验与 generate 管道 | P0 |
-| P-GAP-2 | 幻灯片 Diff 观察 | P0 |
-| P-GAP-3 | 删除/结构变更审批 | P0 |
-| P-GAP-4 | PptActionHarness | P1 |
-| P-GAP-5 | ChatControl 瘦身迁 Executor | P1 |
-| P-GAP-6 | 母版/主题稳健降级 | P1 |
-| P-GAP-7 | 动画默认关闭策略 | P1 |
+- `changed=false`
+- `rendered=false`
+- `createdSlides=0`
+- Scene 编译与 Deck 预检报告
 
----
+Preview 不允许创建幻灯片后再删除，因为那会引入 COM 副作用和错误回滚风险。
 
-## 14. 决策摘要（评审）
+### 5.3 Execute
 
-- [x] 同意 DeckModel 为一等公民
-- [x] 同意 generate 管道与页数 clamp 3..30
-- [x] 同意 DeleteSlide **risky + 审批**
-- [x] 同意动画默认不添加
-- [x] 同意禁止「暂不支持」死胡同，改为 replan/换工具
-- [x] 同意快路径同样写 Trace（**D9**）
+每页执行：
+
+1. 编译/复核 Scene plan。
+2. `PowerPointSceneRenderer` 创建可编辑 Shape。
+3. 写入 notes 并回读验证。
+4. `PowerPointVisualVerifier` 对真实 Slide 做结构、几何、层级和像素检查。
+5. 把 target ref、issues、metrics、aesthetic score 写入结构化 Observation。
 
 ---
 
-## 15. 落地顺序
+## 6. 真实 PowerPoint 视觉验证
 
-1. Context 目录 + 当前页快照
-2. generate 管道（小页数）+ Observe
-3. Safety 删页
-4. beautify/notes
-5. visual
-6. ActionHarness 快路径
-7. 未知命令路径清理
+当前验证覆盖：
+
+- 缺失/重复 Scene node。
+- 无效边界、越界、碰撞和文本溢出。
+- 标题/正文层级与字号可读性。
+- 颜色对比、视觉焦点和结构完整性。
+- 计划节点与实际带标记 Shape 的对应关系。
+- notes、image 等请求资产是否真实写入。
+- `Slide.Export` 是否成功产生有效 PNG。
+- 真实像素的量化颜色数量、亮度标准差、近纯色/空白检查。
+- Deck 连续构图重复。
+
+专业交付阈值和具体指标属于 Verifier 实现配置；调整门槛时必须同步回归 fixture 和文档，不在 Prompt 中硬编码另一套标准。
+
+轻量像素统计用于发现空白、扁平和低变化输出，但不能单独证明设计专业；必须与 Scene 语义、结构和层级验证结合。
 
 ---
 
-*PPT 的关键体验是「结构正确的多页故事」而不是单页堆形状；DeckModel 是一等公民。*
+## 7. 临时视觉证据与多模态 Repair
+
+当渲染后验证失败：
+
+1. 在回滚前通过 `Slide.Export` 采集当前实际渲染截图。
+2. 保持页面宽高比，限制导出像素和最大字节数。
+3. 读取为 Data URL 后立即删除临时文件。
+4. 只放入 `ToolResult.VisualEvidence` 内存字段；该字段排除普通 JSON 序列化。
+5. 执行安全回滚并返回 `VERIFY_FAILED`。
+6. `LoopEngine` 将错误合同、原参数和最多少量截图组合为多模态 Repair 请求。
+7. `AiGateway` 转换 OpenAI-compatible `image_url` 与 Anthropic base64 image block。
+8. Provider/模型不支持图片时，同一 Run 停止重复尝试视觉通道，降级为文本 Repair。
+
+禁止把截图写入 `Observation`、`Data`、`Artifacts`、History、Memory、RunTrace、日志、Notes 或 WebView2 UI。
+
+当前多模态证据用于增强“已经由确定性 Verifier 判失败”的诊断与参数修复；它不是独立的第二套视觉审核 Loop。
+
+---
+
+## 8. 安全回滚与失败合同
+
+- 仅删除包含本批 `office-ai-design:` Shape 标记、能够可靠识别的生成页。
+- 不按“初始页数之后全部删除”猜测回滚范围。
+- 无法可靠识别全部变更时返回 `PARTIAL_APPLY`，保留真实 Observation，不伪装成完整回滚。
+- 截图采集失败不阻止安全回滚。
+- notes、image 或视觉结构缺失属于交付失败，不以 warning 假成功。
+- 未知 Scene、不可恢复 COM 状态和文档缺失使用统一 `ExceptionClassifier` 合同。
+
+---
+
+## 9. COM 规则
+
+- PowerPoint COM 实现只位于 `PowerPointAi`，共享合同位于 `ShareRibbon`。
+- 所有 COM 操作经过既有宿主 UI 线程入口；Executor/Renderer 不创建线程。
+- 临时 `Presentation`、`Slides`、`Slide`、`ShapeRange`、`FillFormat`、`TextFrame2`、`TextRange2` 等对象在 `Finally` 中显式释放。
+- 不硬编码 `Placeholders(2)`；按 `PpPlaceholderType` 查找并回读验证。
+- `Slide.Export`、字体度量、透明度、阴影和文本边界可能受 PowerPoint 版本、主题和字体环境影响，因此必须保留渲染后验证。
+
+---
+
+## 10. 回归与验收
+
+Fixture：
+
+- `PowerPointAi/Design/Fixtures/professional-command-regression.json`
+- `PowerPointAi/Design/Fixtures/professional-visual-regression.json`
+
+至少覆盖：
+
+- 嵌套 Scene 合并和未知字段拒绝。
+- signed chart、动态 table、comparison emphasis。
+- `feature-left`、`hero-left`、`vertical`、`hub-spoke`。
+- matrix 显式双轴语义。
+- notes 回读和缺失失败。
+- Deck 构图重复门禁。
+- 像素空白/扁平检测。
+- 回滚只删除安全标记页。
+- 视觉证据不进入 ToolResult JSON、Trace、History 或日志。
+- 多模态失败只降级一次并继续文本 Repair。
+
+静态源码解析不能替代以下验证：
+
+1. `ShareRibbon` 与 `PowerPointAi` 的真实 MSBuild。
+2. 安装目标 Office 版本中的 COM 运行。
+3. 不同字体、主题、分辨率和纵横比的真实导出。
+4. OpenAI-compatible 与 Anthropic 视觉模型的请求兼容性。
+
+---
+
+## 11. 后续重点
+
+1. 建立真实 PowerPoint 截图 golden 与人工专业设计评分集。
+2. 增强跨页叙事节奏、图像资产选择和数据故事能力。
+3. 在不建立第二套 Loop 的前提下研究“渲染、视觉审核、提交”的事务化两阶段方案。
+4. 扩展更多 Scene variant 时优先复用组件和通用动态 Office API。
+5. 持续验证不同 PowerPoint 版本的 COM 渲染差异和失败恢复。
+
+---
+
+*专业 Deck 的交付标准不是“生成了若干页”，而是 Scene 语义被真实消费、PowerPoint 对象可编辑、整套视觉一致、渲染结果经过验证，并且失败能够安全回滚和修复。*

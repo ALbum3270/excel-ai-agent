@@ -102,7 +102,6 @@ Public Class ThisAddIn
     ''' 确保核心服务已加载（WebView2 + SQLite），首次调用时初始化
     ''' </summary>
     Private Sub EnsureCoreServicesLoaded()
-        If PhaseStartupManager.Instance.IsBackgroundReady Then Return
         Try
             Dim webView2Init = _lazyWebView2.Value
         Catch ex As Exception
@@ -273,7 +272,7 @@ Public Class ThisAddIn
             chatTaskPane = Me.CustomTaskPanes.Add(chatControl, "Excel AI智能助手")
             chatTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight
             chatTaskPane.Width = 420
-            'AddHandler chatTaskPane.VisibleChanged, AddressOf ChatTaskPane_VisibleChanged
+            AddHandler chatTaskPane.VisibleChanged, AddressOf ChatTaskPane_VisibleChanged
             'chatTaskPane.Visible = False
         Catch ex As Exception
             MessageBox.Show($"初始化任务窗格失败: {ex.Message}")
@@ -288,7 +287,7 @@ Public Class ThisAddIn
                 _deepseekTaskPane = Me.CustomTaskPanes.Add(_deepseekControl, "Deepseek AI智能助手")
                 _deepseekTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight
                 _deepseekTaskPane.Width = 420
-                'AddHandler _deepseekTaskPane.VisibleChanged, AddressOf DeepseekTaskPane_VisibleChanged
+                AddHandler _deepseekTaskPane.VisibleChanged, AddressOf DeepseekTaskPane_VisibleChanged
                 '_deepseekTaskPane.Visible = False
             End If
         Catch ex As Exception

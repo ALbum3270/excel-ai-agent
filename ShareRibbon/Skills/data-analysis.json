@@ -1,6 +1,7 @@
 {
   "id": "data-analysis",
   "name": "数据分析",
+  "application": "Excel",
   "description": "对Excel数据进行统计、汇总、公式计算和数据分析",
   "triggerPatterns": ["分析", "统计", "汇总", "计算", "平均值", "总和", "求和", "排名", "排序", "筛选", "透视"],
   "requiredTools": ["DataAnalysis", "ApplyFormula", "CreateChart", "CreatePivotTable", "SortData", "FilterData", "ConditionalFormat", "CleanData", "GenerateReport"],

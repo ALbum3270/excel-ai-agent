@@ -190,41 +190,9 @@ Public Class StyleGuideManager
         Return False
     End Function
 
-    ''' <summary>从文件导入规范</summary>
-    Public Function ImportStyleGuide(filePath As String) As StyleGuideResource
-        Try
-            Dim content = File.ReadAllText(filePath, Text.Encoding.UTF8)
-            Dim guide As New StyleGuideResource()
-            guide.Id = Guid.NewGuid().ToString()
-            guide.Name = Path.GetFileNameWithoutExtension(filePath)
-            guide.GuideContent = content
-            guide.SourceFileName = Path.GetFileName(filePath)
-            guide.SourceFileExtension = Path.GetExtension(filePath)
-            guide.FileEncoding = "UTF-8"
-            guide.Category = "通用"
-            guide.IsPreset = False
-            guide.CreatedAt = DateTime.Now
-            guide.LastModified = DateTime.Now
-            _styleGuides.Add(guide)
-            SaveStyleGuides()
-            Return guide
-        Catch ex As Exception
-            Debug.WriteLine($"导入规范失败: {ex.Message}")
-        End Try
-        Return Nothing
-    End Function
-
     ''' <summary>根据ID获取规范</summary>
     Public Function GetStyleGuideById(guideId As String) As StyleGuideResource
         Return _styleGuides.FirstOrDefault(Function(g) g.Id = guideId)
-    End Function
-
-    ''' <summary>按分类获取规范</summary>
-    Public Function GetStyleGuidesByCategory(category As String) As List(Of StyleGuideResource)
-        If String.IsNullOrEmpty(category) OrElse category = "全部" Then
-            Return _styleGuides.ToList()
-        End If
-        Return _styleGuides.Where(Function(g) g.Category = category).ToList()
     End Function
 
     ''' <summary>获取所有分类</summary>

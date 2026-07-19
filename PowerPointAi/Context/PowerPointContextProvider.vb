@@ -24,9 +24,16 @@ Namespace Context
                     ' 获取当前幻灯片
                     Try
                         If _app.ActiveWindow IsNot Nothing AndAlso _app.ActiveWindow.View IsNot Nothing Then
-                            currentSlideIndex = _app.ActiveWindow.View.Slide.SlideIndex
+                            ' View.Slide 的 COM 返回值在部分 PowerPoint 视图中不是可直接强转的
+                            ' Slide RCW，会触发 first-chance InvalidCastException。显式晚绑定只读取
+                            ' SlideIndex，避免无意义的接口强制转换。
+                            Dim currentSlide As Object = _app.ActiveWindow.View.Slide
+                            If currentSlide IsNot Nothing Then
+                                currentSlideIndex = CInt(CallByName(currentSlide, "SlideIndex", CallType.Get))
+                            End If
                         End If
-                    Catch
+                    Catch ex As Exception
+                        Debug.WriteLine("获取当前幻灯片索引失败: " & ex.GetType().Name & ": " & ex.Message)
                         currentSlideIndex = 1
                     End Try
 

@@ -426,6 +426,18 @@ function injectProofreadStyles() {
 '    border-bottom: 1px solid #e5e7eb;' +
 '    margin-bottom: 16px;' +
 '}' +
+'.proofread-summary {' +
+'    margin: -8px 0 14px;' +
+'    padding: 8px 10px;' +
+'    border-radius: 6px;' +
+'    background: #f8fafc;' +
+'    color: #475569;' +
+'    font-size: 12px;' +
+'    line-height: 1.5;' +
+'}' +
+'.proofread-summary .high { color: #dc2626; }' +
+'.proofread-summary .medium { color: #d97706; }' +
+'.proofread-summary .low { color: #2563eb; }' +
 '.proofread-list-icon {' +
 '    font-size: 20px;' +
 '}' +

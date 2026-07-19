@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | **v0.2（评审修订）** |
 | 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **H0 adapter 已落地并进入主路径**：`ShareRibbon/Agent/Harness` 已有 `IOfficeHarness`、`OfficeHarness`、轻量 DTO 和 `IRunTraceStore`；`AgentKernelService.StartAgentAsync` 已经通过 `OfficeHarness` adapter 调用现有 `AgentKernel`；轻量 RunTrace 已写 `agent_run`/`agent_run_step`。完整 `ApproveAsync/CancelAsync/ContextHub/agent_run_event` 和回放 API 仍待后续。 |
+| 实现状态 | **Harness adapter 与审批状态机已进入主路径**：已有 `RunAsync/ApproveAsync/ResumeAsync/CancelAsync`、`awaiting_approval` 非阻塞返回、同 Harness 单 active run、ContextPack 事件与轻量 RunTrace；审批请求/决策写入 step。强制中断正在运行的 COM、独立 `agent_run_event`、ContextHub 服务化和回放 API 仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §3 / Phase H0 |
 | 现有 | `ChatRoutingOrchestrator`、`AgentKernel`/`AgentKernelService`、WebView 消息、`ExecutionPathPolicy` |
 | 关联 | 全部 design/* 专项；实现时 Surface 只依赖本 API |

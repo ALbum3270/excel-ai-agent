@@ -361,14 +361,4 @@ Public Class PresetProviders
         Return model
     End Function
 
-    ''' <summary>
-    ''' 获取所有预置配置
-    ''' </summary>
-    Public Shared Function GetAllPresetProviders() As List(Of ConfigItem)
-        Dim allProviders As New List(Of ConfigItem)()
-        allProviders.AddRange(GetCloudProviders())
-        allProviders.AddRange(GetLocalProviders())
-        Return allProviders
-    End Function
-
 End Class

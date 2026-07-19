@@ -30,7 +30,7 @@ Public Interface IChatRoutingHost
     Sub ShowIdentifyingStatus()
     Sub SendChatMessage(message As String)
     Sub SendChatMessageWithIntent(message As String, intent As IntentResult)
-    Sub StartAgentPlanningFlow(message As String, intent As IntentResult)
+    Sub StartAgentPlanningFlow(message As String, intent As IntentResult, analysis As Agent.AiNativeRuntimeResult)
     Sub SetCurrentIntentResult(intent As IntentResult)
 End Interface
 
@@ -39,6 +39,7 @@ End Interface
 ''' </summary>
 Public Enum ChatRouteDecision
     FollowUpChat
+    PlainChat
     BlockedByPreCheck
     AgentKernel
     ''' <summary>Only used when agent start fails and policy allows chat fallback, or analyze throws.</summary>
@@ -64,7 +65,6 @@ Public Class ChatRoutingOrchestrator
                                               originalQuestion As String,
                                               filePaths As List(Of String),
                                               selectedContents As List(Of SendMessageReferenceContentItem)) As Task(Of ChatRouteDecision)
-        Agent.ExecutionPathPolicy.WarnIfLegacyAgentKernelSwitchDisabled()
 
         Try
             Dim hasReferences As Boolean =
@@ -166,10 +166,25 @@ Public Class ChatRoutingOrchestrator
                 _host.SetCurrentIntentResult(intent)
             End If
 
-            ' Primary product path — no UseNewAgentKernel branch.
+            Dim interactionMode = If(intent.ResponseMode, "").Trim().ToLowerInvariant()
+            Dim taskSpecRequiresExecution = aiNativeResult?.TaskSpec IsNot Nothing AndAlso
+                (aiNativeResult.TaskSpec.ExpectedSlideCount > 0 OrElse
+                 (aiNativeResult.TaskSpec.ExpectedOutputs IsNot Nothing AndAlso
+                  aiNativeResult.TaskSpec.ExpectedOutputs.Count > 0))
+            Dim shouldUsePlainChat = interactionMode = "answer" OrElse interactionMode = "clarify" OrElse
+                (String.IsNullOrWhiteSpace(interactionMode) AndAlso
+                 intent.OfficeIntent = OfficeIntentType.GENERAL_QUERY AndAlso
+                 Not taskSpecRequiresExecution)
+            If shouldUsePlainChat Then
+                Debug.WriteLine($"[ChatRoutingOrchestrator] interactionMode={If(interactionMode, "compat-general")} → plain chat")
+                _host.SendChatMessageWithIntent(finalMessageToLLM, intent)
+                Return ChatRouteDecision.PlainChat
+            End If
+
+            ' Primary product path always uses AgentKernel.
             Debug.WriteLine($"[ChatRoutingOrchestrator] primary path AgentKernel intent={intent.OfficeIntent}, confidence={intent.Confidence:F2}")
             _host.ShowIdentifyingStatus()
-            _host.StartAgentPlanningFlow(finalMessageToLLM, intent)
+            _host.StartAgentPlanningFlow(finalMessageToLLM, intent, aiNativeResult)
             Return ChatRouteDecision.AgentKernel
 
         Catch ex As Exception

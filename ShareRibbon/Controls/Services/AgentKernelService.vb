@@ -27,9 +27,7 @@ Public Class AgentKernelService
     Public Property AgentOriginalUserRequest As String = Nothing
     Public Property AgentFullUserMessage As String = Nothing
     Public Property CurrentAgentSessionId As String = Nothing
-
-    ' 审批等待器（用于 LoopEngine 的 OnRequestApproval 事件）
-    Private _approvalTcs As TaskCompletionSource(Of Boolean)
+    Public Property CurrentHarnessRunId As String = Nothing
 
     Public Sub New(
         executeScript As Func(Of String, Task),
@@ -64,6 +62,7 @@ Public Class AgentKernelService
         _agentKernel.SendAIRequest = Async Function(prompt, system, history)
                                           Return Await _sendAiRequest(prompt, system, history)
                                       End Function
+        _agentKernel.SendAIRequestWithMessages = AddressOf SendAiRequestWithMessagesAsync
 
         ' 绑定代码执行委托：Agent 主路径强制 ToolResult 回执。
         _agentKernel.ExecuteCodeWithToolResult = Function(code, lang, preview)
@@ -82,6 +81,7 @@ Public Class AgentKernelService
         ' 加载工具和技能
         _agentKernel.Initialize()
         _officeHarness = New Agent.Harness.OfficeHarness(_agentKernel, New Agent.Harness.SqliteRunTraceStore())
+        AddHandler _officeHarness.ContextReady, AddressOf OnHarnessContextReady
     End Sub
 
 #Region "Public Methods"
@@ -91,7 +91,9 @@ Public Class AgentKernelService
     ''' </summary>
     Public Async Function StartAgentAsync(userRequest As String, appType As String, currentContent As String,
                                            historyMessages As List(Of Tuple(Of String, String)),
-                                           Optional officeContext As Agent.Context.OfficeContext = Nothing) As Task(Of Boolean)
+                                           Optional officeContext As Agent.Context.OfficeContext = Nothing,
+                                           Optional taskSpec As Agent.AgentTaskSpec = Nothing,
+                                           Optional selectedSkills As List(Of SkillFileDefinition) = Nothing) As Task(Of Boolean)
         Try
             EnsureInitialized()
 
@@ -117,7 +119,9 @@ Public Class AgentKernelService
                 .Text = userRequest,
                 .Mode = "agent",
                 .HostContextText = currentContent,
-                .OfficeContext = officeContext
+                .OfficeContext = officeContext,
+                .TaskSpec = taskSpec,
+                .SelectedSkills = If(selectedSkills, New List(Of SkillFileDefinition)())
             }
             Dim result = Await _officeHarness.RunAsync(turn, Threading.CancellationToken.None)
 
@@ -125,13 +129,24 @@ Public Class AgentKernelService
                 AppLogger.Warn("AgentKernelService", "StartAgentAsync returned null result")
                 Return False
             End If
+            CurrentHarnessRunId = result.RunId
+            If result.Status = Agent.Harness.HarnessRunStatus.AwaitingApproval Then
+                AppLogger.Info("AgentKernelService", $"Harness run awaiting approval: {result.RunId}")
+                Return True
+            End If
             If result.Status <> Agent.Harness.HarnessRunStatus.Succeeded Then
                 AppLogger.Warn("AgentKernelService", $"StartAgentAsync agent failed: {result.UserMessage}")
+                If Not String.IsNullOrWhiteSpace(CurrentAgentSessionId) Then
+                    FinalizeAgentUi(False, result.UserMessage)
+                End If
             End If
+            CurrentHarnessRunId = Nothing
             Return result.Status = Agent.Harness.HarnessRunStatus.Succeeded
         Catch ex As Exception
             AppLogger.Error("AgentKernelService", "StartAgentAsync exception", ex)
-            GlobalStatusStrip.ShowWarning(ExceptionClassifier.ToUserMessage(ex, "Agent 启动失败，请重试"))
+            Dim userMessage = ExceptionClassifier.ToUserMessage(ex, "Agent 启动失败，请重试")
+            GlobalStatusStrip.ShowWarning(userMessage)
+            FinalizeAgentUi(False, userMessage)
             Return False
         End Try
     End Function
@@ -141,10 +156,9 @@ Public Class AgentKernelService
     ''' </summary>
     Public Sub AbortAgent()
         Try
-            ' 如果有正在等待的审批，设置为 false
-            If _approvalTcs IsNot Nothing AndAlso Not _approvalTcs.Task.IsCompleted Then
-                _approvalTcs.TrySetResult(False)
-            End If
+            Dim sessionId = CurrentAgentSessionId
+            Dim runId = CurrentHarnessRunId
+            If Not String.IsNullOrWhiteSpace(runId) Then CancelHarnessRunAsync(runId)
 
             ' 清除状态
             AgentThinkingUuid = Nothing
@@ -152,7 +166,7 @@ Public Class AgentKernelService
             AgentFullUserMessage = Nothing
             CurrentAgentSessionId = Nothing
 
-            _executeScript($"completeAgent('{CurrentAgentSessionId}', false, '已终止')")
+            _executeScript($"completeAgent('{sessionId}', false, '已终止')")
 
             GlobalStatusStrip.ShowInfo("已终止Agent")
         Catch ex As Exception
@@ -164,23 +178,49 @@ Public Class AgentKernelService
     ''' 用户批准当前计划或步骤
     ''' </summary>
     Public Sub Approve()
-        If _approvalTcs IsNot Nothing AndAlso Not _approvalTcs.Task.IsCompleted Then
-            _approvalTcs.TrySetResult(True)
-        End If
+        ResolveHarnessApprovalAsync(True)
     End Sub
 
     ''' <summary>
     ''' 用户拒绝当前计划或步骤
     ''' </summary>
     Public Sub Reject()
-        If _approvalTcs IsNot Nothing AndAlso Not _approvalTcs.Task.IsCompleted Then
-            _approvalTcs.TrySetResult(False)
-        End If
+        ResolveHarnessApprovalAsync(False)
+    End Sub
+
+    Private Async Sub ResolveHarnessApprovalAsync(approved As Boolean)
+        If _officeHarness Is Nothing OrElse String.IsNullOrWhiteSpace(CurrentHarnessRunId) Then Return
+        Try
+            Dim result = Await _officeHarness.ApproveAsync(CurrentHarnessRunId, approved, Threading.CancellationToken.None)
+            If result IsNot Nothing AndAlso result.Status <> Agent.Harness.HarnessRunStatus.AwaitingApproval Then
+                CurrentHarnessRunId = Nothing
+            End If
+        Catch ex As Exception
+            AppLogger.Error("AgentKernelService", "Resolve harness approval failed", ex)
+        End Try
+    End Sub
+
+    Private Async Sub CancelHarnessRunAsync(runId As String)
+        Try
+            Await _officeHarness.CancelAsync(runId, Threading.CancellationToken.None)
+        Catch ex As Exception
+            AppLogger.Warn("AgentKernelService", $"Cancel harness run failed: {AppLogger.Redact(ex.Message)}")
+        End Try
     End Sub
 
 #End Region
 
 #Region "Event Handlers"
+
+    Private Sub OnHarnessContextReady(sender As Object, e As Agent.Harness.HarnessContextEventArgs)
+        If e Is Nothing OrElse String.IsNullOrWhiteSpace(e.ContextPackJson) Then Return
+        Try
+            Dim escaped = _escapeJs(e.ContextPackJson)
+            _executeScript($"window.officeAiContextPack = JSON.parse('{escaped}'); if (typeof updateContextPackTrace === 'function') updateContextPackTrace(window.officeAiContextPack);")
+        Catch ex As Exception
+            AppLogger.Warn("AgentKernelService", $"ContextPack UI trace failed: {AppLogger.Redact(ex.Message)}")
+        End Try
+    End Sub
 
     ''' <summary>
     ''' 处理状态变更事件
@@ -245,19 +285,10 @@ Public Class AgentKernelService
     ''' </summary>
     Private Sub OnKernelRequestApproval(message As String, callback As Action(Of Boolean))
         Try
-            _approvalTcs = New TaskCompletionSource(Of Boolean)()
-
             ' 显示审批 UI
             _executeScript($"showAgentApproval('{CurrentAgentSessionId}', '{_escapeJs(message)}')")
-
-            ' 等待用户决策
-            Task.Run(Async Function()
-                         Dim approved = Await _approvalTcs.Task
-                         callback(approved)
-                     End Function)
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnRequestApproval 出错: {ex.Message}")
-            callback(False)
         End Try
     End Sub
 
@@ -308,6 +339,8 @@ Public Class AgentKernelService
     ''' 处理 Agent 完成事件
     ''' </summary>
     Private Sub OnKernelCompleted(result As Agent.AgentResult)
+        Dim terminalSuccess = result IsNot Nothing AndAlso result.Success
+        Dim terminalMessage = If(result?.Message, If(terminalSuccess, "任务完成", "任务失败"))
         Try
             Dim userMsgForHistory = If(Not String.IsNullOrWhiteSpace(AgentFullUserMessage), AgentFullUserMessage, AgentOriginalUserRequest)
 
@@ -320,7 +353,7 @@ Public Class AgentKernelService
                 _chatStateService?.AddMessage("user", userMsgForHistory)
             End If
 
-            Dim assistantReply = If(String.IsNullOrEmpty(result.Message), "任务完成", result.Message)
+            Dim assistantReply = terminalMessage
             _historyMessages.Add(New HistoryMessage With {
                 .role = "assistant",
                 .content = assistantReply
@@ -330,19 +363,55 @@ Public Class AgentKernelService
 
             MemoryService.SaveConversationTurnAsync(userMsgForHistory, assistantReply, _chatStateService?.CurrentSessionId, _getOfficeAppType())
 
-            AgentOriginalUserRequest = Nothing
-            AgentFullUserMessage = Nothing
-
-            _executeScript($"completeAgent('{CurrentAgentSessionId}', {result.Success.ToString().ToLower()}, '{_escapeJs(result.Message)}')")
-            CurrentAgentSessionId = Nothing
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnCompleted 出错: {ex.Message}")
+        Finally
+            FinalizeAgentUi(terminalSuccess, terminalMessage)
         End Try
     End Sub
 
 #End Region
 
 #Region "Private Helpers"
+
+    ''' <summary>
+    ''' Shared non-streaming gateway used only when the Loop has ephemeral multimodal
+    ''' observation evidence. Request bodies are not logged or added to chat history.
+    ''' </summary>
+    Private Async Function SendAiRequestWithMessagesAsync(messages As JArray) As Task(Of String)
+        If messages Is Nothing OrElse messages.Count = 0 Then Return Nothing
+
+        Dim response = Await AiGateway.SendChatAsync(New AiRequestOptions With {
+            .ApiUrl = ConfigSettings.ApiUrl,
+            .ApiKey = ConfigSettings.ApiKey,
+            .ModelName = ConfigSettings.ModelName,
+            .Platform = ConfigSettings.platform,
+            .ReasoningMode = ConfigSettings.ReasoningMode,
+            .Messages = messages,
+            .TimeoutSeconds = 90
+        })
+        If response Is Nothing OrElse Not response.Success Then
+            Throw New InvalidOperationException(If(response?.ErrorMessage, "Multimodal AI request failed"))
+        End If
+        Return response.Content
+    End Function
+
+    Private Sub FinalizeAgentUi(success As Boolean, message As String)
+        Dim sessionId = If(CurrentAgentSessionId, "")
+        Dim thinkingUuid = If(AgentThinkingUuid, "")
+        Try
+            _executeScript($"completeAgent('{_escapeJs(sessionId)}', {success.ToString().ToLowerInvariant()}, '{_escapeJs(If(message, ""))}', '{_escapeJs(thinkingUuid)}')")
+        Catch ex As Exception
+            AppLogger.Warn("AgentKernelService", $"FinalizeAgentUi failed: {AppLogger.Redact(ex.Message)}")
+            ' 即使主终态函数不存在，也直接执行最小按钮/规划卡复位。
+            _executeScript("var p=document.getElementById('planning-status-card');if(p)p.remove();if(typeof restoreAgentRequestUi==='function')restoreAgentRequestUi();else if(typeof changeSendButton==='function')changeSendButton();")
+        Finally
+            AgentOriginalUserRequest = Nothing
+            AgentFullUserMessage = Nothing
+            AgentThinkingUuid = Nothing
+            CurrentAgentSessionId = Nothing
+        End Try
+    End Sub
 
     ''' <summary>
     ''' 在聊天界面显示思考状态

@@ -313,8 +313,50 @@ Public Class AiGateway
 
     Private Shared Function TokenToAnthropicContent(content As JToken) As JToken
         If content Is Nothing Then Return ""
-        If content.Type = JTokenType.Array Then Return content.DeepClone()
+        If content.Type = JTokenType.Array Then
+            Dim converted As New JArray()
+            For Each itemToken In DirectCast(content, JArray)
+                Dim item = TryCast(itemToken, JObject)
+                If item Is Nothing Then
+                    converted.Add(itemToken.DeepClone())
+                    Continue For
+                End If
+
+                If String.Equals(TokenToString(item("type")), "image_url", StringComparison.OrdinalIgnoreCase) Then
+                    Dim imageBlock = ConvertOpenAiImageToAnthropic(item)
+                    If imageBlock IsNot Nothing Then converted.Add(imageBlock)
+                Else
+                    converted.Add(item.DeepClone())
+                End If
+            Next
+            Return converted
+        End If
         Return TokenToString(content)
+    End Function
+
+    Private Shared Function ConvertOpenAiImageToAnthropic(item As JObject) As JObject
+        Dim imageUrl = TryCast(item("image_url"), JObject)
+        Dim dataUrl = If(imageUrl Is Nothing, "", TokenToString(imageUrl("url")))
+        If String.IsNullOrWhiteSpace(dataUrl) OrElse
+           Not dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) Then Return Nothing
+
+        Dim commaIndex = dataUrl.IndexOf(","c)
+        If commaIndex <= 5 OrElse commaIndex >= dataUrl.Length - 1 Then Return Nothing
+        Dim header = dataUrl.Substring(5, commaIndex - 5)
+        If Not header.EndsWith(";base64", StringComparison.OrdinalIgnoreCase) Then Return Nothing
+
+        Dim mimeType = header.Substring(0, header.Length - ";base64".Length)
+        If mimeType <> "image/png" AndAlso mimeType <> "image/jpeg" AndAlso
+           mimeType <> "image/gif" AndAlso mimeType <> "image/webp" Then Return Nothing
+
+        Return New JObject From {
+            {"type", "image"},
+            {"source", New JObject From {
+                {"type", "base64"},
+                {"media_type", mimeType},
+                {"data", dataUrl.Substring(commaIndex + 1)}
+            }}
+        }
     End Function
 
     Private Shared Function ParseJsonOrString(value As String) As JToken

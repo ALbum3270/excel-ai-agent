@@ -749,26 +749,6 @@ function sendContinuationMessage(text) {
     return true;
 }
 
-// ========== 续写按钮动画提示 ==========
-
-let continuationHintInterval = null;
-
-/**
- * 启动续写按钮的闪烁提示动画
- */
-function startContinuationHint() {
-    const btn = document.getElementById('continuation-button');
-    if (!btn) return;
-    
-    // 添加闪烁动画样式
-    btn.style.animation = 'continuation-hint-pulse 1s ease-in-out infinite';
-    btn.style.boxShadow = '0 0 8px #4a6fa5';
-    btn.title = '点击此处开始AI续写';
-    
-    // 显示提示气泡
-    showContinuationTooltip();
-}
-
 /**
  * 停止续写按钮的闪烁提示
  */
@@ -780,45 +760,6 @@ function stopContinuationHint() {
     btn.style.boxShadow = '';
     btn.title = 'AI续写';
     
-    // 移除提示气泡
-    hideContinuationTooltip();
-}
-
-/**
- * 显示续写提示气泡
- */
-function showContinuationTooltip() {
-    // 移除已有的提示
-    hideContinuationTooltip();
-    
-    const btn = document.getElementById('continuation-button');
-    if (!btn) return;
-    
-    const tooltip = document.createElement('div');
-    tooltip.id = 'continuation-tooltip';
-    tooltip.innerHTML = `
-        <div style="position: absolute; bottom: 45px; left: 50%; transform: translateX(-50%); 
-                    background: #4a6fa5; color: white; padding: 8px 12px; border-radius: 6px; 
-                    font-size: 12px; white-space: nowrap; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
-            点击开始AI续写，可输入风格要求
-            <div style="position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); 
-                        border-left: 6px solid transparent; border-right: 6px solid transparent; 
-                        border-top: 6px solid #4a6fa5;"></div>
-        </div>
-    `;
-    btn.style.position = 'relative';
-    btn.appendChild(tooltip);
-    
-    // 5秒后自动隐藏
-    setTimeout(hideContinuationTooltip, 5000);
-}
-
-/**
- * 隐藏续写提示气泡
- */
-function hideContinuationTooltip() {
-    const tooltip = document.getElementById('continuation-tooltip');
-    if (tooltip) tooltip.remove();
 }
 
 /**
@@ -1282,10 +1223,6 @@ function handleTemplateRegenerate() {
 (function() {
     const style = document.createElement('style');
     style.textContent = `
-        @keyframes continuation-hint-pulse {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.1); opacity: 0.8; }
-        }
         .continuation-btn:hover {
             opacity: 0.85;
         }

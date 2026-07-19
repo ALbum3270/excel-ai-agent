@@ -87,17 +87,6 @@ Public Class SemanticMappingManager
         Return _mappings.FirstOrDefault(Function(m) m.SourceId = sourceId)
     End Function
 
-    ''' <summary>更新映射</summary>
-    Public Sub UpdateMapping(mapping As SemanticStyleMapping)
-        If mapping Is Nothing Then Return
-        Dim index = _mappings.FindIndex(Function(m) m.Id = mapping.Id)
-        If index >= 0 Then
-            mapping.LastModified = DateTime.Now
-            _mappings(index) = mapping
-            SaveMappings()
-        End If
-    End Sub
-
     ''' <summary>删除映射</summary>
     Public Sub DeleteMapping(id As String)
         _mappings.RemoveAll(Function(m) m.Id = id)

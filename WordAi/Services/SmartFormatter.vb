@@ -13,25 +13,10 @@ Namespace Services
 
         Private ReadOnly _app As Word.Application
         Private ReadOnly _locator As ContentLocator
-        Private _lastPlan As FormattingIntentPlan
-        Private _lastResult As FormattingExecutionResult
-
         Public Sub New(app As Word.Application)
             _app = app
             _locator = New ContentLocator(app)
         End Sub
-
-        Public ReadOnly Property LastPlan As FormattingIntentPlan
-            Get
-                Return _lastPlan
-            End Get
-        End Property
-
-        Public ReadOnly Property LastResult As FormattingExecutionResult
-            Get
-                Return _lastResult
-            End Get
-        End Property
 
         ''' <summary>
         ''' 根据查询设置格式
@@ -210,24 +195,6 @@ Namespace Services
         End Function
 
         ''' <summary>
-        ''' 直接设置格式（不需要查询定位）
-        ''' </summary>
-        Public Function ApplyFormatToSelection(action As String) As Boolean
-            Try
-                Dim sel As Word.Selection = _app.Selection
-                If sel Is Nothing Then
-                    Return False
-                End If
-
-                Return ExecuteFormatAction(sel, action)
-
-            Catch ex As Exception
-                Debug.WriteLine($"[SmartFormatter] ApplyFormatToSelection 失败: {ex.Message}")
-                Return False
-            End Try
-        End Function
-
-        ''' <summary>
         ''' 判断是否是可直接执行的 Word 格式命令。
         ''' </summary>
         Public Shared Function LooksLikeDirectFormattingCommand(message As String) As Boolean
@@ -235,20 +202,10 @@ Namespace Services
         End Function
 
         ''' <summary>
-        ''' 直接执行自然语言格式命令，如“字体统一加大2号”。
-        ''' </summary>
-        Public Function ApplyNaturalLanguageFormat(command As String) As Boolean
-            Dim result = ApplyNaturalLanguageFormatDetailed(command)
-            Return result IsNot Nothing AndAlso result.Success
-        End Function
-
-        ''' <summary>
         ''' 直接执行自然语言格式命令，并返回结构化执行结果。
         ''' </summary>
         Public Function ApplyNaturalLanguageFormatDetailed(command As String) As FormattingExecutionResult
             Dim result As New FormattingExecutionResult()
-            _lastResult = result
-
             If String.IsNullOrWhiteSpace(command) Then
                 result.ErrorMessage = "格式指令为空"
                 Return result
@@ -256,7 +213,6 @@ Namespace Services
 
             Dim compiler As New FormattingIntentCompiler()
             Dim plan = compiler.Compile(command, HasUsableSelection())
-            _lastPlan = plan
             result.Plan = plan
             If plan Is Nothing OrElse Not plan.HasOperations Then
                 result.ErrorMessage = "未识别到可执行格式操作"
@@ -275,8 +231,6 @@ Namespace Services
                 End Try
 
                 result = ApplyPlanDetailed(plan)
-                _lastResult = result
-
                 If result.Success Then
                     Debug.WriteLine($"[SmartFormatter] 已执行格式计划: {plan.ToHumanReadableSummary()}")
                 Else
@@ -288,7 +242,6 @@ Namespace Services
                 Debug.WriteLine($"[SmartFormatter] ApplyNaturalLanguageFormat 失败: {ex.Message}")
                 result.Success = False
                 result.ErrorMessage = ex.Message
-                _lastResult = result
                 Return result
             Finally
                 If undoStarted Then
@@ -310,11 +263,6 @@ Namespace Services
             Catch
                 Return False
             End Try
-        End Function
-
-        Private Function ApplyPlan(plan As FormattingIntentPlan) As Boolean
-            Dim result = ApplyPlanDetailed(plan)
-            Return result IsNot Nothing AndAlso result.Success
         End Function
 
         Private Function ApplyPlanDetailed(plan As FormattingIntentPlan) As FormattingExecutionResult

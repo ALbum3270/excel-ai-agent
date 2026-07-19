@@ -64,7 +64,7 @@ Namespace Extensions
                 End Try
 
                 ' 创建 FormulaHandler
-                Dim handler As New FormulaHandler(excelApp)
+                Dim handler As New FormulaHandler()
 
                 ' 尝试应用公式
                 Dim success As Boolean = handler.ApplyFormulaFromAI(aiResponse, targetRange)
@@ -141,31 +141,6 @@ Namespace Extensions
                 Return String.Empty
             End Try
         End Function
-
-        ''' <summary>
-        ''' 显示公式帮助对话框
-        ''' </summary>
-        Public Sub ShowFormulaHelp(excelApp As Excel.Application)
-            Try
-                Dim helpText As String =
-                    "Excel 公式生成助手" & vbCrLf & vbCrLf &
-                    "您可以用自然语言描述需要的公式，AI 会自动生成并应用。" & vbCrLf & vbCrLf &
-                    "示例：" & vbCrLf &
-                    "• ""计算 A1 到 A10 的总和""" & vbCrLf &
-                    "• ""如果 B1 大于 100，显示'合格'，否则显示'不合格'""" & vbCrLf &
-                    "• ""从 C2:E10 中查找 A2 的值""" & vbCrLf &
-                    "• ""计算 A 列的平均值""" & vbCrLf & vbCrLf &
-                    "提示：" & vbCrLf &
-                    "1. 先选中要放置公式的单元格" & vbCrLf &
-                    "2. 描述您的需求" & vbCrLf &
-                    "3. AI 会自动生成并应用公式"
-
-                MessageBox.Show(helpText, "公式生成帮助", MessageBoxButtons.OK, MessageBoxIcon.Information)
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine("[FormulaHandler集成] 显示帮助失败: " & ex.Message)
-            End Try
-        End Sub
 
     End Module
 

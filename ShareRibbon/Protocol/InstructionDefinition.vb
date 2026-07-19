@@ -99,8 +99,4 @@ Public Class ParamType
         Return New ParamType("array")
     End Function
 
-    Public Shared Function ObjectType() As ParamType
-        Return New ParamType("object")
-    End Function
-
 End Class

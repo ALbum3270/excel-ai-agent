@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | **v0.2（评审修订）** |
 | 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：Excel 已有 `ExcelDirectOperationService`、`ExcelContextService`、命令 schema 与工具 JSON；尚无统一 `ExcelActionHarness`、表级 Observation/Diff、按 Skill 收紧工具集合和大表分块执行闭环。 |
+| 实现状态 | **部分实现**：Excel 已有上下文、命令 schema、工具 JSON、Skill 工具硬门禁，以及 JSON 命令级 before/after Observation（目标 Range hash/preview、公式错误、UsedRange、图表 delta）；尚无统一 `ExcelActionHarness`、TableRegion 强类型探测和大表分块闭环。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.2 |
 | Skill | `Skills/excel-table-agent/SKILL.md` |
 | 现有 | `ExcelDirectOperationService`、`ExcelContextService`、`ExcelJsonCommandSchema`、Tools/excel（25）、ExcelDna UDF |

@@ -10,7 +10,6 @@ Public Class ThisAddIn
     Public Shared chatTaskPane As Microsoft.Office.Tools.CustomTaskPane
     Public Shared chatControl As ChatControl
     ' 翻译服务：延迟初始化，首次使用时创建
-    Private _translateService As WordTranslateService
 
     Private captureTaskPane As Microsoft.Office.Tools.CustomTaskPane
     Public Shared dataCapturePane As WebDataCapturePane
@@ -50,7 +49,6 @@ Public Class ThisAddIn
     ''' 如果 Phase 2 后台预加载已完成，则直接跳过
     ''' </summary>
     Private Sub EnsureCoreServicesLoaded()
-        If PhaseStartupManager.Instance.IsBackgroundReady Then Return
         Try
             Dim webView2Init = _lazyWebView2.Value
         Catch ex As Exception
@@ -81,9 +79,6 @@ Public Class ThisAddIn
 
     Private Sub ThisAddIn_Shutdown() Handles Me.Shutdown
         ' 清理翻译服务资源（右键菜单按钮）
-        If _translateService IsNot Nothing Then
-            _translateService.Cleanup()
-        End If
         ' 清理定时器资源
         If widthTimer IsNot Nothing Then
             widthTimer.Stop()
@@ -107,8 +102,9 @@ Public Class ThisAddIn
 
             chatControl = New ChatControl()
             chatTaskPane = Me.CustomTaskPanes.Add(chatControl, "Word AI智能助手")
-                chatTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight
-                chatTaskPane.Width = 420
+            chatTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight
+            chatTaskPane.Width = 420
+            AddHandler chatTaskPane.VisibleChanged, AddressOf ChatTaskPane_VisibleChanged
 
         Catch ex As Exception
             MessageBox.Show($"初始化 Word AI 任务窗格失败: {ex.Message}")

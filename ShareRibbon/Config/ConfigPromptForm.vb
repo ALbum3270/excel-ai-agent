@@ -25,7 +25,6 @@ Public Class ConfigPromptForm
     Private btnAdd As Button
     Private btnDelete As Button
     Private btnUse As Button
-    Private btnSave As Button
 
     ' 高级配置控件
     Private jsonSchemaTextBox As TextBox

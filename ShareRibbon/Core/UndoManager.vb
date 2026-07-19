@@ -129,16 +129,6 @@ Namespace Core
         End Function
 
         ''' <summary>
-        ''' 获取最近的撤销点
-        ''' </summary>
-        Public Function GetLastUndoPoint() As UndoPoint
-            If _undoStack.Count > 0 Then
-                Return _undoStack.Peek()
-            End If
-            Return Nothing
-        End Function
-
-        ''' <summary>
         ''' 获取所有撤销点历史
         ''' </summary>
         Public Function GetUndoHistory() As List(Of UndoPoint)

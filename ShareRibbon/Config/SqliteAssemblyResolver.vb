@@ -13,21 +13,16 @@ Imports System.Linq
     Public Class SqliteAssemblyResolver
 
     Private Shared _registered As Boolean = False
-    Private Shared _preloaded As Boolean = False
     Private Shared ReadOnly _lockObj As New Object()
-    Private Shared ReadOnly _preloadLock As New Object()
     Private Shared ReadOnly _sharedDependencyNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase) From {
         "AngleSharp",
         "DocumentFormat.OpenXml",
         "DocumentFormat.OpenXml.Framework",
-        "EntityFramework",
-        "EntityFramework.SqlServer",
         "HtmlAgilityPack",
         "Markdig",
         "MessagePack",
         "MessagePack.Annotations",
         "Microsoft.Bcl.AsyncInterfaces",
-        "Microsoft.Data.Sqlite",
         "Microsoft.NET.StringTools",
         "Microsoft.VisualStudio.Threading",
         "Microsoft.VisualStudio.Validation",
@@ -37,11 +32,9 @@ Imports System.Linq
         "Microsoft.Win32.Registry",
         "Nerdbank.Streams",
         "Newtonsoft.Json",
-        "SQLitePCLRaw.core",
         "System.Buffers",
         "System.Collections.Immutable",
         "System.Data.SQLite",
-        "System.Data.SQLite.EF6",
         "System.Diagnostics.DiagnosticSource",
         "System.IO.Pipelines",
         "System.Memory",
@@ -51,7 +44,6 @@ Imports System.Linq
         "System.Security.Principal.Windows",
         "System.Text.Encodings.Web",
         "System.Text.Json",
-        "System.Threading.Tasks.Dataflow",
         "System.Threading.Tasks.Extensions",
         "System.ValueTuple"
     }
@@ -65,21 +57,6 @@ Imports System.Linq
             If _registered Then Return
             AddHandler AppDomain.CurrentDomain.AssemblyResolve, AddressOf OnAssemblyResolve
             _registered = True
-        End SyncLock
-    End Sub
-
-    ''' <summary>
-    ''' 后台预加载高频共享依赖（可在后台线程调用，不阻塞主线程）
-    ''' 即使不调用此方法，OnAssemblyResolve 也能在首次需要时按需加载
-    ''' </summary>
-    Public Shared Sub PreloadAssemblies()
-        If _preloaded Then Return
-        SyncLock _preloadLock
-            If _preloaded Then Return
-            TryPreloadAssembly("System.Data.SQLite")
-            TryPreloadAssembly("Markdig")
-            TryPreloadAssembly("Newtonsoft.Json")
-            _preloaded = True
         End SyncLock
     End Sub
 
@@ -168,20 +145,6 @@ Imports System.Linq
             Return Nothing
         End Try
     End Function
-
-    Private Shared Sub TryPreloadAssembly(simpleName As String)
-        If String.IsNullOrWhiteSpace(simpleName) Then Return
-        For Each d As String In GetProbeDirs()
-            Dim p = Path.Combine(d, simpleName & ".dll")
-            If File.Exists(p) Then
-                Try
-                    Assembly.LoadFrom(p)
-                Catch
-                End Try
-                Return
-            End If
-        Next
-    End Sub
 
     Private Shared Function OnAssemblyResolve(sender As Object, args As ResolveEventArgs) As Assembly
         Try

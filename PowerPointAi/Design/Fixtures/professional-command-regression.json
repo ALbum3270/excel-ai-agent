@@ -1,0 +1,20 @@
+{
+  "commands": [
+    {
+      "command": "CreateSlides",
+      "params": {
+        "designSystem": "modern-tech",
+        "slides": [
+          {"slideType":"cover","eyebrow":"PRODUCT STRATEGY · Q3 2025","title":"AI Native Office Agent","subtitle":"从对话助手到自主文档执行的跨越"},
+          {"slideType":"statement","title":"传统办公自动化已触及能力天花板","subtitle":"人工驱动的文档协作仍然低效、易错、不可扩展","items":["企业员工平均每周花费 12 小时用于文档查找、整理和审批","70% 的重复性文档任务仍依赖人工手动操作","跨部门协作时版本混乱、内容不一致问题频发"]},
+          {"slideType":"kpi","title":"AI Native 自动化创造可量化的商业价值","keyMessage":"三个核心指标揭示真实影响力","metrics":[{"value":"70%","label":"时间节省","description":"常规文档制作与审批"},{"value":"3×","label":"交付速度提升","description":"从需求提出到成稿输出"},{"value":"0","label":"未经审核的副作用","description":"安全可控的执行闭环"}]},
+          {"slideType":"architecture","title":"四层架构支撑自主文档执行","subtitle":"感知 → 规划 → 执行 → 验证 → 修复","layers":[{"name":"上下文感知层","description":"读取活动文档、选中区域与用户意图"},{"name":"规划层","description":"生成可验证的多步骤执行计划"},{"name":"执行层","description":"调用原生 Office 对象与工具集"},{"name":"验证与修复层","description":"观察实际结果，自动纠正偏差"}]},
+          {"slideType":"process","title":"从需求到成品只需一个闭环循环","items":[{"title":"理解","body":"自然语言解析用户需求与上下文"},{"title":"规划","body":"拆分多步骤、可撤销的操作序列"},{"title":"执行","body":"安全调用 PowerPoint / Excel / Word 能力"},{"title":"验证","body":"检查输出是否符合预期结构与视觉规范"},{"title":"修复","body":"定位偏差并自动修正至通过验证"}]},
+          {"slideType":"comparison","title":"AI Agent 对比传统方案：全维度领先","columnHeaders":["比较维度","传统方案","AI Agent"],"items":[{"label":"任务理解深度","features":["关键词匹配","自然语义理解"]},{"label":"执行自主性","features":["半自动模板填充","全自主规划-执行-修复"]},{"label":"视觉输出质量","features":["固定模板","动态设计系统适配"]},{"label":"错误恢复能力","features":["无","自动验证与纠正"]}]},
+          {"slideType":"content","title":"首批落地场景覆盖高频文档工作流","items":["商业提案与路演材料：输入一句话需求，自动生成完整 Deck","周报与汇总报告：从数据源自动抽取、排版、生成图表","会议纪要与行动项：实时转写并同步至 Word / Excel","合规文档与模板化输出：按企业规范自动填充与校验"]},
+          {"slideType":"closing","title":"从对话助手到自主办公执行者","subtitle":"第一步：选择 1-2 个高价值场景启动试点；下一步：三个月内构建企业级知识模板与审批闭环","cta":"立即开始试点部署"}
+        ]
+      }
+    }
+  ]
+}

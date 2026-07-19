@@ -54,17 +54,6 @@ function requestCurrentModelInfo() {
  * Initialize model switcher on page load
  */
 (function initModelSwitcher() {
-    // Add hover effect to switch button
-    var switchBtn = document.getElementById('switch-model-btn');
-    if (switchBtn) {
-        switchBtn.addEventListener('mouseenter', function() {
-            this.style.background = 'rgba(255,255,255,0.35)';
-        });
-        switchBtn.addEventListener('mouseleave', function() {
-            this.style.background = 'rgba(255,255,255,0.2)';
-        });
-    }
-
     // Request current model info when page loads
     // Small delay to ensure VB.NET communication is ready
     setTimeout(function() {

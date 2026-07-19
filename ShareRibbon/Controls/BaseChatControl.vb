@@ -26,7 +26,6 @@ Public MustInherit Class BaseChatControl
     ' 服务类实例
     Private _fileParserService As New FileParserService()
     Protected _chatStateService As New ChatStateService()
-    Private _historyService As HistoryService = Nothing
     Private _mcpService As McpService = Nothing
     Private _selfCheckLoopController As SelfCheckLoopController = Nothing
     Private _conversationRuntime As IConversationRuntime = Nothing
@@ -90,6 +89,7 @@ Public MustInherit Class BaseChatControl
         Get
             If _aiNativeRuntime Is Nothing Then
                 Dim toolRegistry As New Agent.ToolRegistry()
+                toolRegistry.LoadFromRuntimeDirectories()
                 toolRegistry.LoadSkillScriptsAsTools()
                 _aiNativeRuntime = New Agent.AiNativeRuntime(toolRegistry)
             End If
@@ -169,16 +169,6 @@ Public MustInherit Class BaseChatControl
         End Get
     End Property
 
-    ' 延迟初始化的历史服务
-    Protected ReadOnly Property HistoryService As HistoryService
-        Get
-            If _historyService Is Nothing Then
-                _historyService = New HistoryService(AddressOf ExecuteJavaScriptAsyncJS)
-            End If
-            Return _historyService
-        End Get
-    End Property
-
     ' 延迟初始化的 MCP 服务
     Protected ReadOnly Property McpService As McpService
         Get
@@ -230,9 +220,14 @@ Public MustInherit Class BaseChatControl
                     AddressOf RunCode,
                     AddressOf RunCodePreview,
                     AddressOf EvaluateFormula)
-                ' 设置JSON命令执行器（由子类提供）
-                _codeExecutionService.JsonCommandExecutor = AddressOf ExecuteJsonCommand
-                _codeExecutionService.JsonCommandExecutorWithResult = AddressOf ExecuteJsonCommandWithToolResult
+                ' Agent/Loop 可在后台线程运行。所有 native JSON 命令在唯一宿主入口
+                ' 统一切回 UI/STA 线程，避免各 Office Executor 自行分散 Invoke。
+                _codeExecutionService.JsonCommandExecutorWithResult =
+                    Function(jsonCode As String, preview As Boolean) As Agent.ToolResult
+                        Return UiDispatcher.InvokeSync(Of Agent.ToolResult)(
+                            Me,
+                            Function() ExecuteJsonCommandWithToolResult(jsonCode, preview))
+                    End Function
             End If
             Return _codeExecutionService
         End Get
@@ -244,9 +239,7 @@ Public MustInherit Class BaseChatControl
             If _selfCheckLoopController Is Nothing Then
                 _selfCheckLoopController = New SelfCheckLoopController(
                     New PreSendChecker(),
-                    New PostFlushValidator(),
-                    New DslInstructionExecutor(),
-                    New PostExecutionVerifier())
+                    New PostFlushValidator())
             End If
             Return _selfCheckLoopController
         End Get
@@ -283,16 +276,12 @@ Public MustInherit Class BaseChatControl
     ''' Host JSON command backend used by CodeExecutionService / Agent tools (P0-2).
     ''' Not a product entry for natural-language routing; NL goes ChatRouting → AgentKernel.
     ''' </summary>
-    Protected Overridable Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
-        ' 默认实现：不支持JSON命令
-        GlobalStatusStrip.ShowWarning("当前应用不支持JSON命令执行")
-        Return False
-    End Function
-
     Protected Overridable Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
-        Dim ok = ExecuteJsonCommand(jsonCode, preview)
-        If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
-        Return Agent.ToolResult.Failed("", "JSON命令执行失败")
+        Return Agent.ToolResult.Failed("",
+                                       "当前应用不支持 JSON 命令执行",
+                                       errorCode:=ExceptionClassifier.CodeHostUnsupported,
+                                       userMessage:="当前应用不支持 JSON 命令执行",
+                                       recoverable:=False)
     End Function
 
     ' 延迟初始化的意图识别服务
@@ -566,15 +555,6 @@ Public MustInherit Class BaseChatControl
         ' 默认返回 "当前应用"，子类应重写此方法
         Return "当前应用"
     End Function
-    Private Async Sub InjectScript(scriptContent As String)
-        If ChatBrowser.CoreWebView2 IsNot Nothing Then
-            Dim escapedScript = JsonConvert.SerializeObject(scriptContent)
-            Await ChatBrowser.CoreWebView2.ExecuteScriptAsync($"eval({escapedScript})")
-        Else
-            MessageBox.Show("CoreWebView2 未初始化，无法注入脚本。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-        End If
-    End Sub
-
     Private Async Function ConfigureMarked() As Task
         If ChatBrowser.CoreWebView2 IsNot Nothing Then
             Dim script = "
@@ -715,31 +695,18 @@ Public MustInherit Class BaseChatControl
         router.Register("stopMessage", Sub(jsonDoc) HandleStopMessage(jsonDoc))
         router.Register("executeCode", Sub(jsonDoc) HandleExecuteCode(jsonDoc))
         router.Register("saveSettings", Sub(jsonDoc) HandleSaveSettings(jsonDoc))
-        router.Register("getHistoryFiles", Sub(jsonDoc) HandleGetHistoryFiles())
-        router.Register("openHistoryFile", Sub(jsonDoc) HandleOpenHistoryFile(jsonDoc))
         router.Register("getSessionList", Sub(jsonDoc) HandleGetSessionList())
         router.Register("loadSession", Sub(jsonDoc) HandleLoadSession(jsonDoc))
         router.Register("newSession", Sub(jsonDoc) HandleNewSession())
-        router.Register("getPromptTemplates", Sub(jsonDoc) HandleGetPromptTemplates(jsonDoc))
-        router.Register("savePromptTemplate", Sub(jsonDoc) HandleSavePromptTemplate(jsonDoc))
-        router.Register("deletePromptTemplate", Sub(jsonDoc) HandleDeletePromptTemplate(jsonDoc))
-        router.Register("getAtomicMemories", Sub(jsonDoc) HandleGetAtomicMemories(jsonDoc))
-        router.Register("deleteAtomicMemory", Sub(jsonDoc) HandleDeleteAtomicMemory(jsonDoc))
-        router.Register("getUserProfile", Sub(jsonDoc) HandleGetUserProfile())
-        router.Register("saveUserProfile", Sub(jsonDoc) HandleSaveUserProfile(jsonDoc))
-        router.Register("importSkillsFromFolder", Sub(jsonDoc) HandleImportSkillsFromFolder(jsonDoc))
         router.Register("getMcpConnections", Sub(jsonDoc) HandleGetMcpConnections())
         router.Register("saveMcpSettings", Sub(jsonDoc) HandleSaveMcpSettings(jsonDoc))
         router.Register("clearContext", Sub(jsonDoc) ClearChatContext())
         router.Register("acceptAnswer", Sub(jsonDoc) HandleAcceptAnswer(jsonDoc))
         router.Register("rejectAnswer", Sub(jsonDoc) HandleRejectAnswer(jsonDoc))
-        router.Register("applyRevisionAll", Sub(jsonDoc) HandleApplyRevisionAll(jsonDoc))
         router.Register("applyRevisionSegment", Sub(jsonDoc) HandleApplyRevisionSegment(jsonDoc))
         router.Register("applyDocumentPlanItem", Sub(jsonDoc) HandleApplyDocumentPlanItem(jsonDoc))
-        router.Register("rejectShowComparison", Sub(jsonDoc) Debug.WriteLine("rejectShowComparison ignored"))
         router.Register("retryReformat", Sub(jsonDoc) HandleRetryReformat(jsonDoc))
         router.Register("applyRevisionAccept", Sub(jsonDoc) HandleApplyRevisionAccept(jsonDoc))
-        router.Register("applyRevisionReject", Sub(jsonDoc) HandleApplyRevisionReject(jsonDoc))
         router.Register("triggerContinuation", Sub(jsonDoc) HandleTriggerContinuation(jsonDoc))
         router.Register("applyContinuation", Sub(jsonDoc) HandleApplyContinuation(jsonDoc))
         router.Register("refineContinuation", Sub(jsonDoc) HandleRefineContinuation(jsonDoc))
@@ -780,10 +747,8 @@ Public MustInherit Class BaseChatControl
         router.Register("updateStyleGuide", Sub(jsonDoc) HandleUpdateStyleGuide(jsonDoc))
         router.Register("duplicateStyleGuide", Sub(jsonDoc) HandleDuplicateStyleGuide(jsonDoc))
         router.Register("exportStyleGuide", Sub(jsonDoc) HandleExportStyleGuide(jsonDoc))
-        router.Register("uploadTemplateDocumentForAiAnalysis", Sub(jsonDoc) HandleUploadTemplateDocumentForAiAnalysis())
         router.Register("uploadDocxTemplate", Sub(jsonDoc) HandleUploadDocxTemplate())
         router.Register("deleteDocxMapping", Sub(jsonDoc) HandleDeleteDocxMapping(jsonDoc))
-        router.Register("startAiTemplateChat", Sub(jsonDoc) HandleStartAiTemplateChat(jsonDoc))
         router.Register("saveAiTemplate", Sub(jsonDoc) HandleSaveAiTemplate(jsonDoc))
         router.Register("previewAiTemplate", Sub(jsonDoc) HandlePreviewAiTemplate(jsonDoc))
         router.Register("applySmartReformat", Sub(jsonDoc) HandleApplySmartReformat(jsonDoc))
@@ -825,17 +790,7 @@ Public MustInherit Class BaseChatControl
     End Function
 
 
-    ' 在基类提供默认的 applyRevision 处理（子类可覆盖）
-    Protected Overridable Sub HandleApplyRevisionAll(jsonDoc As JObject)
-    End Sub
-
     Protected Overridable Sub HandleApplyRevisionSegment(jsonDoc As JObject)
-    End Sub
-
-
-    Protected Overridable Sub HandleApplyRevisionReject(jsonDoc As JObject)
-        Debug.WriteLine("收到 applyRevisionReject 请求（基类默认不做写回）")
-        GlobalStatusStrip.ShowInfo("用户拒绝了该修订（未在基类执行写回）")
     End Sub
 
     Protected Overridable Sub HandleApplyRevisionAccept(jsonDoc As JObject)
@@ -1187,15 +1142,6 @@ Public MustInherit Class BaseChatControl
         McpService.InitializeMcpSettings()
     End Sub
 
-    ' 处理获取历史文件列表请求 - 委托给 HistoryService
-    Protected Sub HandleGetHistoryFiles()
-        HistorySessionSvc.HandleGetHistoryFiles()
-    End Sub
-
-    Protected Sub HandleOpenHistoryFile(jsonDoc As JObject)
-        HistorySessionSvc.HandleOpenHistoryFile(jsonDoc)
-    End Sub
-
     Protected Sub HandleGetSessionList()
         HistorySessionSvc.HandleGetSessionList()
     End Sub
@@ -1207,42 +1153,6 @@ Public MustInherit Class BaseChatControl
     Protected Sub HandleNewSession()
         HistorySessionSvc.HandleNewSession()
     End Sub
-
-#Region "阶段二：配置面板（场景/Skills、记忆管理）"
-
-    Protected Sub HandleGetPromptTemplates(jsonDoc As JObject)
-        HistorySessionSvc.HandleGetPromptTemplates(jsonDoc)
-    End Sub
-
-    Protected Sub HandleSavePromptTemplate(jsonDoc As JObject)
-        HistorySessionSvc.HandleSavePromptTemplate(jsonDoc)
-    End Sub
-
-    Protected Sub HandleDeletePromptTemplate(jsonDoc As JObject)
-        HistorySessionSvc.HandleDeletePromptTemplate(jsonDoc)
-    End Sub
-
-    Protected Sub HandleGetAtomicMemories(jsonDoc As JObject)
-        HistorySessionSvc.HandleGetAtomicMemories(jsonDoc)
-    End Sub
-
-    Protected Sub HandleDeleteAtomicMemory(jsonDoc As JObject)
-        HistorySessionSvc.HandleDeleteAtomicMemory(jsonDoc)
-    End Sub
-
-    Protected Sub HandleGetUserProfile()
-        HistorySessionSvc.HandleGetUserProfile()
-    End Sub
-
-    Protected Sub HandleSaveUserProfile(jsonDoc As JObject)
-        HistorySessionSvc.HandleSaveUserProfile(jsonDoc)
-    End Sub
-
-    Protected Sub HandleImportSkillsFromFolder(jsonDoc As JObject)
-        HistorySessionSvc.HandleImportSkillsFromFolder(jsonDoc)
-    End Sub
-
-#End Region
 
     Protected Overridable Sub HandleCheckedChange(jsonDoc As JObject)
         Dim prop As String = jsonDoc("property").ToString()
@@ -1609,8 +1519,10 @@ Public MustInherit Class BaseChatControl
         SendChatMessageWithIntent(message, intent)
     End Sub
 
-    Private Sub IChatRoutingHost_StartAgentPlanningFlow(message As String, intent As IntentResult) Implements IChatRoutingHost.StartAgentPlanningFlow
-        StartAgentPlanningFlow(message, intent)
+    Private Sub IChatRoutingHost_StartAgentPlanningFlow(message As String,
+                                                        intent As IntentResult,
+                                                        analysis As Agent.AiNativeRuntimeResult) Implements IChatRoutingHost.StartAgentPlanningFlow
+        StartAgentPlanningFlow(message, intent, analysis)
     End Sub
 
     Private Sub IChatRoutingHost_SetCurrentIntentResult(intent As IntentResult) Implements IChatRoutingHost.SetCurrentIntentResult
@@ -1623,7 +1535,9 @@ Public MustInherit Class BaseChatControl
     ''' Agent模式下直接启动规划流程（不显示意图预览卡片）
     ''' Primary product path: AgentKernel planning/execution.
     ''' </summary>
-    Private Sub StartAgentPlanningFlow(message As String, intent As IntentResult)
+    Private Sub StartAgentPlanningFlow(message As String,
+                                       intent As IntentResult,
+                                       Optional analysis As Agent.AiNativeRuntimeResult = Nothing)
         AgentKernelSvc.AgentFullUserMessage = message
         AgentKernelSvc.AgentOriginalUserRequest = If(intent?.OriginalInput, message)
 
@@ -1632,7 +1546,6 @@ Public MustInherit Class BaseChatControl
                          Dim goal = If(String.IsNullOrWhiteSpace(intent.OriginalInput), intent.UserFriendlyDescription, intent.OriginalInput)
                          Dim appType = GetApplicationType()
 
-                         ExecuteJavaScriptAsyncJS($"showAgentPlanningStatus(""{EscapeJavaScriptString(goal)}"")")
                          GlobalStatusStrip.ShowInfo("正在规划任务...")
 
                          Dim currentContent = GetCurrentOfficeContent()
@@ -1643,17 +1556,24 @@ Public MustInherit Class BaseChatControl
                              End If
                          Next
 
-                         Dim success = Await AgentKernelSvc.StartAgentAsync(message, appType, currentContent, historyMessages, CaptureOfficeContext(appType))
+                         Dim success = Await AgentKernelSvc.StartAgentAsync(
+                             message,
+                             appType,
+                             currentContent,
+                             historyMessages,
+                             CaptureOfficeContext(appType),
+                             analysis?.TaskSpec,
+                             analysis?.SelectedSkills)
 
                          If Not success Then
-                             Debug.WriteLine("[StartAgentPlanningFlow] 规划失败，回退到普通聊天")
-                             GlobalStatusStrip.ShowWarning("规划失败，使用普通模式回答")
-                             SendChatMessageWithIntent(message, intent)
+                             ' StartAgentAsync 已通过 Agent 完成事件展示结构化失败。执行型请求在
+                             ' 失败后再发起普通聊天会产生第二份、且可能宣称成功的回答。
+                             Debug.WriteLine("[StartAgentPlanningFlow] Agent 执行失败，保留失败结果，不回退普通聊天")
+                             GlobalStatusStrip.ShowWarning("任务执行失败，请查看失败步骤")
                          End If
                      Catch ex As Exception
                          Debug.WriteLine($"[StartAgentPlanningFlow] {ex.Message}")
                          GlobalStatusStrip.ShowWarning($"规划启动失败: {ex.Message}")
-                         SendChatMessageWithIntent(message, intent)
                      End Try
                  End Function)
     End Sub
@@ -2212,7 +2132,7 @@ Public MustInherit Class BaseChatControl
                 Return
             End If
 
-            Dim configForm As New ConfigApiForm(GetApplication())
+            Dim configForm As New ConfigApiForm()
             If configForm.ShowDialog() = DialogResult.OK Then
                 ' 配置已更新，刷新前端显示
                 UpdateModelDisplayInUI()
@@ -2336,13 +2256,6 @@ Public MustInherit Class BaseChatControl
     End Sub
 
     ''' <summary>
-    ''' 刷新排版规范列表（Public，供外部调用）
-    ''' </summary>
-    Public Sub RefreshStyleGuides()
-        ReformatSvc.HandleGetStyleGuides()
-    End Sub
-
-    ''' <summary>
     ''' 使用排版规范
     ''' </summary>
     Protected Overridable Sub HandleUseStyleGuide(jsonDoc As JObject)
@@ -2404,13 +2317,6 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleExportStyleGuide(jsonDoc As JObject)
         ReformatSvc.HandleExportStyleGuide(jsonDoc)
-    End Sub
-
-    ''' <summary>
-    ''' 上传模板文档用于AI分析
-    ''' </summary>
-    Protected Overridable Sub HandleUploadTemplateDocumentForAiAnalysis()
-        GlobalStatusStrip.ShowWarning("当前应用不支持AI模板分析")
     End Sub
 
 #End Region
@@ -2501,13 +2407,6 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Public Sub EnterAiTemplateEditorMode(Optional template As ReformatTemplate = Nothing)
         ReformatSvc.EnterAiTemplateEditorMode(template)
-    End Sub
-
-    ''' <summary>
-    ''' 处理开始AI模板创建对话
-    ''' </summary>
-    Protected Sub HandleStartAiTemplateChat(jsonDoc As JObject)
-        ReformatSvc.HandleStartAiTemplateChat(jsonDoc)
     End Sub
 
     ''' <summary>
@@ -2604,7 +2503,10 @@ Public MustInherit Class BaseChatControl
 
     ' 执行代码的方法 - 委托给 CodeExecutionService
     Public Sub ExecuteCode(code As String, language As String, preview As Boolean)
-        CodeExecutionService.ExecuteCode(code, language, preview)
+        Dim result = CodeExecutionService.ExecuteCodeWithToolResult(code, language, preview)
+        If result IsNot Nothing AndAlso Not result.Success Then
+            GlobalStatusStrip.ShowWarning(If(result.UserMessage, result.Message))
+        End If
     End Sub
 
     ' ExecuteJavaScript 已委托给 CodeExecutionService
@@ -2864,10 +2766,6 @@ Public MustInherit Class BaseChatControl
         Await WebViewBridge.ExecuteScriptAsync(js)
     End Function
 
-    Private Async Function ExecuteJavaScriptAndWaitAsync(js As String) As Task
-        Await WebViewBridge.ExecuteScriptAndWaitAsync(js)
-    End Function
-
     Private Async Function WaitForRendererMapAsync(uuid As String) As Task
         Await WebViewBridge.WaitForRendererMapAsync(uuid)
     End Function
@@ -2918,12 +2816,6 @@ Public MustInherit Class BaseChatControl
     Private Async Function GetFullHtmlContentAsync() As Task(Of String)
         Return Await WebViewBridge.GetFullHtmlContentAsync()
     End Function
-    Private Async Function EnsureWebView2InitializedAsync() As Task
-        If ChatBrowser.CoreWebView2 Is Nothing Then
-            Await ChatBrowser.EnsureCoreWebView2Async()
-        End If
-    End Function
-
     ' HistoryMessage 类已移至 Controls/Models/HistoryMessage.vb
 
     ' 注入辅助脚本
@@ -2965,13 +2857,6 @@ Public MustInherit Class BaseChatControl
 
 
     Protected Overridable Sub HandleApplyDocumentPlanItem(jsonDoc As JObject)
-    End Sub
-
-    ''' <summary>
-    ''' 保存排版请求上下文，用于重试
-    ''' </summary>
-    Public Sub SaveReformatContext(uuid As String, systemPrompt As String, userMessage As String)
-        ReformatSvc.SaveReformatContext(uuid, systemPrompt, userMessage)
     End Sub
 
     ''' <summary>

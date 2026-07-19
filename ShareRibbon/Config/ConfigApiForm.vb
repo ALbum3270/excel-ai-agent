@@ -77,11 +77,9 @@ Public Class ConfigApiForm
     ' 当前选中的配置
     Private currentCloudConfig As ConfigItem
     Private currentLocalConfig As ConfigItem
-    Private _applicationInfo As ApplicationInfo
     Private _updatingReasoningControls As Boolean = False
 
-    Public Sub New(appInfo As ApplicationInfo)
-        _applicationInfo = appInfo
+    Public Sub New()
         InitializeForm()
         InitializeCloudTab()
         InitializeLocalTab()
@@ -2289,21 +2287,5 @@ Public Class ConfigApiForm
             Return DisplayText
         End Function
     End Class
-
-    ''' <summary>
-    ''' 获取完整异常信息
-    ''' </summary>
-    Private Shared Function GetFullExceptionMessage(ex As Exception) As String
-        Dim sb As New StringBuilder()
-        Dim current As Exception = ex
-        Dim depth As Integer = 0
-        While current IsNot Nothing AndAlso depth < 5
-            If depth > 0 Then sb.Append(" <- ")
-            sb.Append(current.GetType().Name).Append(": ").Append(current.Message)
-            current = current.InnerException
-            depth += 1
-        End While
-        Return sb.ToString()
-    End Function
 
 End Class

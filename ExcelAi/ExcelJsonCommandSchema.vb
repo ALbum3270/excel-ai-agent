@@ -4,7 +4,6 @@
 Imports System.Diagnostics
 Imports System.Text.RegularExpressions
 Imports Newtonsoft.Json.Linq
-Imports Newtonsoft.Json.Schema
 
 ''' <summary>
 ''' Excel JSON命令Schema和校验器
@@ -933,19 +932,6 @@ Public Class ExcelJsonCommandSchema
     End Function
 
     ''' <summary>
-    ''' 替换JSON中的占位符
-    ''' </summary>
-    Public Shared Function ReplacePlaceholders(json As JObject, context As Dictionary(Of String, String)) As JObject
-        Dim jsonStr = json.ToString()
-        
-        For Each kvp In context
-            jsonStr = jsonStr.Replace("{" & kvp.Key & "}", kvp.Value)
-        Next
-        
-        Return JObject.Parse(jsonStr)
-    End Function
-
-    ''' <summary>
     ''' 获取当前Excel上下文用于占位符替换
     ''' </summary>
     Public Shared Function GetExcelContext(excelApp As Object) As Dictionary(Of String, String)
@@ -990,32 +976,6 @@ Public Class ExcelJsonCommandSchema
             colNum \= 26
         End While
         Return result
-    End Function
-
-    ''' <summary>
-    ''' 生成校验失败后的重试提示
-    ''' </summary>
-    Public Shared Function GetRetryPrompt(originalRequest As String, errorMessage As String) As String
-        Return $"你之前返回的JSON命令格式有误: {errorMessage}
-
-请严格按照以下格式重新返回:
-```json
-{{
-  ""command"": ""ApplyFormula"",
-  ""params"": {{
-    ""targetRange"": ""C1:C{{lastRow}}"",
-    ""formula"": ""=A1+B1"",
-    ""fillDown"": true
-  }}
-}}
-```
-
-注意:
-1. 必须是有效的JSON格式
-2. 动态范围使用占位符 {{lastRow}} 而不是JS表达式
-3. command必须是: {String.Join(", ", SupportedCommands)}
-
-原始请求: {originalRequest}"
     End Function
 
 End Class

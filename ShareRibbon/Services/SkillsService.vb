@@ -263,6 +263,33 @@ Public Class SkillsService
             Next
         End If
 
+        ' 使用频率和最近使用只能用于相关结果之间的排序，不能凭空制造语义命中。
+        ' 否则任何近期使用过的 Skill 都会污染后续不相关请求。
+        ' Specialized Skills can publish fresh routing vocabulary without adding
+        ' request-specific branches to the runtime selector.
+        If skill.Metadata IsNot Nothing Then
+            For Each metadataKey In New String() {"keywords", "triggers", "trigger_keywords"}
+                Dim rawTerms As Object = Nothing
+                If Not skill.Metadata.TryGetValue(metadataKey, rawTerms) OrElse rawTerms Is Nothing Then Continue For
+                For Each term In rawTerms.ToString().Split({","c, ";"c, "|"c}, StringSplitOptions.RemoveEmptyEntries)
+                    Dim normalizedTerm = term.Trim().ToLowerInvariant()
+                    If normalizedTerm.Length <= 1 OrElse Not queryLower.Contains(normalizedTerm) Then Continue For
+                    score += 10
+                    If Not matchedKeywords.Contains(normalizedTerm, StringComparer.OrdinalIgnoreCase) Then
+                        matchedKeywords.Add(normalizedTerm)
+                    End If
+                Next
+            Next
+        End If
+
+        If score <= 0 Then
+            Return New SkillMatchResult With {
+                .Skill = skill,
+                .MatchScore = 0,
+                .MatchedKeywords = matchedKeywords
+            }
+        End If
+
         ' === 4. 使用频率加权（热门 Skill 加分，最多 +5） ===
         If skill.UsageCount > 0 Then
             score += Math.Min(5.0, skill.UsageCount * 0.8)
@@ -379,16 +406,6 @@ Public Class SkillsService
     End Sub
 
     ''' <summary>
-    ''' 强制保存使用统计（程序退出时调用）
-    ''' </summary>
-    Public Shared Sub FlushUsageStats()
-        If _unsavedChanges > 0 Then
-            SaveUsageStats()
-            _unsavedChanges = 0
-        End If
-    End Sub
-
-    ''' <summary>
     ''' 加载使用统计
     ''' </summary>
     Private Shared Sub LoadUsageStats()
@@ -431,58 +448,6 @@ Public Class SkillsService
             End Try
         End SyncLock
     End Sub
-
-    ''' <summary>
-    ''' 自动装配Skills到提示词（增强版）
-    ''' 根据用户查询自动匹配并注入相关Skills
-    ''' </summary>
-    Public Shared Function AutoInjectSkills(userQuery As String, Optional maxSkills As Integer = 3) As String
-        Dim sb As New StringBuilder()
-
-        Try
-            Dim matchedSkills = MatchSkills(userQuery, maxSkills)
-
-            If matchedSkills.Count > 0 Then
-                sb.AppendLine()
-                sb.AppendLine("---")
-                sb.AppendLine("## 相关技能助手")
-                sb.AppendLine()
-                sb.AppendLine("以下技能可能对你有帮助：")
-                sb.AppendLine()
-
-                For Each result In matchedSkills
-                    Dim skill = result.Skill
-                    Dim starMark = If(skill.UsageCount >= 5, " ★★★", If(skill.UsageCount >= 3, " ★★", If(skill.UsageCount >= 1, " ★", "")))
-
-                    sb.AppendLine($"### {skill.Name}{starMark}")
-                    If Not String.IsNullOrWhiteSpace(skill.Description) Then
-                        sb.AppendLine($"{skill.Description}")
-                    End If
-                    If result.MatchedKeywords.Count > 0 Then
-                        sb.AppendLine($"*相关词：{String.Join(", ", result.MatchedKeywords)}*")
-                    End If
-                    sb.AppendLine()
-
-                    Dim detailSkill = SkillsDirectoryService.LoadSkillDetail(skill)
-
-                    ' 注入Skill内容
-                    If detailSkill IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(detailSkill.Content) Then
-                        sb.AppendLine("```skill")
-                        sb.AppendLine(detailSkill.Content)
-                        sb.AppendLine("```")
-                        sb.AppendLine()
-                    End If
-                Next
-
-                sb.AppendLine("---")
-                sb.AppendLine()
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"[SkillsService] AutoInjectSkills 失败: {ex.Message}")
-        End Try
-
-        Return sb.ToString()
-    End Function
 
     ''' <summary>
     ''' 构建渐进式披露的第一步：Skills目录（增强版）
@@ -605,278 +570,5 @@ Public Class SkillsService
 
         Return sb.ToString()
     End Function
-
-    ''' <summary>
-    ''' 获取最常用的Skills
-    ''' </summary>
-    Public Shared Function GetTopSkills(count As Integer) As List(Of SkillFileDefinition)
-        Return GetSkillsCatalog() _
-            .OrderByDescending(Function(s) s.UsageCount) _
-            .ThenByDescending(Function(s) s.LastUsedAt.GetValueOrDefault()) _
-            .Take(count) _
-            .ToList()
-    End Function
-
-End Class
-
-''' <summary>
-''' 增强版Skills匹配结果
-''' </summary>
-Public Class SkillMatchResultEnhanced
-    Public Property Skill As SkillFileDefinition
-    Public Property BaseScore As Double
-    Public Property TotalScore As Double
-    Public Property ScoreComponents As Dictionary(Of String, Double)
-    Public Property MatchedKeywords As List(Of String)
-    Public Property Explanation As String  ' AI生成的推荐理由
-End Class
-
-''' <summary>
-''' 上下文信息（用于增强匹配）
-''' </summary>
-Public Class ContextInfo
-    Public Property ApplicationType As String
-    Public Property CurrentTask As String
-    Public Property RecentSkillsUsed As List(Of String)
-    Public Property DocumentType As String
-End Class
-
-''' <summary>
-''' 增强版Skills服务
-''' </summary>
-Public Class EnhancedSkillsService
-
-    ''' <summary>
-    ''' 智能匹配Skills（考虑用户画像、使用历史、上下文）
-    ''' </summary>
-    Public Shared Function MatchSkillsEnhanced(
-        userQuery As String,
-        Optional contextInfo As ContextInfo = Nothing,
-        Optional topN As Integer = 5) As List(Of SkillMatchResultEnhanced)
-
-        Dim results As New List(Of SkillMatchResultEnhanced)()
-        Dim allSkills = SkillsService.GetSkillsCatalog()
-
-        If allSkills.Count = 0 Then
-            Return results
-        End If
-
-        ' 1. 获取用户画像
-        Dim userProfile = MemoryRepository.GetAllUserProfile()
-
-        ' 2. 基础匹配（复用原有逻辑）
-        Dim baseMatches = SkillsService.MatchSkills(userQuery, topN * 2)
-
-        ' 3. 个性化加分
-        For Each baseMatch In baseMatches
-            Dim skill = baseMatch.Skill
-            Dim enhanced As New SkillMatchResultEnhanced()
-            enhanced.Skill = skill
-            enhanced.BaseScore = baseMatch.MatchScore
-            enhanced.MatchedKeywords = baseMatch.MatchedKeywords
-
-            ' 加载使用统计
-            LoadSkillUsageStats(skill)
-
-            ' 计算各维度加分
-            Dim preferenceBoost = CalculatePreferenceBoost(skill, userProfile, contextInfo)
-            Dim usageBoost = CalculateUsageBoost(skill)
-            Dim contextBoost = CalculateContextBoost(skill, contextInfo)
-
-            ' 综合得分
-            enhanced.TotalScore = baseMatch.MatchScore * 0.4 +
-                                preferenceBoost * 0.25 +
-                                usageBoost * 0.2 +
-                                contextBoost * 0.15
-
-            enhanced.ScoreComponents = New Dictionary(Of String, Double) From {
-                {"base", baseMatch.MatchScore},
-                {"preference", preferenceBoost},
-                {"usage", usageBoost},
-                {"context", contextBoost}
-            }
-
-            results.Add(enhanced)
-        Next
-
-        ' 4. 排序并返回
-        Return results.OrderByDescending(Function(m) m.TotalScore).Take(topN).ToList()
-    End Function
-
-    ''' <summary>
-    ''' 加载技能使用统计
-    ''' </summary>
-    Private Shared Sub LoadSkillUsageStats(skill As SkillFileDefinition)
-        Try
-            Dim registry = AgentMemoryRepository.GetSkillRegistryByName(skill.Name)
-            If registry IsNot Nothing AndAlso registry.UsageCount > 0 Then
-                skill.UsageCount = registry.UsageCount
-                If registry.SuccessCount > 0 Then
-                    skill.SuccessRate = CDbl(registry.SuccessCount) / registry.UsageCount
-                End If
-
-                Dim lastUsed As DateTime
-                If Not String.IsNullOrWhiteSpace(registry.LastIndexedAt) AndAlso DateTime.TryParse(registry.LastIndexedAt, lastUsed) Then
-                    skill.LastUsedAt = lastUsed
-                End If
-                Return
-            End If
-
-            Dim usage = MemoryRepository.GetSkillUsage(skill.Name)
-            If usage IsNot Nothing Then
-                skill.UsageCount = usage.UsageCount
-                If Not String.IsNullOrWhiteSpace(usage.LastUsedAt) Then
-                    Dim dt As DateTime
-                    If DateTime.TryParse(usage.LastUsedAt, dt) Then
-                        skill.LastUsedAt = dt
-                    End If
-                End If
-                If usage.UsageCount > 0 Then
-                    skill.SuccessRate = CDbl(usage.SuccessCount) / usage.UsageCount
-                End If
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"[EnhancedSkillsService] 加载技能使用统计失败: {ex.Message}")
-        End Try
-    End Sub
-
-    ''' <summary>
-    ''' 计算用户偏好加分
-    ''' </summary>
-    Private Shared Function CalculatePreferenceBoost(
-        skill As SkillFileDefinition,
-        userProfile As Dictionary(Of String, UserProfileItem),
-        contextInfo As ContextInfo) As Double
-
-        Dim boost As Double = 0
-
-        ' 检查用户使用过的应用
-        If userProfile.ContainsKey("preferred_application") Then
-            Dim preferredApp = userProfile("preferred_application").Value.ToLowerInvariant()
-            Dim skillApp = If(String.IsNullOrWhiteSpace(skill.Application), "", skill.Application.ToLowerInvariant())
-
-            ' 检查标签匹配
-            Dim hasMatchingTag = skill.Tags?.Any(Function(t) t.ToLowerInvariant().Contains(preferredApp))
-            If skillApp = preferredApp OrElse hasMatchingTag.GetValueOrDefault() Then
-                boost += 0.15
-            End If
-        End If
-
-        ' 检查领域偏好
-        If userProfile.ContainsKey("domains") Then
-            Dim domains = userProfile("domains").Value.Split(","c)
-            For Each domain In domains
-                If skill.Tags?.Any(Function(t) t.ToLowerInvariant().Contains(domain.Trim().ToLowerInvariant())) Then
-                    boost += 0.1
-                    Exit For
-                End If
-            Next
-        End If
-
-        Return Math.Min(0.3, boost)
-    End Function
-
-    ''' <summary>
-    ''' 计算使用历史加分（考虑成功率、最近使用）
-    ''' </summary>
-    Private Shared Function CalculateUsageBoost(skill As SkillFileDefinition) As Double
-        Dim boost As Double = 0
-
-        If skill.UsageCount = 0 Then
-            Return 0
-        End If
-
-        ' 基础使用量加分（最多+0.15）
-        boost += Math.Min(0.15, skill.UsageCount * 0.02)
-
-        ' 最近使用加分
-        If skill.LastUsedAt.HasValue Then
-            Dim daysSince = (DateTime.Now - skill.LastUsedAt.Value).TotalDays
-            If daysSince < 1 Then
-                boost += 0.1  ' 24小时内
-            ElseIf daysSince < 7 Then
-                boost += 0.05  ' 一周内
-            End If
-        End If
-
-        ' 成功率加分
-        If skill.SuccessRate.HasValue Then
-            boost += skill.SuccessRate.Value * 0.1
-        End If
-
-        Return Math.Min(0.3, boost)
-    End Function
-
-    ''' <summary>
-    ''' 计算上下文相关加分
-    ''' </summary>
-    Private Shared Function CalculateContextBoost(skill As SkillFileDefinition, contextInfo As ContextInfo) As Double
-        If contextInfo Is Nothing Then
-            Return 0
-        End If
-
-        Dim boost As Double = 0
-
-        ' 应用类型匹配
-        If Not String.IsNullOrWhiteSpace(contextInfo.ApplicationType) Then
-            Dim appType = contextInfo.ApplicationType.ToLowerInvariant()
-            If skill.Tags?.Any(Function(t) t.ToLowerInvariant().Contains(appType)) Then
-                boost += 0.1
-            End If
-        End If
-
-        ' 最近使用的技能关联
-        If contextInfo.RecentSkillsUsed?.Count > 0 Then
-            For Each recentSkill In contextInfo.RecentSkillsUsed
-                If skill.Name.ToLowerInvariant().Contains(recentSkill.ToLowerInvariant()) OrElse
-                   skill.Tags?.Any(Function(t) recentSkill.ToLowerInvariant().Contains(t.ToLowerInvariant())) Then
-                    boost += 0.08
-                    Exit For
-                End If
-            Next
-        End If
-
-        ' 当前任务关键词匹配
-        If Not String.IsNullOrWhiteSpace(contextInfo.CurrentTask) Then
-            Dim taskLower = contextInfo.CurrentTask.ToLowerInvariant()
-            If Not String.IsNullOrWhiteSpace(skill.Description) Then
-                Dim descLower = skill.Description.ToLowerInvariant()
-                If descLower.Contains(taskLower) OrElse taskLower.Contains(descLower) Then
-                    boost += 0.12
-                End If
-            End If
-        End If
-
-        Return Math.Min(0.3, boost)
-    End Function
-
-    ''' <summary>
-    ''' 记录Skill使用反馈（用于持续优化）
-    ''' </summary>
-    Public Shared Sub RecordSkillFeedback(
-        skillName As String,
-        success As Boolean,
-        Optional userRating As Integer? = Nothing,
-        Optional tokensUsed As Long = 0)
-
-        ' 更新使用统计
-        SkillsService.RecordSkillUsage(skillName, success, tokensUsed)
-
-        ' 记录详细反馈到记忆
-        If userRating.HasValue Then
-            Dim content = $"Skill '{skillName}' 被评为 {userRating.Value} 星，成功: {success}"
-            MemoryRepository.InsertMemory(
-                content,
-                Nothing,
-                Nothing,
-                Nothing,
-                "skill_feedback",
-                importance:=If(userRating.Value >= 4, 0.7, 0.4),
-                sourceType:="skill_feedback"
-            )
-        End If
-
-        Debug.WriteLine($"[EnhancedSkillsService] 已记录技能反馈: {skillName}, 成功: {success}")
-    End Sub
 
 End Class

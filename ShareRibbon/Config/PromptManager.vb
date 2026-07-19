@@ -33,13 +33,6 @@ Public Class PromptManager
     End Sub
 
     ''' <summary>
-    ''' 重新加载配置
-    ''' </summary>
-    Public Sub ReloadConfiguration()
-        LoadPromptConfiguration()
-    End Sub
-
-    ''' <summary>
     ''' 加载提示词配置
     ''' </summary>
     Private Sub LoadPromptConfiguration()
@@ -258,11 +251,31 @@ Public Class PromptManager
         Dim userConstraint = appConfig?.JsonSchemaConstraint
         
         ' 如果用户配置为空或明显不完整，则使用内置默认值
-        If String.IsNullOrEmpty(userConstraint) OrElse Not IsValidJsonSchemaConstraint(userConstraint) Then
+        If String.IsNullOrEmpty(userConstraint) OrElse
+           Not IsValidJsonSchemaConstraint(userConstraint) OrElse
+           IsLegacyBuiltInJsonSchemaConstraint(appType, userConstraint) Then
             Return GetDefaultJsonSchemaConstraint(appType)
         End If
         
         Return userConstraint
+    End Function
+
+    ''' <summary>
+    ''' 识别已经写入用户配置的旧版内置 Prompt。这些 Prompt 声明了不存在的
+    ''' executor，不应继续被当作用户自定义配置使用。
+    ''' </summary>
+    Private Shared Function IsLegacyBuiltInJsonSchemaConstraint(appType As String, constraint As String) As Boolean
+        If String.IsNullOrWhiteSpace(constraint) Then Return False
+        Select Case If(appType, "").Trim().ToLowerInvariant()
+            Case "excel"
+                Return constraint.Contains("【Excel支持的22个命令】")
+            Case "word"
+                Return constraint.Contains("【Word支持的22个命令】")
+            Case "powerpoint", "ppt"
+                Return constraint.Contains("【PowerPoint支持的22个命令】")
+            Case Else
+                Return False
+        End Select
     End Function
     
     ''' <summary>
@@ -306,7 +319,7 @@ Public Class PromptManager
 {""commands"": [{""command"": ""WriteData"", ""params"": {""data"": [[""姓名"", ""年龄""]], ""targetRange"": ""A1""}}, {""command"": ""FormatRange"", ""params"": {""range"": ""A1:B1"", ""style"": ""header""}}]}
 ```
 
-【Excel支持的22个命令】
+【Excel支持的25个命令】
 
 === 基础操作 (5个) ===
 1. ApplyFormula - 应用公式 {targetRange:必需, formula:必需, fillDown:可选}
@@ -337,8 +350,13 @@ Public Class PromptManager
 20. HideRowCol - 隐藏行列 {type:row/column, position:必需, unhide:true则取消隐藏}
 21. ProtectSheet - 保护工作表 {sheetName:可选, password:可选, unprotect:true则取消保护}
 
+=== Agent能力 (3个) ===
+22. TransformData - 数据转换 {sourceRange:必需, operation:transpose/split/merge, targetRange/delimiter:可选}
+23. DataAnalysis - 数据分析 {sourceRange:必需, type:summary/pivot/groupby/ranking, targetRange/groupBy/valueField/aggregate/topN:按需}
+24. GenerateReport - 生成报告 {sourceRange:必需, targetSheet/title/includeChart:可选}
+
 === VBA回退 (1个) ===
-22. ExecuteVBA - 执行VBA代码 {code:必需,完整的Sub或Function代码}
+25. ExecuteVBA - 执行VBA代码 {code:必需,完整的Sub或Function代码}
     当以上命令无法满足需求时,生成VBA代码作为回退方案
 
 【动态范围占位符】
@@ -356,7 +374,7 @@ Public Class PromptManager
 - 校对功能：请告知用户点击工具栏上的「AI校对」按钮
 
 【决策优先级】
-1. 优先使用上述22个命令处理需求
+1. 优先使用上述25个命令处理需求
 2. 复杂需求无法用命令实现时，使用ExecuteVBA生成VBA代码
 3. 需求不明确时，用中文询问用户"
     End Function
@@ -386,43 +404,26 @@ Public Class PromptManager
 {""commands"": [{""command"": ""InsertText"", ""params"": {""content"": ""标题""}}, {""command"": ""FormatText"", ""params"": {""range"": ""selection"", ""bold"": true}}]}
 ```
 
-【Word支持的22个命令】
+【Word支持的9个命令】
 
-=== 基础文本操作 (5个) ===
+=== 基础文本操作 (4个) ===
 1. InsertText - 插入文本 {content:必需, position:cursor/start/end}
 2. FormatText - 格式化 {range:selection/all, bold/italic/fontSize/fontName/underline/color}
 3. ReplaceText - 查找替换 {find:必需, replace:必需, matchCase:可选}
 4. DeleteText - 删除文本 {range:selection/all}
-5. CopyPasteText - 复制粘贴 {sourceRange:必需, targetPosition:可选}
 
-=== 段落和样式 (5个) ===
-6. ApplyStyle - 应用样式 {styleName:必需如""标题 1"", range:selection/paragraph}
-7. SetParagraphFormat - 段落格式 {alignment:left/center/right/justify, firstLineIndent/beforeSpacing/afterSpacing}
-8. InsertParagraph - 插入段落 {count:默认1, pageBreak:true则分页}
-9. SetLineSpacing - 行距 {spacing:1/1.5/2, range:selection/all}
-10. SetIndent - 缩进 {left/right/firstLine:cm值}
+=== 段落和样式 (2个) ===
+5. ApplyStyle - 应用样式 {styleName:必需如""标题 1"", range:selection/paragraph}
+6. SetParagraphFormat - 段落格式 {alignment:left/center/right/justify, firstLineIndent/beforeSpacing/afterSpacing}
 
-=== 表格操作 (4个) ===
-11. InsertTable - 插入表格 {rows:必需, cols:必需, data:可选}
-12. FormatTable - 格式化表格 {tableIndex:从1开始, style/borders/headerRow}
-13. InsertTableRow - 插入行 {tableIndex:必需, position:after/before}
-14. DeleteTableRow - 删除行 {tableIndex:必需, rowIndex:必需}
+=== 表格操作 (1个) ===
+7. InsertTable - 插入表格 {rows:必需, cols:必需, data:可选}
 
-=== 文档结构 (4个) ===
-15. GenerateTOC - 生成目录 {position:start/cursor, levels:1-9}
-16. InsertHeader - 页眉 {content:必需, alignment:left/center/right}
-17. InsertFooter - 页脚 {content:必需, alignment:left/center/right}
-18. InsertPageNumber - 页码 {position:header/footer, alignment}
+=== 文档结构 (1个) ===
+8. GenerateTOC - 生成目录 {position:start/cursor, levels:1-9}
 
-=== 文档美化 (2个) ===
-19. BeautifyDocument - 美化 {theme:{h1/h2/body设置}, margins:{top/bottom/left/right}}
-20. SetPageMargins - 页边距 {top/bottom/left/right:cm值}
-
-=== 高级功能 (1个) ===
-21. InsertImage - 插入图片 {imagePath:必需, width/height:可选}
-
-=== VBA回退 (1个) ===
-22. ExecuteVBA - VBA代码 {code:必需,完整Sub/Function}
+=== 文档美化 (1个) ===
+9. BeautifyDocument - 美化 {theme:{h1/h2/body设置}, margins:{top/bottom/left/right}}
 
 【绝对禁止】
 - 禁止使用 actions/operations 数组
@@ -430,10 +431,9 @@ Public Class PromptManager
 - 禁止使用Excel/PowerPoint专属命令
 
 【决策优先级】
-1. 优先使用上述22个命令
-2. 复杂需求用ExecuteVBA
-3. 翻译用工具栏按钮
-4. 需求不明确时中文询问"
+1. 只能使用上述9个已实现命令
+2. 翻译用工具栏按钮
+3. 需求不明确时中文询问"
     End Function
     
     ''' <summary>
@@ -459,7 +459,7 @@ Public Class PromptManager
 {""commands"": [{""command"": ""CreateSlides"", ""params"": {""slides"": [{""title"": ""第一页""}]}}, {""command"": ""AddAnimation"", ""params"": {""effect"": ""fadeIn"", ""scope"": ""all""}}]}
 ```
 
-【PowerPoint支持的22个命令】
+【PowerPoint支持的16个命令】
 
 === 幻灯片操作 (5个) ===
 1. InsertSlide - 插入幻灯片 {position:current/end, layout, title, content}
@@ -468,32 +468,26 @@ Public Class PromptManager
 4. MoveSlide - 移动幻灯片 {fromIndex:必需, toIndex:必需}
 5. CreateSlides - 批量创建 {slides:数组含title/content/layout}
 
-=== 内容操作 (5个) ===
+=== 内容操作 (3个) ===
 6. InsertText - 插入文本 {content:必需, slideIndex:-1当前, x/y:可选}
-7. FormatText - 格式化文本 {bold/italic/fontSize/fontName/color}
-8. InsertShape - 插入形状 {shapeType:必需, x:必需, y:必需}
-9. InsertImage - 插入图片 {imagePath:必需, x/y/width/height:可选}
-10. InsertTable - 插入表格 {rows:必需, cols:必需, data:可选}
+7. InsertShape - 插入形状 {shapeType:必需, x:必需, y:必需}
+8. InsertTable - 插入表格 {rows:必需, cols:必需, data:可选}
 
 === 样式和动画 (5个) ===
-11. FormatSlide - 格式化幻灯片 {background, layout}
-12. AddAnimation - 添加动画 {effect:fadeIn/flyIn/zoom/wipe, targetShapes:all/title}
-13. ApplyTransition - 切换效果 {transitionType:fade/push/wipe, scope:all/current}
-14. BeautifySlides - 美化 {scope:all/current, theme:{background/titleFont/bodyFont}}
-15. SetSlideLayout - 设置布局 {layout:title/titleAndContent/blank}
+9. FormatSlide - 格式化幻灯片 {background, layout}
+10. AddAnimation - 添加动画 {effect:fadeIn/flyIn/zoom/wipe, targetShapes:all/title}
+11. ApplyTransition - 切换效果 {transitionType:fade/push/wipe, scope:all/current}
+12. BeautifySlides - 美化 {scope:all/current, theme:{background/titleFont/bodyFont}}
+13. SetSlideLayout - 设置布局 {layout:title/titleAndContent/blank}
 
-=== 高级功能 (4个) ===
-16. InsertChart - 插入图表 {chartType:column/line/pie, data:二维数组}
-17. InsertVideo - 插入视频 {videoPath:必需, autoPlay:可选}
-18. AddSpeakerNotes - 演讲备注 {notes:必需, slideIndex:可选}
-19. SetSlideShow - 放映设置 {loopUntilEsc/advanceMode等}
+=== 高级功能 (1个) ===
+14. AddSpeakerNotes - 演讲备注 {notes:必需, slideIndex:可选}
 
-=== 母版和主题 (2个) ===
-20. ApplyTheme - 应用主题 {themeName或themeFile}
-21. EditSlideMaster - 编辑母版 {background/titleFont/bodyFont}
+=== 主题 (1个) ===
+15. ApplyTheme - 应用主题 {themeName或themeFile}
 
 === VBA回退 (1个) ===
-22. ExecuteVBA - VBA代码 {code:必需,完整Sub/Function}
+16. ExecuteVBA - VBA代码 {code:必需,完整Sub/Function}
 
 【绝对禁止】
 - 禁止使用 actions/operations 数组
@@ -501,7 +495,7 @@ Public Class PromptManager
 - 禁止使用Excel/Word专属命令
 
 【决策优先级】
-1. 优先使用上述22个命令
+1. 优先使用上述16个命令
 2. 复杂需求用ExecuteVBA
 3. 翻译用工具栏按钮
 4. 需求不明确时中文询问"
@@ -531,22 +525,6 @@ Public Class PromptManager
         Return True
     End Function
     
-    ''' <summary>
-    ''' 根据字符串获取应用类型枚举
-    ''' </summary>
-    Private Function GetApplicationTypeFromString(appType As String) As OfficeApplicationType
-        Select Case appType?.ToLower()
-            Case "excel"
-                Return OfficeApplicationType.Excel
-            Case "word" 
-                Return OfficeApplicationType.Word
-            Case "powerpoint"
-                Return OfficeApplicationType.PowerPoint
-            Case Else
-                Return OfficeApplicationType.Excel ' 默认值
-        End Select
-    End Function
-
     ''' <summary>
     ''' 获取纯文本输出约束
     ''' </summary>

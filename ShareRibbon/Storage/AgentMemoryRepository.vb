@@ -151,26 +151,6 @@ Public Class AgentMemoryRepository
         Return AppendConversationEvent(record)
     End Function
 
-    Public Shared Function ListConversationEvents(sessionId As String, Optional limit As Integer = 50) As List(Of ConversationEventRecord)
-        OfficeAiDatabase.EnsureInitialized()
-        Dim results As New List(Of ConversationEventRecord)()
-        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
-            conn.Open()
-            Using cmd As New SQLiteCommand(
-                "SELECT event_id, session_id, app_type, document_id, event_type, role, content, metadata_json, created_at, processed_at " &
-                "FROM conversation_event WHERE session_id = @session_id ORDER BY created_at DESC LIMIT @limit", conn)
-                cmd.Parameters.AddWithValue("@session_id", DbRequiredText(sessionId, "default"))
-                cmd.Parameters.AddWithValue("@limit", Math.Max(1, limit))
-                Using rdr = cmd.ExecuteReader()
-                    While rdr.Read()
-                        results.Add(ReadConversationEvent(rdr))
-                    End While
-                End Using
-            End Using
-        End Using
-        Return results
-    End Function
-
     Public Shared Function GetConversationEventById(eventId As String) As ConversationEventRecord
         If String.IsNullOrWhiteSpace(eventId) Then Return Nothing
         OfficeAiDatabase.EnsureInitialized()
@@ -701,48 +681,6 @@ Public Class AgentMemoryRepository
         End Using
 
         Return Nothing
-    End Function
-
-    Public Shared Function RetrieveSkillRegistryByVector(queryEmbedding As Single(), query As String, intentType As String, appType As String, Optional topN As Integer = 5) As List(Of SkillRegistryRecord)
-        Dim results As New List(Of SkillRegistryRecord)()
-        If queryEmbedding Is Nothing OrElse queryEmbedding.Length = 0 Then Return results
-
-        OfficeAiDatabase.EnsureInitialized()
-        MemoryRepository.EnsureVectorFunctionsRegistered()
-
-        Dim queryEmbeddingJson = EmbeddingService.SerializeVector(queryEmbedding)
-        If String.IsNullOrWhiteSpace(queryEmbeddingJson) Then Return results
-
-        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
-            conn.Open()
-            Using cmd As New SQLiteCommand(
-                "SELECT skill_name, file_path, app_scope, intent_types, trigger_keywords, description, embedding_json, usage_count, success_count, last_indexed_at, enabled, " &
-                "(cosine_similarity_json(embedding_json, @query_embedding) * 80 + " &
-                " CASE WHEN skill_name LIKE @q THEN 20 ELSE 0 END + " &
-                " CASE WHEN trigger_keywords LIKE @q THEN 15 ELSE 0 END + " &
-                " CASE WHEN @has_intent = 1 AND intent_types LIKE @intent THEN 10 ELSE 0 END + usage_count * 0.2 + success_count * 0.3) AS score " &
-                "FROM skills_registry WHERE enabled = 1 AND embedding_json IS NOT NULL AND embedding_json != '' " &
-                "AND (@app_type = '' OR app_scope = '' OR app_scope LIKE @app_like) " &
-                "ORDER BY score DESC, last_indexed_at DESC LIMIT @limit", conn)
-                cmd.Parameters.AddWithValue("@query_embedding", queryEmbeddingJson)
-                cmd.Parameters.AddWithValue("@q", "%" & If(query, "").Trim() & "%")
-                Dim intent = If(intentType, "").Trim()
-                cmd.Parameters.AddWithValue("@intent", "%" & intent & "%")
-                cmd.Parameters.AddWithValue("@has_intent", If(String.IsNullOrWhiteSpace(intent), 0, 1))
-                cmd.Parameters.AddWithValue("@app_type", If(appType, "").Trim())
-                cmd.Parameters.AddWithValue("@app_like", "%" & If(appType, "").Trim() & "%")
-                cmd.Parameters.AddWithValue("@limit", Math.Max(1, topN))
-                Using rdr = cmd.ExecuteReader()
-                    While rdr.Read()
-                        Dim skill = ReadSkillRegistry(rdr)
-                        skill.Score = If(rdr.IsDBNull(11), 0.0R, Convert.ToDouble(rdr.GetValue(11)))
-                        results.Add(skill)
-                    End While
-                End Using
-            End Using
-        End Using
-
-        Return results
     End Function
 
     Public Shared Sub DisableSkillsNotIn(activeSkillNames As IEnumerable(Of String))
