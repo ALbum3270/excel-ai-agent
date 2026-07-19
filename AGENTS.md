@@ -52,6 +52,7 @@ AiHelper/
 | Excel 功能 | `ExcelAi/` | 单元格、Range、Sheet、图表、ExcelDna、批量数据生成 |
 | Word 功能 | `WordAi/` | 文档、段落、续写、翻译、OpenXml 处理 |
 | PowerPoint 功能 | `PowerPointAi/` | 演示文稿、幻灯片、形状、续写、翻译 |
+| PowerPoint Professional Design Agent | `PowerPointAi/Design/` | Scene 语义、设计系统、专业构图、COM 渲染、视觉验证与安全回滚 |
 | 安装包定义 | `OfficeAgent/` | `.vdproj` 安装项目，慎改，保持最小 diff |
 | 安装自定义动作 | `OfficeAgentSetupCustomActions/`（如存在） | 安装流程辅助逻辑，优先在这里承载可代码化安装行为 |
 | 调试/迁移文档 | `docs/` | Visual Studio/VSTO 调试、迁移指南等 |
@@ -60,6 +61,8 @@ AiHelper/
 | AI Native Harness 落地实施设计 | `docs/ai-native-harness-implementation-design.md` | 基于现有代码的渐进改造任务、文件范围与验收清单 |
 | Harness 专项设计 | `docs/design/` | ContextPack / Observe / Safety 等目标合同级专项 |
 | 声明式 Office 对象操作 | `docs/design/office-object-operation-integration.md` | 基于现有 Harness/ToolRegistry/Loop 接入动态 API 发现、通用对象操作和宿主 Executor |
+| PowerPoint Deck Agent 运行时 | `docs/design/ppt-deck-agent-runtime.md` | `CreateSlides + Scene + Observer/Verifier/Repair` 的专业设计主链 |
+| ToolResult 与视觉证据 | `docs/design/tool-result-observation.md` | Observe/Repair 合同、Diff、临时多模态证据与持久化边界 |
 | NuGet 依赖 | 各项目 `packages.config` 与根 `packages/` | 判断技术栈、依赖版本、目标框架 |
 
 ## Local AGENTS.md Files
@@ -152,6 +155,14 @@ AiHelper/
 - Excel、PowerPoint 的具体能力分别放在 `ExcelAi/`、`PowerPointAi/`，通过相同抽象接入共享 harness/loop。
 - `openspec/` 中的 AI Native 设计文档是产品/架构意图来源；实现时要优先保持与 roadmap 一致。
 
+### 视觉证据与多模态修复
+
+- 宿主 Observer/Verifier 负责从真实 Office 渲染结果采集视觉证据；`ShareRibbon/` 只定义宿主无关的证据合同和模型请求适配，不得引用 PowerPoint/Word/Excel COM 类型。
+- 截图、Base64、Data URL 等大载荷只能作为当前执行轮次的临时内存证据；禁止写入 `Observation`、`Data`、`Artifacts`、History、Memory、RunTrace、日志或 UI 消息。
+- 多模态判断和修复必须由现有 `LoopEngine` 发起，并继续经过共享 `AiGateway`；Executor 只执行、观察和回滚，不得直接调用模型或建立第二套视觉 Repair Loop。
+- 视觉证据必须限制格式、数量、尺寸和字节数，并在模型或 Provider 不支持图片时有限次降级到文本 Observation；禁止因视觉通道不可用形成无限重试。
+- PowerPoint 渲染失败需要回滚时，必须先采集必要证据，再按安全标记回滚本批生成对象；不得为了保留截图而遗留不确定的部分修改。
+
 ### 动态 Office API 与声明式操作
 
 - 长尾 Office 能力必须沿现有唯一主链接入：`OfficeHarness -> AgentKernel -> LoopEngine -> ToolRegistry -> CodeExecutionService -> 宿主 ExecuteJsonCommandWithToolResult`。
@@ -238,6 +249,8 @@ intent_types: data_analysis, formula, chart
 13. 为每个新 Office 对象或业务话术新增意图枚举和专用 Tool，而不先评估 `DiscoverOfficeCapability + OfficeObjectOperation`。
 14. 在通用 Executor 中开放任意字符串反射、`CallByName`、宏或未经过 Catalog/Safety 的 COM 成员。
 15. 新建平行 Harness/Loop/Safety 来实现动态 API，造成两套状态机、两套终态和不同错误合同。
+16. 把 PowerPoint 截图或 Base64 塞进 Observation、Artifacts、History、Trace 或日志，造成隐私、体积和持久化风险。
+17. 在 PowerPoint Executor/Verifier 内直接调用视觉模型，绕过现有 Loop 的重试、降级和终态管理。
 
 ## Commands
 

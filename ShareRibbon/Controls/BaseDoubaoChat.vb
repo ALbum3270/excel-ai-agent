@@ -30,7 +30,6 @@ Public MustInherit Class BaseDoubaoChat
     Inherits BaseChat
 
     Public Overrides ReadOnly Property ChatUrl As String = "https://www.doubao.com"
-    Public Overrides ReadOnly Property SessionFileName As String = "doubao_session.json"
 
     Protected Overloads Async Function InitializeWebView2() As Task
         Try
@@ -823,52 +822,6 @@ End Function
     '                  .Replace(vbLf, "\n") _
     '                  .Replace(vbTab, "\t")
     'End Function
-
-    Private Async Sub InjectScript(scriptContent As String)
-        If ChatBrowser.CoreWebView2 IsNot Nothing Then
-            Dim escapedScript = JsonConvert.SerializeObject(scriptContent)
-            Await ChatBrowser.CoreWebView2.ExecuteScriptAsync($"eval({escapedScript})")
-        Else
-            MessageBox.Show("CoreWebView2 未初始化，无法注入脚本。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-        End If
-    End Sub
-
-
-
-    ' 检查代码是否包含过程声明
-    Private Overloads Function ContainsProcedureDeclaration(code As String) As Boolean
-        ' 使用简单的正则表达式检查是否包含 Sub 或 Function 声明
-        Return Regex.IsMatch(code, "^\s*(Sub|Function)\s+\w+", RegexOptions.Multiline Or RegexOptions.IgnoreCase)
-    End Function
-
-    ' 查找模块中的第一个过程名
-    Private Overloads Function FindFirstProcedureName(comp As VBComponent) As String
-        Try
-            Dim codeModule As CodeModule = comp.CodeModule
-            Dim lineCount As Integer = codeModule.CountOfLines
-            Dim line As Integer = 1
-
-            While line <= lineCount
-                Dim procName As String = codeModule.ProcOfLine(line, vbext_ProcKind.vbext_pk_Proc)
-                If Not String.IsNullOrEmpty(procName) Then
-                    Return procName
-                End If
-                line = codeModule.ProcStartLine(procName, vbext_ProcKind.vbext_pk_Proc) + codeModule.ProcCountLines(procName, vbext_ProcKind.vbext_pk_Proc)
-            End While
-
-            Return String.Empty
-        Catch
-            ' 如果出错，尝试使用正则表达式从代码中提取
-            Dim code As String = comp.CodeModule.Lines(1, comp.CodeModule.CountOfLines)
-            Dim match As Match = Regex.Match(code, "^\s*(Sub|Function)\s+(\w+)", RegexOptions.Multiline Or RegexOptions.IgnoreCase)
-
-            If match.Success AndAlso match.Groups.Count > 2 Then
-                Return match.Groups(2).Value
-            End If
-
-            Return String.Empty
-        End Try
-    End Function
 
     Protected Overrides Function GetWebView2DataFolderName() As String
         Return "DoubaoChatWebView2Data"

@@ -126,16 +126,6 @@ Namespace My.Resources
         '''<summary>
         '''  查找 System.Drawing.Bitmap 类型的本地化资源。
         '''</summary>
-        Public ReadOnly Property autocomplete1() As System.Drawing.Bitmap
-            Get
-                Dim obj As Object = ResourceManager.GetObject("autocomplete1", resourceCulture)
-                Return CType(obj,System.Drawing.Bitmap)
-            End Get
-        End Property
-        
-        '''<summary>
-        '''  查找 System.Drawing.Bitmap 类型的本地化资源。
-        '''</summary>
         Public ReadOnly Property chat() As System.Drawing.Bitmap
             Get
                 Dim obj As Object = ResourceManager.GetObject("chat", resourceCulture)
@@ -500,38 +490,6 @@ Namespace My.Resources
             End Get
         End Property
 
-        '''<summary>
-        '''  查找类似 /**
-        ''' * ralph-loop.js - Ralph Loop 前端控制
-        ''' * 管理循环任务的UI展示和用户交互
-        ''' */
-        '''
-        '''// Ralph Loop 状态
-        '''window.ralphLoopState = {
-        '''    active: false,
-        '''    currentSession: null
-        '''};
-        '''
-        '''/**
-        ''' * 显示循环任务输入对话框
-        ''' */
-        '''function showLoopInputDialog() {
-        '''    try {
-        '''        // 如果已有对话框，先移除
-        '''        hideLoopInputDialog();
-        '''        
-        '''        const dialog = document.createElement(&apos;div&apos;);
-        '''        dialog.id = &apos;ralph-loop-dialog&apos;;
-        '''        dialog.className = &apos;ralph-loop-dialog&apos;;
-        '''        dialog.innerHTML = `
-        '''            &lt;div class=&quot;loop-dial [字符串的其余部分被截断]&quot;; 的本地化字符串。
-        '''</summary>
-        Public ReadOnly Property ralph_loop() As String
-            Get
-                Return ResourceManager.GetString("ralph_loop", resourceCulture)
-            End Get
-        End Property
-        
         '''<summary>
         '''  查找类似 /**
         ''' * revision-manager.js - Revision Display and Application

@@ -358,6 +358,7 @@ Public Class SmartProofreadFocusMode
         sb.AppendLine("    <span class=""proofread-list-icon"">🔍</span>")
         sb.AppendLine($"    <span class=""proofread-list-title"">校对结果 ({issues.Count}处问题)</span>")
         sb.AppendLine("  </div>")
+        sb.AppendLine("  <div class=""proofread-summary"" id=""proofread-summary""></div>")
         
         ' 按严重程度分组
         Dim highIssues = issues.Where(Function(i) i.Severity = IssueSeverity.High AndAlso Not i.IsIgnored AndAlso Not i.IsCorrected).ToList()

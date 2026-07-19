@@ -10,7 +10,6 @@ Public Class MCPConfigForm
     Inherits Form
 
     Private _serverUrlTextBox As TextBox
-    Private _apiKeyTextBox As TextBox
     Private _testButton As Button
     Private _saveButton As Button
     Private _cancelButton As Button
@@ -479,56 +478,6 @@ Public Class MCPConfigForm
             ' HTTP 模式下的设置
             MessageBox.Show("HTTP/SSE 模式不需要额外配置。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)
         End If
-    End Sub
-
-    Private Sub ImportOfficialConfig_Click(sender As Object, e As EventArgs)
-        ' 直接导入官方格式，无需转换
-        Using openFileDialog As New OpenFileDialog()
-            openFileDialog.Filter = "JSON文件|*.json"
-            openFileDialog.Title = "选择官方MCP配置文件"
-
-            If openFileDialog.ShowDialog() = DialogResult.OK Then
-                Try
-                    Dim json = File.ReadAllText(openFileDialog.FileName)
-                    Dim config = JObject.Parse(json)
-
-                    If config("mcpServers") IsNot Nothing Then
-                        Dim imported = 0
-                        Dim serversObj = config("mcpServers").ToObject(Of JObject)()
-
-                        For Each server In serversObj.Properties()
-                            Dim serverId = server.Name
-                            Dim serverConfig = server.Value.ToObject(Of MCPConnectionConfig)()
-
-                            ' 如果名称为空，使用ID作为名称
-                            If String.IsNullOrEmpty(serverConfig.Name) Then
-                                serverConfig.Name = serverId
-                            End If
-
-                            ' 检查是否已存在同名连接
-                            Dim existingIndex = _currentConnections.FindIndex(Function(c) c.Name.Equals(serverConfig.Name, StringComparison.OrdinalIgnoreCase))
-                            If existingIndex >= 0 Then
-                                _currentConnections(existingIndex) = serverConfig
-                            Else
-                                _currentConnections.Add(serverConfig)
-                            End If
-
-                            imported += 1
-                        Next
-
-                        ' 保存并刷新列表
-                        MCPConnectionManager.SaveConnections(_currentConnections)
-                        LoadConnectionsList()
-
-                        MessageBox.Show($"成功导入 {imported} 个连接", "导入成功", MessageBoxButtons.OK, MessageBoxIcon.Information)
-                    Else
-                        MessageBox.Show("无效的MCP配置文件格式", "导入失败", MessageBoxButtons.OK, MessageBoxIcon.Error)
-                    End If
-                Catch ex As Exception
-                    MessageBox.Show($"导入失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error)
-                End Try
-            End If
-        End Using
     End Sub
 
     ' 更新类型选择处理

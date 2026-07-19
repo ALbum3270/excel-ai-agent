@@ -270,64 +270,6 @@ Public Class ChatContextBuilder
         Return result
     End Function
 
-    ''' <summary>
-    ''' 简化：仅注入 Memory 层到现有 system，用于增量集成
-    ''' </summary>
-    ''' <param name="enableMemory">为 False 时直接返回 baseSystem</param>
-    Public Shared Function AppendMemoryToSystemPrompt(baseSystem As String, currentQuery As String, Optional enableMemory As Boolean = True, Optional appType As String = Nothing) As String
-        If Not enableMemory Then Return baseSystem
-
-        Dim parts As New List(Of String)()
-        If Not String.IsNullOrWhiteSpace(baseSystem) Then parts.Add(baseSystem)
-
-        Dim userProfile = MemoryService.GetUserProfile()
-        If Not String.IsNullOrWhiteSpace(userProfile) Then
-            parts.Add("[用户画像]" & vbCrLf & userProfile)
-        End If
-        Dim structuredMemories = MemoryService.GetRelevantStructuredMemories(currentQuery, Nothing, appType)
-        If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
-            structuredMemories = structuredMemories.
-                Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Summary, ""))).
-                ToList()
-        End If
-        If structuredMemories IsNot Nothing AndAlso structuredMemories.Count > 0 Then
-            parts.Add("[相关记忆]")
-            For Each m In structuredMemories
-                Dim label = If(String.IsNullOrWhiteSpace(m.MemoryType), "memory", m.MemoryType)
-                parts.Add($"- [{label}] {m.Content}")
-            Next
-            Else
-                Dim memories = MemoryService.GetRelevantMemories(currentQuery, Nothing, Nothing, Nothing, appType)
-                If memories IsNot Nothing AndAlso memories.Count > 0 Then
-                    memories = memories.
-                        Where(Function(m) IsRelevantToQuery(currentQuery, If(m.Content, "") & " " & If(m.Tags, ""))).
-                        ToList()
-                End If
-                If memories IsNot Nothing AndAlso memories.Count > 0 Then
-                    parts.Add("[相关记忆]")
-                For Each m In memories
-                    parts.Add("- " & m.Content)
-                Next
-            End If
-        End If
-        Dim summaries = MemoryService.GetRecentSessionSummaries(Nothing)
-        If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
-            summaries = summaries.
-                Where(Function(s) IsRelevantToQuery(currentQuery, If(s.Title, "") & " " & If(s.Snippet, ""))).
-                Take(2).
-                ToList()
-        End If
-        If summaries IsNot Nothing AndAlso summaries.Count > 0 Then
-            parts.Add("[相关近期会话]")
-            For Each s In summaries
-                parts.Add($"- {s.Title}: {s.Snippet}")
-            Next
-        End If
-
-        If parts.Count <= 1 Then Return baseSystem
-        Return String.Join(vbCrLf & vbCrLf, parts)
-    End Function
-
     Private Shared Function IsRelevantToQuery(query As String, text As String) As Boolean
         If String.IsNullOrWhiteSpace(query) OrElse String.IsNullOrWhiteSpace(text) Then Return False
 

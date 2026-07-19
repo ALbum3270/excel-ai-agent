@@ -25,7 +25,6 @@ Imports ShareRibbon
 Public Class ChatControl
     Inherits BaseChatControl
 
-    Private sheetContentItems As New Dictionary(Of String, Tuple(Of System.Windows.Forms.Label, System.Windows.Forms.Button))
 
     Public Sub New()
         ' 此调用是设计师所必需的。
@@ -382,75 +381,6 @@ Public Class ChatControl
         End Try
     End Function
 
-    Private Function GetSelectedRangeContent() As String
-        Try
-            ' 获取 sheetContentItems 的内容
-            Dim selectedContents As String = String.Join("|", sheetContentItems.Values.Select(Function(item) item.Item1.Text))
-
-            ' 解析 selectedContents 并获取每个工作表中选定的单元格内容
-            Dim parsedContents As New StringBuilder()
-            If Not String.IsNullOrEmpty(selectedContents) Then
-                Dim sheetSelections = selectedContents.Split("|"c)
-                For Each sheetSelection In sheetSelections
-                    Dim parts = sheetSelection.Split("["c)
-                    If parts.Length = 2 Then
-                        Dim sheetName = parts(0)
-                        Dim ranges = parts(1).TrimEnd("]"c).Split(","c)
-                        For Each range In ranges
-                            Dim content = GetRangeContent(sheetName, range)
-                            If Not String.IsNullOrEmpty(content) Then
-                                parsedContents.AppendLine($"{sheetName}的{range}:{content}")
-                            End If
-                        Next
-                    End If
-                Next
-            End If
-
-            ' 将 parsedContents 加入到 question 中
-            If parsedContents.Length > 0 Then
-                Return "我能提供我选中的数据作为参考：{" & parsedContents.ToString() & "}"
-            End If
-        Catch ex As Exception
-            Return String.Empty
-        End Try
-
-        Return String.Empty
-    End Function
-
-    Private Function GetRangeContent(sheetName As String, rangeAddress As String) As String
-        Try
-            Dim sheet = Globals.ThisAddIn.Application.Sheets(sheetName)
-            Dim range = sheet.Range(rangeAddress)
-            Dim value = range.Value2
-
-            If value Is Nothing Then
-                Return String.Empty
-            End If
-
-            If TypeOf value Is System.Object(,) Then
-                Dim array = DirectCast(value, System.Object(,))
-                Dim rows = array.GetLength(0)
-                Dim cols = array.GetLength(1)
-                Dim result As New StringBuilder()
-
-                For i = 1 To rows
-                    For j = 1 To cols
-                        If array(i, j) IsNot Nothing Then
-                            result.Append(array(i, j).ToString() & vbTab)
-                        End If
-                    Next
-                    result.AppendLine()
-                Next
-
-                Return result.ToString().TrimEnd()
-            Else
-                Return value.ToString()
-            End If
-        Catch ex As Exception
-            Return String.Empty
-        End Try
-    End Function
-
     Protected Overrides Function GetApplication() As ApplicationInfo
         Return New ApplicationInfo("Excel", OfficeApplicationType.Excel)
     End Function
@@ -578,43 +508,9 @@ Public Class ChatControl
     End Function
 
     ''' <summary>
-    ''' 尝试执行AI返回的直接操作命令
-    ''' </summary>
-    ''' <param name="aiResponse">AI响应文本</param>
-    ''' <returns>是否成功执行了命令</returns>
-    Public Function TryExecuteDirectCommands(aiResponse As String) As Boolean
-        Try
-            ' 提取JSON命令
-            Dim commands = ExcelDirectOperationService.ExtractCommandsFromResponse(aiResponse)
-
-            If commands.Count = 0 Then
-                Return False
-            End If
-
-            ' 创建操作服务
-            Dim operationService As New ExcelDirectOperationService(Globals.ThisAddIn.Application)
-
-            ' 执行所有命令
-            Dim allSuccess As Boolean = True
-            For Each cmd As Newtonsoft.Json.Linq.JObject In commands
-                Dim success = operationService.ExecuteCommand(cmd)
-                If Not success Then
-                    allSuccess = False
-                End If
-            Next
-
-            Return allSuccess
-
-        Catch ex As Exception
-            Debug.WriteLine($"TryExecuteDirectCommands 出错: {ex.Message}")
-            Return False
-        End Try
-    End Function
-
-    ''' <summary>
     ''' 执行JSON命令（重写基类方法）- 带占位符替换和校验
     ''' </summary>
-    Protected Overrides Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
+    Private Function ExecuteJsonCommandCore(jsonCode As String, preview As Boolean) As Boolean
         Try
             ' 获取Excel上下文用于占位符替换
             Dim context = ExcelJsonCommandSchema.GetExcelContext(Globals.ThisAddIn.Application)
@@ -1246,6 +1142,267 @@ Public Class ChatControl
         Catch ex As Exception
             Debug.WriteLine($"CaptureOfficeContext 出错: {ex.Message}")
             Return New Agent.Context.OfficeContext With {.AppType = appType}
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Agent 原生工具必须返回可观察的 ToolResult。Excel 先以宿主快照覆盖全部 JSON 命令，
+    ''' 高频写工具会额外记录目标 Range、公式错误数、UsedRange 与图表数量变化。
+    ''' </summary>
+    Protected Overrides Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
+        Dim commandEnvelope As JObject = Nothing
+        Dim toolId As String = "ExcelCommands"
+
+        Try
+            commandEnvelope = ParseExcelCommandEnvelope(jsonCode)
+            toolId = GetEnvelopeToolId(commandEnvelope, "ExcelCommands")
+            Dim beforeSnapshot = CaptureExcelCommandSnapshot(commandEnvelope)
+            Dim success = ExecuteJsonCommandCore(jsonCode, preview)
+            Dim afterSnapshot = CaptureExcelCommandSnapshot(commandEnvelope)
+            Dim observation = BuildExcelCommandObservation(toolId, commandEnvelope, success, beforeSnapshot, afterSnapshot)
+            Dim summary = If(observation?("summary")?.ToString(), $"{toolId} 执行完成")
+            Dim observationError = If(afterSnapshot?("captureError")?.ToString(),
+                                      beforeSnapshot?("captureError")?.ToString())
+
+            ' A write may already have succeeded even when observation fails. Never
+            ' repeat it automatically, because a second execution could duplicate data.
+            If success AndAlso Not String.IsNullOrWhiteSpace(observationError) Then
+                Return Agent.ToolResult.Failed(
+                    toolId,
+                    $"Excel 命令可能已执行，但结果观察失败: {observationError}",
+                    errorCode:=ExceptionClassifier.CodeObservationFailed,
+                    userMessage:="Excel 操作可能已经完成，但插件无法安全验证结果；已停止自动重试",
+                    recoverable:=False,
+                    observation:=observation)
+            End If
+
+            If success Then
+                Return Agent.ToolResult.Succeed(toolId,
+                                                summary,
+                                                data:=New With {.targetRefs = observation("targetRefs")},
+                                                observation:=observation)
+            End If
+
+            Return Agent.ToolResult.Failed(toolId,
+                                           summary,
+                                           errorCode:=ExceptionClassifier.CodeUnknown,
+                                           userMessage:=summary,
+                                           recoverable:=True,
+                                           observation:=observation)
+        Catch ex As Exception
+            Return Agent.ToolResult.FromException(toolId, ex)
+        End Try
+    End Function
+
+    Private Function ParseExcelCommandEnvelope(jsonCode As String) As JObject
+        If String.IsNullOrWhiteSpace(jsonCode) Then Return Nothing
+
+        Dim processedJson = jsonCode
+        Try
+            Dim context = ExcelJsonCommandSchema.GetExcelContext(Globals.ThisAddIn.Application)
+            For Each kvp In context
+                processedJson = processedJson.Replace("{" & kvp.Key & "}", kvp.Value)
+            Next
+        Catch
+        End Try
+
+        Dim token = JToken.Parse(processedJson)
+        Return TryCast(token, JObject)
+    End Function
+
+    Private Shared Function GetEnvelopeToolId(envelope As JObject, fallback As String) As String
+        If envelope Is Nothing Then Return fallback
+        If envelope("commands") IsNot Nothing Then Return fallback
+        Dim command = envelope("command")?.ToString()
+        Return If(String.IsNullOrWhiteSpace(command), fallback, command.Trim())
+    End Function
+
+    Private Function CaptureExcelCommandSnapshot(envelope As JObject) As JObject
+        Dim snapshot As New JObject()
+        Dim workbook As Object = Nothing
+        Dim worksheet As Object = Nothing
+        Dim usedRange As Object = Nothing
+        Dim chartObjects As Object = Nothing
+        Dim selectedRange As Object = Nothing
+        Dim target As Object = Nothing
+        Try
+            ' Keep observer COM values late-bound. WPS/部分 Excel 兼容层可以通过
+            ' IDispatch 使用 Range，但不支持嵌入 PIA Range 的 QueryInterface。
+            Dim app As Object = Globals.ThisAddIn.Application
+            workbook = app.ActiveWorkbook
+            worksheet = app.ActiveSheet
+            If workbook Is Nothing OrElse worksheet Is Nothing Then Return snapshot
+
+            snapshot("workbook") = If(workbook.Name, "")
+            snapshot("worksheet") = If(worksheet.Name, "")
+            usedRange = worksheet.UsedRange
+            If usedRange IsNot Nothing Then
+                snapshot("usedRows") = CInt(usedRange.Rows.Count)
+                snapshot("usedColumns") = CInt(usedRange.Columns.Count)
+            End If
+            chartObjects = worksheet.ChartObjects()
+            snapshot("chartCount") = CInt(chartObjects.Count)
+
+            Dim targetAddress = ResolveExcelTargetAddress(envelope)
+            If String.IsNullOrWhiteSpace(targetAddress) Then
+                selectedRange = app.Selection
+                If selectedRange IsNot Nothing Then
+                    Try
+                        targetAddress = CStr(selectedRange.Address(False, False))
+                    Catch
+                    End Try
+                End If
+            End If
+
+            snapshot("targetAddress") = If(targetAddress, "")
+            If Not String.IsNullOrWhiteSpace(targetAddress) Then
+                target = worksheet.Range(targetAddress)
+                snapshot("targetValueHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Value2))
+                snapshot("targetFormulaHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Formula))
+                snapshot("targetPreview") = BuildExcelRangePreview(target, 3, 4)
+                snapshot("formulaErrorCount") = CountExcelFormulaErrors(target, 5000)
+            End If
+        Catch ex As Exception
+            snapshot("captureError") = AppLogger.Redact(ex.Message)
+            AppLogger.Warn("ExcelObserver", $"Capture snapshot failed: {AppLogger.Redact(ex.Message)}")
+        Finally
+            ComObjectHelper.ReleaseComObject(target)
+            ComObjectHelper.ReleaseComObject(selectedRange)
+            ComObjectHelper.ReleaseComObject(chartObjects)
+            ComObjectHelper.ReleaseComObject(usedRange)
+            ComObjectHelper.ReleaseComObject(worksheet)
+            ComObjectHelper.ReleaseComObject(workbook)
+        End Try
+        Return snapshot
+    End Function
+
+    Private Shared Function ResolveExcelTargetAddress(envelope As JObject) As String
+        If envelope Is Nothing Then Return ""
+        Dim command = envelope
+        If envelope("commands") IsNot Nothing AndAlso envelope("commands").Type = JTokenType.Array Then
+            command = TryCast(envelope("commands").FirstOrDefault(), JObject)
+        End If
+        If command Is Nothing Then Return ""
+        Dim params = command("params")
+        Return If(command("range")?.ToString(),
+                  If(params?("range")?.ToString(), params?("targetRange")?.ToString()))
+    End Function
+
+    Private Shared Function BuildExcelCommandObservation(toolId As String,
+                                                         envelope As JObject,
+                                                         success As Boolean,
+                                                         beforeSnapshot As JObject,
+                                                         afterSnapshot As JObject) As JObject
+        Dim changed = Not JToken.DeepEquals(beforeSnapshot, afterSnapshot)
+        Dim targetAddress = If(afterSnapshot?("targetAddress")?.ToString(), beforeSnapshot?("targetAddress")?.ToString())
+        Dim targetRefs As New JArray()
+        If Not String.IsNullOrWhiteSpace(targetAddress) Then
+            targetRefs.Add($"Excel:{afterSnapshot?("worksheet")?.ToString()}!{targetAddress}")
+        Else
+            targetRefs.Add("Excel:ActiveSheet")
+        End If
+
+        Dim warnings As New JArray()
+        If success AndAlso Not changed Then warnings.Add("命令已处理，但宿主快照未检测到变化；可能为用户取消、格式等价或 noop")
+        If afterSnapshot?("captureError") IsNot Nothing Then warnings.Add(afterSnapshot("captureError"))
+
+        Dim diff As New JObject From {
+            {"usedRowsDelta", GetSnapshotInteger(afterSnapshot, "usedRows") - GetSnapshotInteger(beforeSnapshot, "usedRows")},
+            {"usedColumnsDelta", GetSnapshotInteger(afterSnapshot, "usedColumns") - GetSnapshotInteger(beforeSnapshot, "usedColumns")},
+            {"chartCountDelta", GetSnapshotInteger(afterSnapshot, "chartCount") - GetSnapshotInteger(beforeSnapshot, "chartCount")},
+            {"formulaErrorDelta", GetSnapshotInteger(afterSnapshot, "formulaErrorCount") - GetSnapshotInteger(beforeSnapshot, "formulaErrorCount")}
+        }
+
+        Return New JObject From {
+            {"kind", "write"},
+            {"summary", If(success, $"Excel 工具 {toolId} 已执行", $"Excel 工具 {toolId} 执行失败")},
+            {"targetRefs", targetRefs},
+            {"changed", changed},
+            {"before", beforeSnapshot},
+            {"after", afterSnapshot},
+            {"diff", diff},
+            {"warnings", warnings}
+        }
+    End Function
+
+    Private Shared Function GetSnapshotInteger(snapshot As JObject, name As String) As Integer
+        If snapshot Is Nothing Then Return 0
+        Return If(snapshot(name)?.Value(Of Integer)(), 0)
+    End Function
+
+    Private Shared Function SerializeExcelRangeValue(value As Object) As String
+        If value Is Nothing Then Return ""
+        Try
+            Return JsonConvert.SerializeObject(value, Formatting.None)
+        Catch
+            Return value.ToString()
+        End Try
+    End Function
+
+    Private Shared Function ComputeObservationHash(value As String) As String
+        Dim bytes = Encoding.UTF8.GetBytes(If(value, ""))
+        Using sha = System.Security.Cryptography.SHA256.Create()
+            Return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant()
+        End Using
+    End Function
+
+    Private Shared Function BuildExcelRangePreview(target As Object,
+                                                   maxRows As Integer,
+                                                   maxColumns As Integer) As String
+        If target Is Nothing Then Return ""
+        Dim rowCollection As Object = Nothing
+        Dim columnCollection As Object = Nothing
+        Dim cells As Object = Nothing
+        Try
+            rowCollection = target.Rows
+            columnCollection = target.Columns
+            cells = target.Cells
+            Dim rows = Math.Min(CInt(rowCollection.Count), maxRows)
+            Dim columns = Math.Min(CInt(columnCollection.Count), maxColumns)
+            Dim lines As New List(Of String)()
+            For rowIndex = 1 To rows
+                Dim values As New List(Of String)()
+                For columnIndex = 1 To columns
+                    Dim cell As Object = Nothing
+                    Try
+                        cell = cells.Item(rowIndex, columnIndex)
+                        Dim cellValue = cell.Value2
+                        values.Add(If(cellValue Is Nothing, "", cellValue.ToString()))
+                    Finally
+                        ComObjectHelper.ReleaseComObject(cell)
+                    End Try
+                Next
+                lines.Add(String.Join(" | ", values))
+            Next
+            Dim text = String.Join(vbLf, lines)
+            Return If(text.Length <= 400, text, text.Substring(0, 400))
+        Finally
+            ComObjectHelper.ReleaseComObject(cells)
+            ComObjectHelper.ReleaseComObject(columnCollection)
+            ComObjectHelper.ReleaseComObject(rowCollection)
+        End Try
+    End Function
+
+    Private Shared Function CountExcelFormulaErrors(target As Object, maxCells As Integer) As Integer
+        If target Is Nothing Then Return 0
+        Dim count As Integer = 0
+        Dim cells As Object = Nothing
+        Try
+            cells = target.Cells
+            Dim inspected = Math.Min(CInt(cells.Count), maxCells)
+            For index = 1 To inspected
+                Dim cell As Object = Nothing
+                Try
+                    cell = cells.Item(index)
+                    If Information.IsError(cell.Value) Then count += 1
+                Catch
+                Finally
+                    ComObjectHelper.ReleaseComObject(cell)
+                End Try
+            Next
+            Return count
+        Finally
+            ComObjectHelper.ReleaseComObject(cells)
         End Try
     End Function
 

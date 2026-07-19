@@ -263,11 +263,25 @@
     <Compile Include="DoubaoChat.vb">
       <SubType>UserControl</SubType>
     </Compile>
-    <Compile Include="PowerPointTranslateService.vb" />
     <Compile Include="PowerPointDocumentTranslateService.vb" />
     <Compile Include="PowerPointContinuationService.vb" />
     <Compile Include="PowerPointCompletionManager.vb" />
     <Compile Include="PowerPointJsonCommandSchema.vb" />
+    <Compile Include="Design\SlideDesignModels.vb" />
+    <Compile Include="Design\DesignSystemCatalog.vb" />
+    <Compile Include="Design\SlideComponentLibrary.Patterns.vb" />
+    <Compile Include="Design\SlideComponentLibrary.vb" />
+    <Compile Include="Design\SlideLayoutEngine.vb" />
+    <Compile Include="Design\PowerPointSceneRenderer.vb" />
+    <Compile Include="Design\PowerPointVisualVerifier.Rendered.vb" />
+    <Compile Include="Design\PowerPointVisualVerifier.vb" />
+    <Compile Include="Design\ScenePlanPreviewRenderer.vb" />
+    <Compile Include="Design\ProfessionalDeckExecutor.Operations.vb" />
+    <Compile Include="Design\ProfessionalDeckExecutor.vb" />
+    <Compile Include="Runtime\PowerPointApiCatalogProvider.vb" />
+    <Compile Include="Runtime\PowerPointObjectResolver.vb" />
+    <Compile Include="Runtime\PowerPointOperationObserver.vb" />
+    <Compile Include="Runtime\PowerPointOperationExecutor.vb" />
     <Compile Include="Services\PowerPointGhostTextManager.vb" />
     <Compile Include="Ribbon1.Designer.vb">
       <DependentUpon>Ribbon1.vb</DependentUpon>
@@ -282,6 +296,8 @@
       <DependentUpon>Ribbon1.vb</DependentUpon>
     </EmbeddedResource>
     <None Include="app.config" />
+    <None Include="Design\Fixtures\professional-command-regression.json" />
+    <None Include="Design\Fixtures\professional-visual-regression.json" />
     <None Include="packages.config" />
     <None Include="PowerPointAi_TemporaryKey.pfx" />
     <None Include="ThisAddIn.Designer.xml">
@@ -395,7 +411,6 @@
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Runtime.CompilerServices.Unsafe'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Text.Encodings.Web'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Text.Json'" />
-      <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Dataflow'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Extensions'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.ValueTuple'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'Office'" />
@@ -424,7 +439,6 @@
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Runtime.CompilerServices.Unsafe'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Text.Encodings.Web'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Text.Json'" />
-      <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Dataflow'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Extensions'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.ValueTuple'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'Office'" />

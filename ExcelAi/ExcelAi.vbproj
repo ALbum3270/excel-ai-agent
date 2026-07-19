@@ -307,9 +307,6 @@
     <Compile Include="Spotlight.vb" />
     <Compile Include="ExcelDirectOperationService.vb" />
     <Compile Include="ExcelJsonCommandSchema.vb" />
-    <Compile Include="TextPreviewForm.vb">
-      <SubType>Form</SubType>
-    </Compile>
     <Compile Include="JsonPreviewDialog.vb">
       <SubType>Form</SubType>
     </Compile>
@@ -440,7 +437,6 @@
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Runtime.CompilerServices.Unsafe'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Text.Encodings.Web'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Text.Json'" />
-      <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Dataflow'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Extensions'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'System.ValueTuple'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(ReferenceDependencyPaths)" Condition="'%(Filename)' == 'Office'" />
@@ -467,7 +463,6 @@
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Runtime.CompilerServices.Unsafe'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Text.Encodings.Web'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Text.Json'" />
-      <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Dataflow'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.Threading.Tasks.Extensions'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'System.ValueTuple'" />
       <_ExcludedAssembliesFromManifestGeneration Include="@(_FinalDeploymentReferencePaths)" Condition="'%(Filename)' == 'Office'" />

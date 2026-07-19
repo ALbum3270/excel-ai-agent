@@ -42,13 +42,6 @@ Namespace Agent
         End Sub
 
         ''' <summary>
-        ''' 注册技能
-        ''' </summary>
-        Public Sub RegisterSkill(skill As AgentSkill)
-            _skills(skill.Id) = skill
-        End Sub
-
-        ''' <summary>
         ''' 根据用户输入匹配最相关的技能
         ''' 返回匹配度最高的技能，无匹配返回 Nothing
         ''' </summary>
@@ -100,14 +93,6 @@ Namespace Agent
         ''' </summary>
         Public Function GetAllSkills() As List(Of AgentSkill)
             Return _skills.Values.ToList()
-        End Function
-
-        ''' <summary>
-        ''' 获取技能
-        ''' </summary>
-        Public Function GetSkill(id As String) As AgentSkill
-            If _skills.ContainsKey(id) Then Return _skills(id)
-            Return Nothing
         End Function
 
         ''' <summary>

@@ -50,42 +50,6 @@ Public Class ExecutionStep
 End Class
 
 ''' <summary>
-''' 意图澄清结果
-''' </summary>
-Public Class IntentClarification
-    ''' <summary>
-    ''' 用户友好的意图描述
-    ''' </summary>
-    Public Property Description As String
-
-    ''' <summary>
-    ''' 执行计划步骤列表
-    ''' </summary>
-    Public Property ExecutionPlan As List(Of ExecutionStep)
-
-    ''' <summary>
-    ''' 是否需要用户确认
-    ''' </summary>
-    Public Property RequiresConfirmation As Boolean
-
-    ''' <summary>
-    ''' 澄清问题（如果信息不足）
-    ''' </summary>
-    Public Property ClarifyingQuestions As List(Of String)
-
-    ''' <summary>
-    ''' 原始用户输入
-    ''' </summary>
-    Public Property OriginalInput As String
-
-    Public Sub New()
-        ExecutionPlan = New List(Of ExecutionStep)()
-        ClarifyingQuestions = New List(Of String)()
-        RequiresConfirmation = True
-    End Sub
-End Class
-
-''' <summary>
 ''' JSON命令预览结果
 ''' </summary>
 Public Class JsonPreviewResult

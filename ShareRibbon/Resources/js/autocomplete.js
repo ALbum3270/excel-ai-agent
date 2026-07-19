@@ -296,17 +296,6 @@ function syncToHiddenTextarea() {
 }
 
 /**
- * 同步隐藏textarea内容到smart-input（用于外部设置）
- */
-function syncFromHiddenTextarea() {
-    const smartInput = document.getElementById('smart-input');
-    const chatInput = document.getElementById('chat-input');
-    if (smartInput && chatInput && chatInput.value) {
-        smartInput.innerText = chatInput.value;
-    }
-}
-
-/**
  * 清空输入框
  */
 function clearSmartInput() {
@@ -477,13 +466,6 @@ function recordCompletionAcceptance(input, completion) {
 
 // ========== 上下文更新 ==========
 
-/**
- * 更新Office上下文快照（由VB调用）
- */
-function updateContextSnapshot(snapshot) {
-    window.autocompleteState.contextSnapshot = snapshot;
-}
-
 // ========== 设置 ==========
 
 /**
@@ -496,13 +478,6 @@ function updateAutocompleteSettings(settings) {
     if (settings.hasOwnProperty('delayMs')) {
         window.autocompleteState.delayMs = settings.delayMs;
     }
-}
-
-/**
- * 获取自动补全是否启用
- */
-function isAutocompleteEnabled() {
-    return window.autocompleteState.enabled;
 }
 
 // ========== 工具函数 ==========

@@ -2,6 +2,7 @@
 ' Word 专属 Action Harness：把自然语言请求路由到可执行 capability，而不是在 ChatControl 中堆条件分支。
 
 Imports ShareRibbon
+Imports Newtonsoft.Json.Linq
 
 Namespace Services
 
@@ -21,6 +22,7 @@ Namespace Services
         Public Property FormattingPlan As FormattingIntentPlan
         Public Property ProofreadPlan As ProofreadIntentPlan
         Public Property Capability As WordCapabilityDescriptor
+        Public Property RunRecorder As Agent.Harness.HostCapabilityRunRecorder
 
         Public ReadOnly Property CapabilitySummary As String
             Get
@@ -75,6 +77,36 @@ Namespace Services
         Public Function ToObserveSummary() As String
             Dim state = If(Success, "success", "failed")
             Return $"{CapabilityId} kind={Kind} status={Status} result={state}: {UserMessage}"
+        End Function
+
+        Public Function ToToolResult() As Agent.ToolResult
+            Dim observation As New JObject From {
+                {"kind", "capability"},
+                {"summary", If(UserMessage, ToObserveSummary())},
+                {"changed", Success},
+                {"targetRefs", New JArray("Word:Document")},
+                {"warnings", New JArray()},
+                {"capabilityId", CapabilityId},
+                {"status", Status.ToString()}
+            }
+
+            If Success Then
+                Return Agent.ToolResult.Succeed(CapabilityId,
+                                                If(UserMessage, ToObserveSummary()),
+                                                data:=Data,
+                                                observation:=observation)
+            End If
+
+            Return Agent.ToolResult.Failed(CapabilityId,
+                                           If(DebugDetail, UserMessage),
+                                           data:=Data,
+                                           errorCode:=If(Status = WordCapabilityExecutionStatus.Fallback,
+                                                         ExceptionClassifier.CodeUnknown,
+                                                         ExceptionClassifier.CodeCom),
+                                           userMessage:=If(UserMessage, "Capability 执行失败"),
+                                           debugDetail:=DebugDetail,
+                                           recoverable:=Recoverable,
+                                           observation:=observation)
         End Function
     End Class
 

@@ -119,7 +119,9 @@ Namespace Agent
             Dim input = If(request.UserInput, "").Trim()
             Dim intentDescription = If(intent?.UserFriendlyDescription, "")
 
-            spec.Goal = If(Not String.IsNullOrWhiteSpace(intentDescription), intentDescription, If(String.IsNullOrWhiteSpace(input), "自动分析当前 Office 上下文并选择合适处理方式", input))
+            ' 用户原始目标是开放式 TaskSpec 的权威来源；枚举意图只作为检索/观测标签，
+            ' 不能把未穷举的新需求压缩成 GENERAL_QUERY。
+            spec.Goal = If(String.IsNullOrWhiteSpace(input), "自动分析当前 Office 上下文并选择合适处理方式", input)
             spec.TargetObject = InferTargetObject(request, intent)
             spec.Complexity = InferComplexity(intent)
             spec.RiskLevel = InferRiskLevel(intent)
@@ -130,46 +132,77 @@ Namespace Agent
             End If
 
             If intent IsNot Nothing Then
-                spec.Constraints.Add($"识别意图: {intent.OfficeIntent}")
+                spec.Constraints.Add($"兼容意图标签: {intent.OfficeIntent}")
+                If Not String.IsNullOrWhiteSpace(intentDescription) Then
+                    spec.Constraints.Add($"模型理解摘要: {intentDescription}")
+                End If
                 If intent.Confidence < 0.4 Then
                     spec.Constraints.Add("低置信度任务采用探索式计划，先分析上下文再选择低风险动作")
                 End If
                 For Each kv In intent.ExtractedEntities
                     spec.Constraints.Add($"{kv.Key}: {kv.Value}")
                 Next
+                If intent.RequestedOutputs IsNot Nothing Then
+                    For Each output In intent.RequestedOutputs
+                        AddExpectedOutput(spec, output)
+                    Next
+                End If
+            End If
+
+            ' 确定性输出门只用于验收，不参与意图路由。
+            Dim inputLower = input.ToLowerInvariant()
+            If inputLower.Contains("图片") OrElse inputLower.Contains("配图") OrElse inputLower.Contains("image") OrElse inputLower.Contains("picture") Then
+                AddExpectedOutput(spec, "images")
+            End If
+            If NormalizeAppType(appType) = "powerpoint" Then
+                Dim slideMatch = System.Text.RegularExpressions.Regex.Match(inputLower, "(\d+)\s*(页|张)")
+                If slideMatch.Success Then
+                    Dim parsedSlideCount As Integer
+                    If Integer.TryParse(slideMatch.Groups(1).Value, parsedSlideCount) Then spec.ExpectedSlideCount = parsedSlideCount
+                End If
+                If spec.ExpectedSlideCount > 0 Then AddExpectedOutput(spec, "slides")
             End If
 
             spec.SuccessCriteria.Add("输出结果与当前 Office 上下文相关")
             spec.SuccessCriteria.Add("执行过程可解释，并记录使用的上下文、工具和记忆")
+            If spec.ExpectedSlideCount > 0 Then spec.SuccessCriteria.Add($"实际创建至少 {spec.ExpectedSlideCount} 张幻灯片")
+            If spec.ExpectedOutputs.Contains("images") Then spec.SuccessCriteria.Add("实际插入可访问的图片，不得用占位形状冒充")
             If spec.RiskLevel <> "safe" Then
                 spec.SuccessCriteria.Add("执行后保留可观察结果或失败原因")
             End If
 
-            If selectedSkills IsNot Nothing Then
-                For Each skill In selectedSkills
-                    If skill.AllowedTools IsNot Nothing Then
-                        For Each toolId In skill.AllowedTools
-                            If Not String.IsNullOrWhiteSpace(toolId) AndAlso Not spec.RequiredTools.Contains(toolId) Then
-                                spec.RequiredTools.Add(toolId)
-                            End If
-                        Next
-                    End If
-                    If skill.Scripts IsNot Nothing Then
-                        For Each script In skill.Scripts
-                            Dim scriptToolId = $"skill_script.{skill.Name}.{script.FileName}"
-                            If Not spec.RequiredTools.Contains(scriptToolId) Then spec.RequiredTools.Add(scriptToolId)
-                        Next
-                    End If
-                Next
-            End If
-
-            If tools IsNot Nothing Then
-                For Each tool In tools.Take(8)
-                    If Not spec.RequiredTools.Contains(tool.Id) Then spec.RequiredTools.Add(tool.Id)
-                Next
+            ' 当前执行合同使用一个 primary Skill 作为工具安全边界；其余召回结果只用于
+            ' trace/候选解释，不能把次要 Skill 的工具混入 RequiredTools 后再被执行门拒绝。
+            Dim primarySkill = If(selectedSkills?.FirstOrDefault(), Nothing)
+            If primarySkill IsNot Nothing Then
+                If primarySkill.AllowedTools IsNot Nothing Then
+                    For Each toolId In primarySkill.AllowedTools
+                        If Not String.IsNullOrWhiteSpace(toolId) AndAlso Not spec.RequiredTools.Contains(toolId) Then
+                            spec.RequiredTools.Add(toolId)
+                        End If
+                    Next
+                End If
+                If primarySkill.Scripts IsNot Nothing Then
+                    For Each script In primarySkill.Scripts
+                        Dim scriptToolId = $"skill_script.{primarySkill.Name}.{script.FileName}"
+                        If Not spec.RequiredTools.Contains(scriptToolId) Then spec.RequiredTools.Add(scriptToolId)
+                    Next
+                End If
             End If
 
             Return spec
+        End Function
+
+        Private Shared Sub AddExpectedOutput(spec As AgentTaskSpec, output As String)
+            If spec Is Nothing OrElse String.IsNullOrWhiteSpace(output) Then Return
+            Dim normalized = output.Trim().ToLowerInvariant()
+            If Not spec.ExpectedOutputs.Contains(normalized) Then spec.ExpectedOutputs.Add(normalized)
+        End Sub
+
+        Private Shared Function NormalizeAppType(value As String) As String
+            Dim normalized = If(value, "").Trim().ToLowerInvariant()
+            If normalized = "ppt" OrElse normalized = "power point" Then Return "powerpoint"
+            Return normalized
         End Function
 
         Private Function InferTargetObject(request As AiNativeRequest, intent As IntentResult) As String

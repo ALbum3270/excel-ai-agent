@@ -202,16 +202,6 @@ Public Class DocumentAnalyzer
         New Regex("^[①-⑩]", RegexOptions.Compiled)                          ' ①-⑩
     }
 
-    Private ReadOnly _textAnalyzer As Func(Of String, String, Task(Of String))
-
-    ''' <summary>
-    ''' 构造函数
-    ''' </summary>
-    ''' <param name="textAnalyzer">可选的外部AI文本分析委托，用于复杂文档类型的LLM辅助判断</param>
-    Public Sub New(Optional textAnalyzer As Func(Of String, String, Task(Of String)) = Nothing)
-        _textAnalyzer = textAnalyzer
-    End Sub
-
     ''' <summary>
     ''' 对段落列表执行完整分析
     ''' </summary>
@@ -339,46 +329,6 @@ Public Class DocumentAnalyzer
         If enMatch.Success Then Return Integer.Parse(enMatch.Groups(1).Value)
 
         Return 0
-    End Function
-
-    ''' <summary>
-    ''' 使用LLM辅助分析复杂文档（当规则判断置信度低时调用）
-    ''' </summary>
-    ''' <param name="paragraphs">文档段落列表</param>
-    ''' <param name="fullText">全文文本</param>
-    Public Async Function AnalyzeWithLLM(paragraphs As List(Of String),
-                                         Optional fullText As String = Nothing) As Task(Of DocumentAnalysisResult)
-        Dim result = Analyze(paragraphs, fullText)
-
-        ' 如果置信度足够高，直接返回规则分析结果
-        If result.Confidence >= 0.7 AndAlso _textAnalyzer Is Nothing Then
-            Return result
-        End If
-
-        ' 如果置信度低且有AI分析委托，使用LLM辅助
-        If _textAnalyzer IsNot Nothing AndAlso result.Confidence < 0.7 Then
-            Try
-                Dim sampleText = BuildAnalyzerPrompt(paragraphs)
-                Dim llmResponse = Await _textAnalyzer("document_analysis", sampleText)
-
-                ' 解析LLM返回的类型判断
-                Dim llmType = ParseLlmTypeResponse(llmResponse)
-                If llmType.Item1 <> DocumentType.Unknown Then
-                    result.DocumentType = llmType.Item1
-                    result.Confidence = Math.Max(result.Confidence, llmType.Item2)
-                End If
-
-                ' 如果LLM提供了额外的格式问题，合并到结果中
-                Dim llmProblems = ParseLlmProblems(llmResponse)
-                If llmProblems IsNot Nothing AndAlso llmProblems.Count > 0 Then
-                    result.FormattingProblems.AddRange(llmProblems)
-                End If
-            Catch ex As Exception
-                ' LLM调用失败时使用规则分析结果
-            End Try
-        End If
-
-        Return result
     End Function
 
     ' ============================================================
@@ -1140,89 +1090,6 @@ Public Class DocumentAnalyzer
         End Select
 
         Return ids
-    End Function
-
-    ' ============================================================
-    '  LLM 辅助
-    ' ============================================================
-
-    ''' <summary>
-    ''' 构建LLM分析用的提示词
-    ''' </summary>
-    Private Function BuildAnalyzerPrompt(paragraphs As List(Of String)) As String
-        Dim sb As New StringBuilder()
-        sb.AppendLine("请分析以下文档内容，判断文档类型。可选类型：")
-        sb.AppendLine("- 公文（党政机关公文）")
-        sb.AppendLine("- 学术论文")
-        sb.AppendLine("- 商业报告")
-        sb.AppendLine("- 合同协议")
-        sb.AppendLine("- 个人简历")
-        sb.AppendLine("- 通用文档")
-        sb.AppendLine()
-        sb.AppendLine("请以JSON格式返回分析结果，格式：")
-        sb.AppendLine("{""type"": ""公文/论文/报告/合同/简历/通用"", ""confidence"": 0.95}")
-        sb.AppendLine()
-        sb.AppendLine("文档内容（前50段采样）：")
-        sb.AppendLine()
-
-        Dim sampleCount = Math.Min(paragraphs.Count, 50)
-        For i = 0 To sampleCount - 1
-            Dim text = paragraphs(i).Trim()
-            If Not String.IsNullOrEmpty(text) Then
-                sb.AppendLine($"[{i + 1}] {text}")
-            End If
-        Next
-
-        Return sb.ToString()
-    End Function
-
-    ''' <summary>
-    ''' 解析LLM返回的类型判断
-    ''' </summary>
-    Private Function ParseLlmTypeResponse(response As String) As Tuple(Of DocumentType, Double)
-        Try
-            Dim json = Newtonsoft.Json.Linq.JObject.Parse(response)
-            Dim typeStr = If(json("type")?.ToString(), "")
-            Dim confidenceObj = json("confidence")?.ToObject(Of Double)()
-            Dim confidence = If(confidenceObj, 0.0)
-
-            Dim docType As DocumentType
-            Select Case typeStr
-                Case "公文"
-                    docType = DocumentType.OfficialDocument
-                Case "论文"
-                    docType = DocumentType.AcademicPaper
-                Case "报告"
-                    docType = DocumentType.BusinessReport
-                Case "合同"
-                    docType = DocumentType.Contract
-                Case "简历"
-                    docType = DocumentType.[Resume]
-                Case "通用"
-                    docType = DocumentType.GeneralDocument
-                Case Else
-                    docType = DocumentType.Unknown
-            End Select
-
-            Return Tuple.Create(docType, confidence)
-        Catch ex As Exception
-            Return Tuple.Create(DocumentType.Unknown, 0.0)
-        End Try
-    End Function
-
-    ''' <summary>
-    ''' 解析LLM返回的额外格式问题
-    ''' </summary>
-    Private Function ParseLlmProblems(response As String) As List(Of FormattingProblem)
-        Try
-            Dim json = Newtonsoft.Json.Linq.JObject.Parse(response)
-            If json("problems") IsNot Nothing Then
-                Dim problems = json("problems").ToObject(Of List(Of FormattingProblem))()
-                Return problems
-            End If
-        Catch ex As Exception
-        End Try
-        Return Nothing
     End Function
 
 End Class

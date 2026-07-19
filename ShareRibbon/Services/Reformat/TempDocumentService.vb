@@ -119,36 +119,6 @@ Public Class TempDocumentService
     End Sub
 
     ''' <summary>
-    ''' 清理所有过期的临时文件（超过24小时的）
-    ''' </summary>
-    Public Shared Sub CleanupExpired()
-        Try
-            If Not Directory.Exists(_tempDir) Then Return
-
-            Dim cutoff = DateTime.Now.AddHours(-24)
-            For Each tempFile In Directory.GetFiles(_tempDir, "*.docx")
-                Try
-                    Dim fi = New FileInfo(tempFile)
-                    If fi.LastWriteTime < cutoff Then
-                        System.IO.File.Delete(tempFile)
-                    End If
-                Catch
-                End Try
-            Next
-        Catch ex As Exception
-            Debug.WriteLine($"TempDocumentService.CleanupExpired 失败: {ex.Message}")
-        End Try
-    End Sub
-
-    ''' <summary>
-    ''' 获取临时目录路径
-    ''' </summary>
-    Public Shared Function GetTempDirectory() As String
-        EnsureTempDirectory()
-        Return _tempDir
-    End Function
-
-    ''' <summary>
     ''' 确保临时目录存在
     ''' </summary>
     Private Shared Sub EnsureTempDirectory()

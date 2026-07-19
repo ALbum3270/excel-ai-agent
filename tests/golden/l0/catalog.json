@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "S-skill-gate",
+      "kind": "tool_execution",
+      "appType": "Word",
+      "toolId": "DeleteText",
+      "allowedTools": ["InsertText"],
+      "expectedErrorCode": "TOOL_NOT_ALLOWED",
+      "expectedHostCalls": 0
+    },
+    {
+      "id": "S-vba-disabled",
+      "kind": "tool_execution",
+      "appType": "Word",
+      "toolId": "ExecuteVBA",
+      "allowedTools": ["ExecuteVBA"],
+      "params": {"code": "Sub Test(): End Sub"},
+      "expectedErrorCode": "VBA_DISABLED",
+      "expectedHostCalls": 0
+    },
+    {
+      "id": "S-host-isolation",
+      "kind": "tool_execution",
+      "appType": "Word",
+      "toolId": "WriteData",
+      "allowedTools": ["WriteData"],
+      "expectedErrorCode": "HOST_UNSUPPORTED",
+      "expectedHostCalls": 0
+    },
+    {
+      "id": "S-approval-resume",
+      "kind": "tool_execution",
+      "appType": "Word",
+      "toolId": "DeleteText",
+      "allowedTools": ["DeleteText"],
+      "approvedTools": ["DeleteText"],
+      "params": {"range": "selection"},
+      "expectedSuccess": true,
+      "expectedHostCalls": 1
+    },
+    {
+      "id": "C-tool-result-observation",
+      "kind": "contract",
+      "contractType": "tool_result",
+      "expectedObservation": true
+    },
+    {
+      "id": "C-context-pack",
+      "kind": "contract",
+      "contractType": "context_pack",
+      "expectedSchemaVersion": "1.0",
+      "expectedBudgetStrategy": "selection_first"
+    },
+    {
+      "id": "C-harness-approval-api",
+      "kind": "contract",
+      "contractType": "approval_api"
+    },
+    {
+      "id": "C-tool-result-only",
+      "kind": "contract",
+      "contractType": "tool_result_only"
+    },
+    {
+      "id": "C-ppt-create-fallback",
+      "kind": "contract",
+      "contractType": "powerpoint_create_fallback"
+    },
+    {
+      "id": "C-ppt-com-compat",
+      "kind": "contract",
+      "contractType": "powerpoint_com_compat"
+    },
+    {
+      "id": "C-excel-observer-compat",
+      "kind": "contract",
+      "contractType": "excel_observer_compat"
+    }
+  ]
+}

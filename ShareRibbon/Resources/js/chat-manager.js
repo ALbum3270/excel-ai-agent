@@ -223,26 +223,6 @@ window.appendReasoning = function (uuid, text) {
     }
 };
 
-// Complete reasoning process, collapse reasoning area
-window.completeReasoning = function (uuid) {
-    if (!uuid) {
-        console.error('UUID不能为空');
-        return false;
-    }
-
-    const reasoningContainer = document.getElementById('reasoning-' + uuid);
-    if (reasoningContainer) {
-        // Brief delay to let user see final reasoning result
-        setTimeout(() => {
-            reasoningContainer.classList.add('collapsed');
-        }, 1000);
-        return true;
-    } else {
-        console.error('找不到UUID为' + uuid + '的推理容器');
-        return false;
-    }
-};
-
 // Clear all chat content
 window.clearAllChats = function () {
     const chatContainer = document.getElementById('chat-container');
@@ -295,69 +275,10 @@ window.setChatMessages = function (messages) {
     }
 };
 
-// Get full chat container HTML
-window.getFullChatHTML = function () {
-    const chatContainer = document.getElementById('chat-container');
-    if (chatContainer) {
-        return chatContainer.innerHTML;
-    }
-    return '';
-};
-
-// Set full chat container HTML
-window.setFullChatHTML = function (html) {
-    const chatContainer = document.getElementById('chat-container');
-    if (chatContainer) {
-        chatContainer.innerHTML = '';
-        chatContainer.innerHTML = html;
-        window.rebuildRendererMaps();
-        return true;
-    }
-    return false;
-};
-
-// Rebuild renderer maps after setting HTML
-window.rebuildRendererMaps = function () {
-    window.rendererMap = {};
-    window.reasoningRendererMap = {};
-
-    // Find all content and reasoning containers
-    const contentContainers = document.querySelectorAll('.message-content');
-    const reasoningContainers = document.querySelectorAll('.reasoning-content');
-
-    // Rebuild content renderer map - 直接传入 DOM 元素
-    contentContainers.forEach(container => {
-        const id = container.id;
-        if (id && id.startsWith('content-')) {
-            const uuid = id.replace('content-', '');
-            window.rendererMap[uuid] = new MarkdownStreamRenderer(container);
-        }
-    });
-
-    // Rebuild reasoning renderer map - 直接传入 DOM 元素
-    reasoningContainers.forEach(container => {
-        const id = container.id;
-        if (id && id.startsWith('reasoning-content-')) {
-            const uuid = id.replace('reasoning-content-', '');
-            window.reasoningRendererMap[uuid] = new MarkdownStreamRenderer(container);
-        }
-    });
-
-    return true;
-};
-
 // Toggle chat message reference visibility
 function toggleChatMessageReference(headerElement) {
     const container = headerElement.closest('.chat-message-references');
     if (container) {
         container.classList.toggle('collapsed');
-    }
-}
-
-// Toggle reference visibility by uuid
-function toggleReference(uuid) {
-    const ref = document.getElementById('reference-' + uuid);
-    if (ref) {
-        ref.classList.toggle('collapsed');
     }
 }

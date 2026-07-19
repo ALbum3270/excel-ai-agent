@@ -80,30 +80,6 @@ Public Class ReformatPreviewPlan
         End Get
     End Property
 
-    Public Function ToPreviewJson() As JObject
-        Dim json As New JObject()
-        json("docType") = DocumentTypeName
-        json("confidence") = TypeConfidence
-        json("standard") = StandardName
-        json("totalChanges") = TotalChanges
-        json("sectionCount") = SectionCount
-        json("scopeSummary") = ScopeSummary
-        json("scopeKind") = ScopeKindName
-        json("textParagraphCount") = TextParagraphCount
-        Dim changesArray As New JArray()
-        If Changes IsNot Nothing Then
-            For Each c In Changes
-                Dim item As New JObject()
-                item("section") = c.ChangeDescription
-                item("tagId") = c.NewTag
-                item("description") = c.ChangeDescription
-                item("count") = 1
-                changesArray.Add(item)
-            Next
-        End If
-        json("changes") = changesArray
-        Return json
-    End Function
 End Class
 
 ''' <summary>单处格式变更项（一个段落的格式变化描述）</summary>
@@ -144,41 +120,6 @@ Public Class FormatIntent
     Public Sub New()
         SpecificRequests = New List(Of String)()
     End Sub
-End Class
-
-' ============================================================
-'  格式差异（克隆对比用）
-' ============================================================
-
-''' <summary>源文档与范文之间的完整格式差异分析</summary>
-Public Class FormatDiff
-    ''' <summary>差异总数</summary>
-    Public Property TotalDifferences As Integer = 0
-    ''' <summary>差异明细列表</summary>
-    Public Property Differences As List(Of FormatDifference)
-    ''' <summary>范文标准名称</summary>
-    Public Property MirrorStandardName As String = ""
-    ''' <summary>范文分析结果</summary>
-    Public Property MirrorAnalysis As DocumentAnalysisResult
-
-    Public Sub New()
-        Differences = New List(Of FormatDifference)()
-        MirrorAnalysis = New DocumentAnalysisResult()
-    End Sub
-End Class
-
-''' <summary>单处格式差异项——某段落当前格式与范文对应格式的对比</summary>
-Public Class FormatDifference
-    ''' <summary>段落索引（-1 表示全局差异）</summary>
-    Public Property ParagraphIndex As Integer = -1
-    ''' <summary>段落文本预览（前50字）</summary>
-    Public Property ParagraphPreview As String = ""
-    ''' <summary>源文档字体描述</summary>
-    Public Property SourceFont As String = ""
-    ''' <summary>范文字体描述</summary>
-    Public Property MirrorFont As String = ""
-    ''' <summary>差异文字描述</summary>
-    Public Property DifferenceDescription As String = ""
 End Class
 
 ' ============================================================
@@ -678,96 +619,6 @@ Public Class SmartFormattingOrchestrator
     '  模式C：范文克隆
     ' ============================================================
 
-    ''' <summary>
-    ''' 比较源文档与范文的结构和段落差异，返回格式差异分析。
-    ''' 源文档和范文需已通过 DocumentAnalyzer 完成分析。
-    ''' 实际格式提取和映射生成由 FormatMirrorService 完成。
-    ''' </summary>
-    ''' <param name="sourceAnalysis">源文档分析结果</param>
-    ''' <param name="mirrorAnalysis">范文分析结果</param>
-    Public Function CompareWithMirror(
-        sourceAnalysis As DocumentAnalysisResult,
-        mirrorAnalysis As DocumentAnalysisResult) As FormatDiff
-
-        Dim diff As New FormatDiff()
-        If sourceAnalysis Is Nothing OrElse mirrorAnalysis Is Nothing Then Return diff
-
-        diff.MirrorAnalysis = mirrorAnalysis
-
-        ' 段落总数对比
-        If sourceAnalysis.ParagraphCount <> mirrorAnalysis.ParagraphCount Then
-            diff.TotalDifferences += 1
-            diff.Differences.Add(New FormatDifference With {
-                .ParagraphIndex = -1,
-                .ParagraphPreview = "全局",
-                .SourceFont = $"共{sourceAnalysis.ParagraphCount}段",
-                .MirrorFont = $"共{mirrorAnalysis.ParagraphCount}段",
-                .DifferenceDescription = $"段落数不一致：源文档{sourceAnalysis.ParagraphCount}段，范文{mirrorAnalysis.ParagraphCount}段"
-            })
-        End If
-
-        ' 文档类型对比
-        If sourceAnalysis.DocumentType <> mirrorAnalysis.DocumentType Then
-            diff.TotalDifferences += 1
-            diff.Differences.Add(New FormatDifference With {
-                .ParagraphIndex = -1,
-                .ParagraphPreview = "文档类型",
-                .SourceFont = GetDocumentTypeDisplayName(sourceAnalysis.DocumentType),
-                .MirrorFont = GetDocumentTypeDisplayName(mirrorAnalysis.DocumentType),
-                .DifferenceDescription = $"文档类型不一致：{GetDocumentTypeDisplayName(sourceAnalysis.DocumentType)} vs {GetDocumentTypeDisplayName(mirrorAnalysis.DocumentType)}"
-            })
-        End If
-
-        ' 标题结构对比
-        If sourceAnalysis.DocStructure IsNot Nothing AndAlso mirrorAnalysis.DocStructure IsNot Nothing Then
-            Dim srcHeadingCount = sourceAnalysis.DocStructure.Headings.Count
-            Dim mirHeadingCount = mirrorAnalysis.DocStructure.Headings.Count
-
-            If srcHeadingCount <> mirHeadingCount Then
-                diff.TotalDifferences += 1
-                diff.Differences.Add(New FormatDifference With {
-                    .ParagraphIndex = -1,
-                    .ParagraphPreview = "标题结构",
-                    .SourceFont = $"{srcHeadingCount}个标题",
-                    .MirrorFont = $"{mirHeadingCount}个标题",
-                    .DifferenceDescription = $"标题数量不一致：源文档{srcHeadingCount}个，范文{mirHeadingCount}个"
-                })
-            End If
-
-            ' 逐标题对比
-            Dim maxHeadingCount = Math.Min(srcHeadingCount, mirHeadingCount)
-            For i = 0 To maxHeadingCount - 1
-                Dim src = sourceAnalysis.DocStructure.Headings(i)
-                Dim mir = mirrorAnalysis.DocStructure.Headings(i)
-                If src.Level <> mir.Level Then
-                    diff.TotalDifferences += 1
-                    diff.Differences.Add(New FormatDifference With {
-                        .ParagraphIndex = src.ParagraphIndex,
-                        .ParagraphPreview = TruncateText(src.Text, 50),
-                        .SourceFont = $"H{src.Level}  {If(src.IsNumbered, "编号", "无编号")}",
-                        .MirrorFont = $"H{mir.Level}  {If(mir.IsNumbered, "编号", "无编号")}",
-                        .DifferenceDescription = $"标题层级不一致：源文档H{src.Level}，范文H{mir.Level}"
-                    })
-                End If
-            Next
-        End If
-
-        ' 格式问题对比
-        If sourceAnalysis.FormattingProblems.Count > 0 AndAlso
-           mirrorAnalysis.FormattingProblems.Count = 0 Then
-            diff.TotalDifferences += 1
-            diff.Differences.Add(New FormatDifference With {
-                .ParagraphIndex = -1,
-                .ParagraphPreview = "格式质量",
-                .SourceFont = $"{sourceAnalysis.FormattingProblems.Count}个问题",
-                .MirrorFont = "无问题",
-                .DifferenceDescription = "源文档存在格式问题，范文无问题"
-            })
-        End If
-
-        Return diff
-    End Function
-
     ''' <summary>消费者兼容方法：是否有活动的排版上下文</summary>
     Public Function HasActiveContext() As Boolean
         Return _refinementContext.CurrentPreviewPlan IsNot Nothing AndAlso Not _refinementContext.IsApplied
@@ -931,10 +782,6 @@ Public Class SmartFormattingOrchestrator
         If Not intent.SpecificRequests.Contains("rebuild_heading_numbering") Then
             intent.SpecificRequests.Add("rebuild_heading_numbering")
         End If
-    End Sub
-
-    Public Sub ResetRefinement()
-        _refinementContext.Clear()
     End Sub
 
     ' ============================================================
@@ -1434,19 +1281,6 @@ Public Class SmartFormattingOrchestrator
         If String.IsNullOrEmpty(text) Then Return ""
         If text.Length <= maxLen Then Return text
         Return text.Substring(0, maxLen) & "…"
-    End Function
-
-    ''' <summary>获取文档类型的中文名称</summary>
-    Private Shared Function GetDocumentTypeDisplayName(docType As DocumentType) As String
-        Select Case docType
-            Case DocumentType.OfficialDocument : Return "公文"
-            Case DocumentType.AcademicPaper : Return "学术论文"
-            Case DocumentType.BusinessReport : Return "商业报告"
-            Case DocumentType.Contract : Return "合同"
-            Case DocumentType.[Resume] : Return "简历"
-            Case DocumentType.GeneralDocument : Return "通用文档"
-            Case Else : Return "未知"
-        End Select
     End Function
 
     ''' <summary>检查文本是否包含任一关键词（忽略大小写）</summary>

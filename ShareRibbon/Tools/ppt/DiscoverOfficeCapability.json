@@ -1,0 +1,37 @@
+{
+  "id": "DiscoverOfficeCapability",
+  "name": "发现 PowerPoint 对象能力",
+  "description": "只读检索当前 PowerPoint 宿主中与目标相关的 Office API 成员。仅返回少量相关成员，不执行写操作。",
+  "appType": "ppt",
+  "category": "Office 对象能力",
+  "riskLevel": "safe",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "要查找的自然语言能力目标"
+    },
+    {
+      "name": "targetType",
+      "type": "string",
+      "required": false,
+      "description": "可选的目标对象类型，如 Shapes、TextRange、SmartArt"
+    },
+    {
+      "name": "includeReadOnly",
+      "type": "boolean",
+      "required": false,
+      "description": "是否包含只读成员，默认 true",
+      "defaultValue": true
+    },
+    {
+      "name": "maxResults",
+      "type": "integer",
+      "required": false,
+      "description": "最多返回成员数，默认 12，最大 20",
+      "defaultValue": 12
+    }
+  ]
+}

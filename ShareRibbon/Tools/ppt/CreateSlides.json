@@ -1,17 +1,30 @@
 {
   "id": "CreateSlides",
   "name": "批量创建幻灯片",
-  "description": "批量创建多个幻灯片",
+  "description": "使用专业 SlideScene 设计编译器批量创建幻灯片，支持统一设计系统、确定性布局、PowerPoint 实物验证和失败回滚。",
   "appType": "ppt",
   "category": "幻灯片操作",
   "riskLevel": "safe",
   "isVbaFallback": false,
   "parameters": [
     {
+      "name": "designSystem",
+      "type": "string",
+      "required": false,
+      "description": "设计系统：modern-tech、executive-light、executive-dark、editorial-warm。默认 executive-light；科技主题可显式选择 modern-tech。",
+      "defaultValue": "executive-light"
+    },
+    {
+      "name": "designTokens",
+      "type": "object",
+      "required": false,
+      "description": "可选品牌覆盖：colors:{background,surface,surfaceAlt,primary,secondary,textPrimary,textSecondary,divider,positive,negative}，typography:{fontFamily,displaySize,titleSize,bodySize,captionSize}。颜色会校验，字号会限制在可读范围。"
+    },
+    {
       "name": "slides",
       "type": "array",
       "required": true,
-      "description": "幻灯片数组，每项含title/content/layout"
+      "description": "页面 Scene 数组，最多 50 页。每项支持 slideType、title、subtitle、eyebrow、keyMessage、body、items、metrics、imagePath、chart、table、notes、source、cta、variant、columnHeaders、xAxisLabel、yAxisLabel。items 支持 title/body/value/emphasis/features；metrics 支持 value/label/delta/description/source。content 页面可带 chart:{chartType:column|line,title,categories,series:[{name,values,color}],valueSuffix,source} 或 table:{title,headers,rows,highlightColumn,source}，并用 1-4 个 items 表达洞察；imagePath、chart、table 只能选择一种主视觉。comparison 表格应传 columnHeaders:[维度,左方案,右方案]；matrix 必须传 xAxisLabel/yAxisLabel；不得补造条目或无来源数据。旧 title/content/layout 输入仍兼容。"
     }
   ]
 }

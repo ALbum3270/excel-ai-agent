@@ -351,51 +351,6 @@ Public Class InstructionRegistry
         Return ParamValidationResult.Success()
     End Function
 
-    ''' <summary>
-    ''' 获取某类别的所有指令
-    ''' </summary>
-    Public Shared Function GetOperationsByCategory(category As String) As List(Of InstructionDefinition)
-        EnsureInitialized()
-        Dim result As New List(Of InstructionDefinition)()
-        For Each def In _registry.Values
-            If def.Category.ToLower() = category.ToLower() Then
-                result.Add(def)
-            End If
-        Next
-        Return result
-    End Function
-
-    ''' <summary>
-    ''' 获取所有已注册的操作名称
-    ''' </summary>
-    Public Shared Function GetAllOperations() As List(Of String)
-        EnsureInitialized()
-        Return New List(Of String)(_registry.Keys)
-    End Function
-
-    ''' <summary>
-    ''' 生成AI Prompt用的指令说明文本
-    ''' </summary>
-    Public Shared Function BuildPromptDocumentation(category As String) As String
-        EnsureInitialized()
-        Dim defs = GetOperationsByCategory(category)
-        Dim sb As New System.Text.StringBuilder()
-
-        sb.AppendLine($"【{If(category = "reformat", "排版", "校对")}可用指令】")
-        sb.AppendLine()
-
-        For Each def In defs
-            sb.AppendLine($"- {def.Operation}: {def.DisplayName}")
-            sb.AppendLine($"  描述: {def.Description}")
-            If def.RequiredParams.Count > 0 Then
-                sb.AppendLine($"  必需参数: {String.Join(", ", def.RequiredParams)}")
-            End If
-            sb.AppendLine()
-        Next
-
-        Return sb.ToString()
-    End Function
-
     Private Shared Sub EnsureInitialized()
         If Not _isInitialized Then
             Initialize()

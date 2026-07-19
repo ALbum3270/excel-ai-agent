@@ -50,9 +50,6 @@ Public MustInherit Class DocumentTranslateService
     ''' <summary>翻译设置</summary>
     Protected Property Settings As TranslateSettings
 
-    ''' <summary>取消令牌</summary>
-    Protected Property CancellationSource As CancellationTokenSource
-
     Public Sub New()
         Settings = TranslateSettings.Load()
     End Sub
@@ -78,15 +75,6 @@ Public MustInherit Class DocumentTranslateService
     Public MustOverride Sub ApplyTranslationToSelection(results As List(Of TranslateParagraphResult), outputMode As TranslateOutputMode)
 
     ''' <summary>
-    ''' 取消翻译
-    ''' </summary>
-    Public Sub CancelTranslation()
-        If CancellationSource IsNot Nothing Then
-            CancellationSource.Cancel()
-        End If
-    End Sub
-
-    ''' <summary>
     ''' 翻译所有内容
     ''' </summary>
     Public Async Function TranslateAllAsync() As Task(Of List(Of TranslateParagraphResult))
@@ -107,8 +95,6 @@ Public MustInherit Class DocumentTranslateService
     ''' </summary>
     Protected Async Function TranslateParagraphsAsync(paragraphs As List(Of String)) As Task(Of List(Of TranslateParagraphResult))
         Dim results As New List(Of TranslateParagraphResult)()
-        CancellationSource = New CancellationTokenSource()
-
         If paragraphs Is Nothing OrElse paragraphs.Count = 0 Then
             Return results
         End If
@@ -148,10 +134,6 @@ Public MustInherit Class DocumentTranslateService
         Dim currentIndex = 0
         Dim currentBatch = 0
         While currentIndex < total
-            If CancellationSource.Token.IsCancellationRequested Then
-                Exit While
-            End If
-
             currentBatch += 1
             Dim batch = paragraphs.Skip(currentIndex).Take(batchSize).ToList()
 
@@ -286,10 +268,6 @@ Public MustInherit Class DocumentTranslateService
             })
 
             For i = 0 To batch.Count - 1
-                If CancellationSource IsNot Nothing AndAlso CancellationSource.Token.IsCancellationRequested Then
-                    Exit For
-                End If
-
                 ' 单条重试前提示
                 RaiseEvent ProgressChanged(Me, New TranslateProgressEventArgs() With {
                     .Current = startIndex + i,

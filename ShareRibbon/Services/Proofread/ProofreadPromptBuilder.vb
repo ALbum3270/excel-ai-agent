@@ -2,11 +2,7 @@
 ' 校对Prompt构建器 - 构建AI校对Prompt，解析校对结果
 
 Imports System.Collections.Generic
-Imports System.Linq
 Imports System.Text
-Imports System.Text.RegularExpressions
-Imports Newtonsoft.Json
-Imports Newtonsoft.Json.Linq
 
 ''' <summary>
 ''' 校对Prompt构建器
@@ -147,71 +143,6 @@ Public Class ProofreadPromptBuilder
         Dim normalized = aiResponse.Replace(vbCr, " ").Replace(vbLf, " ").Trim()
         If normalized.Length <= 500 Then Return normalized
         Return normalized.Substring(0, 500) & "..."
-    End Function
-
-    ''' <summary>
-    ''' 从AI响应中提取JSON内容
-    ''' </summary>
-    Private Shared Function ExtractJson(content As String) As String
-        If String.IsNullOrEmpty(content) Then Return ""
-        
-        ' 尝试提取代码块中的JSON
-        Dim jsonMatch = Regex.Match(content, "```(?:json)?\s*([\s\S]*?)\s*```", RegexOptions.IgnoreCase)
-        If jsonMatch.Success Then
-            Return jsonMatch.Groups(1).Value.Trim()
-        End If
-        
-        ' 尝试直接解析
-        If content.Trim().StartsWith("[") Then
-            Return content.Trim()
-        End If
-        
-        ' 尝试找到JSON数组的开始和结束
-        Dim startIdx = content.IndexOf("[")
-        Dim endIdx = content.LastIndexOf("]")
-        If startIdx >= 0 AndAlso endIdx > startIdx Then
-            Return content.Substring(startIdx, endIdx - startIdx + 1)
-        End If
-        
-        Return ""
-    End Function
-
-    ''' <summary>
-    ''' 解析问题类型
-    ''' </summary>
-    Private Shared Function ParseIssueType(typeStr As String) As IssueType
-        Select Case typeStr.ToLower()
-            Case "spellingerror", "spelling", "spell"
-                Return IssueType.SpellingError
-            Case "wordusageerror", "wordusage", "word"
-                Return IssueType.WordUsageError
-            Case "punctuationerror", "punctuation", "punct"
-                Return IssueType.PunctuationError
-            Case "grammaticalerror", "grammar", "grammatical"
-                Return IssueType.GrammaticalError
-            Case "expressionerror", "expression", "express"
-                Return IssueType.ExpressionError
-            Case "formaterror", "format"
-                Return IssueType.FormatError
-            Case Else
-                Return IssueType.ExpressionError
-        End Select
-    End Function
-
-    ''' <summary>
-    ''' 解析严重程度
-    ''' </summary>
-    Private Shared Function ParseSeverity(severityStr As String) As IssueSeverity
-        Select Case severityStr.ToLower()
-            Case "high", "必须", "must", "error"
-                Return IssueSeverity.High
-            Case "medium", "建议", "should", "warning"
-                Return IssueSeverity.Medium
-            Case "low", "可选", "could", "info", "suggestion"
-                Return IssueSeverity.Low
-            Case Else
-                Return IssueSeverity.Medium
-        End Select
     End Function
 
 End Class

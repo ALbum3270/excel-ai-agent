@@ -7,7 +7,6 @@ Public Class StdioConfigForm
 
     Private _commandTextBox As TextBox
     Private _argumentsTextBox As TextBox
-    Private _workingDirTextBox As TextBox
     Private _envVariablesGrid As DataGridView
     Private _envVariablesTextBox As TextBox
     Private _switchViewButton As Button
@@ -190,27 +189,6 @@ Public Class StdioConfigForm
         End If
 
         _isGridView = Not _isGridView
-    End Sub
-
-    Private Sub BrowseButton_Click(sender As Object, e As EventArgs)
-        Using dialog As New OpenFileDialog()
-            dialog.Filter = "执行文件 (*.exe)|*.exe|JavaScript文件 (*.js)|*.js|Python文件 (*.py)|*.py|所有文件 (*.*)|*.*"
-            dialog.Title = "选择命令文件"
-
-            If dialog.ShowDialog() = DialogResult.OK Then
-                _commandTextBox.Text = dialog.FileName
-            End If
-        End Using
-    End Sub
-
-    Private Sub BrowseDirButton_Click(sender As Object, e As EventArgs)
-        Using dialog As New FolderBrowserDialog()
-            dialog.Description = "选择工作目录"
-
-            If dialog.ShowDialog() = DialogResult.OK Then
-                _workingDirTextBox.Text = dialog.SelectedPath
-            End If
-        End Using
     End Sub
 
     Private Sub OkButton_Click(sender As Object, e As EventArgs)

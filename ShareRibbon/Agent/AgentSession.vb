@@ -55,6 +55,7 @@ Namespace Agent
         Public Property Steps As New List(Of PlanStep)
         Public Property Summary As String
         Public Property Complexity As String = "medium"
+        Public Property CapabilityGap As String = ""
     End Class
 
     ''' <summary>
@@ -168,6 +169,8 @@ Namespace Agent
         Public Property RequiredTools As New List(Of String)()
         Public Property RiskLevel As String = "safe"
         Public Property Complexity As String = "medium"
+        Public Property ExpectedOutputs As New List(Of String)()
+        Public Property ExpectedSlideCount As Integer = 0
 
         Public ReadOnly Property IsSimple As Boolean
             Get

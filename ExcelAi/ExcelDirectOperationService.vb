@@ -113,50 +113,6 @@ Public Class ExcelDirectOperationService
         End Try
     End Function
 
-    ''' <summary>
-    ''' 尝试从AI响应中提取JSON命令
-    ''' </summary>
-    ''' <param name="aiResponse">AI响应文本</param>
-    ''' <returns>提取的命令列表</returns>
-    Public Shared Function ExtractCommandsFromResponse(aiResponse As String) As List(Of JObject)
-        Dim commands As New List(Of JObject)()
-
-        Try
-            ' 查找JSON代码块
-            Dim pattern = "```json\s*([\s\S]*?)```"
-            Dim matches = System.Text.RegularExpressions.Regex.Matches(aiResponse, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-
-            For Each match As System.Text.RegularExpressions.Match In matches
-                Dim jsonStr = match.Groups(1).Value.Trim()
-                Try
-                    Dim json = JObject.Parse(jsonStr)
-                    If json("command") IsNot Nothing Then
-                        commands.Add(json)
-                    End If
-                Catch
-                    ' 忽略无效JSON
-                End Try
-            Next
-
-            ' 如果没有找到代码块，尝试直接解析
-            If commands.Count = 0 Then
-                Try
-                    Dim json = JObject.Parse(aiResponse.Trim())
-                    If json("command") IsNot Nothing Then
-                        commands.Add(json)
-                    End If
-                Catch
-                    ' 忽略
-                End Try
-            End If
-
-        Catch ex As Exception
-            Debug.WriteLine($"ExtractCommandsFromResponse 出错: {ex.Message}")
-        End Try
-
-        Return commands
-    End Function
-
 #End Region
 
 #Region "命令执行方法"
@@ -254,77 +210,6 @@ Public Class ExcelDirectOperationService
         Finally
             ' 释放 COM 对象
             ComObjectHelper.ReleaseComObject(resizedRange)
-            ComObjectHelper.ReleaseComObject(range)
-            ComObjectHelper.ReleaseComObject(ws)
-        End Try
-    End Function
-
-    ''' <summary>
-    ''' 执行应用公式命令
-    ''' </summary>
-    Private Function ExecuteApplyFormula(params As JToken) As Boolean
-        Dim ws As Worksheet = Nothing
-        Dim range As Range = Nothing
-        Dim rows As Range = Nothing
-        Dim cell As Range = Nothing
-
-        Try
-            Dim targetRange = params("targetRange")?.ToString()
-            Dim formula = params("formula")?.ToString()
-            Dim fillDown = If(params("fillDown")?.Value(Of Boolean)(), False)
-
-            If String.IsNullOrEmpty(targetRange) OrElse String.IsNullOrEmpty(formula) Then
-                Return False
-            End If
-
-            ' 解析目标范围（可能包含工作表名）
-            Dim cellAddress As String = targetRange
-
-            If targetRange.Contains("!") Then
-                ' 格式: "SheetName!A1:B10" 或 "'Sheet Name'!A1:B10"
-                Dim parts = targetRange.Split("!"c)
-                Dim sheetName = parts(0).Trim("'"c)
-                cellAddress = parts(1)
-
-                ' 检查工作表是否存在，不存在则创建
-                Try
-                    ws = _excelApp.Worksheets(sheetName)
-                Catch
-                    ws = _excelApp.Worksheets.Add()
-                    ws.Name = sheetName
-                    ShareRibbon.GlobalStatusStrip.ShowInfo($"已创建新工作表: {sheetName}")
-                End Try
-            Else
-                ws = _excelApp.ActiveSheet
-            End If
-
-            range = ws.Range(cellAddress)
-
-            ' 确保公式以=开头
-            If Not formula.StartsWith("=") Then
-                formula = "=" & formula
-            End If
-
-            If fillDown AndAlso range.Rows.Count > 1 Then
-                ' 只设置第一个单元格，然后向下填充
-                cell = range.Cells(1, 1)
-                cell.Formula = formula
-                cell.AutoFill(range, XlAutoFillType.xlFillDefault)
-            Else
-                range.Formula = formula
-            End If
-
-            ShareRibbon.GlobalStatusStrip.ShowInfo($"公式已应用到 {targetRange}")
-            Return True
-
-        Catch ex As Exception
-            Debug.WriteLine($"ExecuteApplyFormula 出错: {ex.Message}")
-            ShareRibbon.GlobalStatusStrip.ShowWarning($"应用公式失败: {ex.Message}")
-            Return False
-        Finally
-            ' 释放 COM 对象
-            ComObjectHelper.ReleaseComObject(cell)
-            ComObjectHelper.ReleaseComObject(rows)
             ComObjectHelper.ReleaseComObject(range)
             ComObjectHelper.ReleaseComObject(ws)
         End Try

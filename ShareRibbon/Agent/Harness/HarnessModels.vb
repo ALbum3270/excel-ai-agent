@@ -4,6 +4,7 @@ Namespace Agent.Harness
 
     Public Enum HarnessRunStatus
         Running
+        AwaitingApproval
         Succeeded
         Failed
         Cancelled
@@ -18,6 +19,9 @@ Namespace Agent.Harness
         Public Property References As New List(Of String)()
         Public Property HostContextText As String = ""
         Public Property OfficeContext As Agent.Context.OfficeContext
+        Public Property ContextPack As Agent.Context.ContextPack
+        Public Property TaskSpec As Agent.AgentTaskSpec
+        Public Property SelectedSkills As New List(Of SkillFileDefinition)()
     End Class
 
     Public Class HarnessRunResult
@@ -56,6 +60,7 @@ Namespace Agent.Harness
         Public Property RunId As String = ""
         Public Property AppType As String = ""
         Public Property ContextText As String = ""
+        Public Property ContextPackJson As String = ""
     End Class
 
 End Namespace

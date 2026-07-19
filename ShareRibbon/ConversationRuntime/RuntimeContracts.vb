@@ -22,35 +22,6 @@ Public Interface IConversationRuntime
     Function BuildRequest(context As ChatRequestContext) As ChatRequestBuildResult
 End Interface
 
-''' <summary>
-''' Conversation persistence boundary. Existing ChatStateService/ConversationRepository can implement this later.
-''' </summary>
-Public Interface IConversationStore
-    Sub AddMessage(role As String, content As String)
-    Function GetRecentMessages(limit As Integer) As List(Of HistoryMessage)
-End Interface
-
-''' <summary>
-''' Retrieval boundary for RAG providers.
-''' </summary>
-Public Interface IRetrievalService
-    Function Retrieve(query As String, appType As String, topN As Integer) As List(Of RetrievalHit)
-End Interface
-
-''' <summary>
-''' Skills boundary for local skills or open-source skill registries.
-''' </summary>
-Public Interface ISkillCatalog
-    Function GetSkillPrompt(query As String, appType As String) As String
-End Interface
-
-Public Class RetrievalHit
-    Public Property Id As String
-    Public Property Content As String
-    Public Property Source As String
-    Public Property Score As Double
-End Class
-
 Public Class ChatRequestContext
     Public Property RequestUuid As String
     Public Property Question As String

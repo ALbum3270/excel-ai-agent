@@ -87,13 +87,6 @@ Public Class SkillRegistryRecord
     Public Property Score As Double
 End Class
 
-Public Class IntentClassificationResult
-    Public Property IntentType As String
-    Public Property Confidence As Double
-    Public Property Reason As String
-    Public Property MetadataJson As String
-End Class
-
 Public Interface IMemoryEventStore
     Function InsertConversationEvent(record As ConversationEventRecord) As String
     Function EnqueueMemoryJob(record As MemoryJobRecord) As String
@@ -103,14 +96,6 @@ Public Interface IMemoryExtractor
     Function ExtractMemories(events As List(Of ConversationEventRecord), Optional contextJson As String = Nothing) As List(Of MemoryItemRecord)
 End Interface
 
-Public Interface IMemoryRetriever
-    Function Retrieve(query As String, appType As String, documentId As String, projectId As String, topN As Integer) As List(Of MemoryItemRecord)
-End Interface
-
 Public Interface ISkillSelector
     Function SelectSkills(query As String, intentType As String, appType As String, topN As Integer) As List(Of SkillRegistryRecord)
-End Interface
-
-Public Interface IIntentClassifier
-    Function ClassifyIntent(query As String, appType As String, contextJson As String) As IntentClassificationResult
 End Interface

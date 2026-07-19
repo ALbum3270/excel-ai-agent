@@ -40,7 +40,7 @@ Public Class SkillsIndexService
         SkillsDirectoryService.EnsureDirectoryExists()
         Dim skills = SkillsDirectoryService.GetSkillsCatalog(forceRefresh)
         Dim activeNames As New List(Of String)()
-        Dim indexed As Integer = 0
+        Dim updated As Integer = 0
 
         For Each skill In skills
             If skill Is Nothing OrElse String.IsNullOrWhiteSpace(skill.Name) Then Continue For
@@ -68,30 +68,100 @@ Public Class SkillsIndexService
 
             AgentMemoryRepository.UpsertSkillRegistry(record)
             activeNames.Add(record.SkillName)
-            indexed += 1
+            updated += 1
         Next
 
         AgentMemoryRepository.DisableSkillsNotIn(activeNames)
-        Debug.WriteLine($"[SkillsIndexService] 已索引 Skills: {indexed}")
-        Return indexed
+        Debug.WriteLine($"[SkillsIndexService] Skills discovered={skills.Count}, active={activeNames.Count}, updated={updated}")
+        Return activeNames.Count
     End Function
 
     Public Shared Function SelectSkillDefinitions(query As String, intentType As String, appType As String, Optional topN As Integer = 3) As List(Of SkillFileDefinition)
         KickoffIndex()
 
-        Dim records = AgentMemoryRepository.RetrieveSkillRegistry(query, intentType, appType, topN)
-        If records Is Nothing OrElse records.Count = 0 Then Return New List(Of SkillFileDefinition)()
-
         Dim selected As New List(Of SkillFileDefinition)()
+        Dim directMatches = SkillsService.MatchSkills(If(query, ""), Math.Max(topN * 3, 6))
 
-        For Each record In records
-            Dim skill = SkillsDirectoryService.GetSkillByNameOrPath(record.SkillName, record.FilePath)
-            If skill IsNot Nothing AndAlso Not selected.Any(Function(s) String.Equals(s.Name, skill.Name, StringComparison.OrdinalIgnoreCase)) Then
-                selected.Add(skill)
-            End If
+        ' Filesystem metadata is the freshest authority. Strong semantic matches must be
+        ' considered before a possibly stale database index, especially immediately after
+        ' installing a new specialized Skill. This remains metadata-driven and app-scoped.
+        For Each match In directMatches.Where(Function(item) item.MatchScore >= 10).
+                                         OrderByDescending(Function(item) item.MatchScore)
+            AddSelectedSkill(selected, SkillsDirectoryService.LoadSkillDetail(match.Skill), appType, topN)
+            If selected.Count >= topN Then Exit For
         Next
 
+        Dim records = AgentMemoryRepository.RetrieveSkillRegistry(query, intentType, appType, topN)
+
+        If records IsNot Nothing Then
+            For Each record In records
+                Dim skill = SkillsDirectoryService.GetSkillByNameOrPath(record.SkillName, record.FilePath)
+                AddSelectedSkill(selected, skill, appType, topN)
+            Next
+        End If
+
+        ' 首次启动时数据库索引仍在后台构建；文件目录是权威来源，必须同步兜底。
+        ' 同时补足数据库召回不足的结果，避免过期索引遮蔽新安装 Skill。
+        If selected.Count < Math.Max(1, topN) Then
+            For Each match In directMatches
+                AddSelectedSkill(selected, SkillsDirectoryService.LoadSkillDetail(match.Skill), appType, topN)
+                If selected.Count >= topN Then Exit For
+            Next
+        End If
+
+        ' 开放需求可能没有任何可词法穷举的关键词。专用 Skill 未命中时，使用宿主显式
+        ' 声明的 baseline Skill，让 Agent 在其工具边界内理解新任务。
+        If selected.Count = 0 AndAlso Not String.IsNullOrWhiteSpace(query) Then
+            Dim baseline = SkillsDirectoryService.GetSkillsCatalog().
+                FirstOrDefault(Function(skill) SupportsApplication(skill, appType) AndAlso IsDefaultForApplication(skill))
+            AddSelectedSkill(selected, SkillsDirectoryService.LoadSkillDetail(baseline), appType, topN)
+            If baseline IsNot Nothing Then
+                Debug.WriteLine($"[SkillsIndexService] 使用宿主 baseline Skill: {baseline.Name}")
+            End If
+        End If
+
+        Debug.WriteLine($"[SkillsIndexService] Skill matches={selected.Count}, app={appType}, query={If(query, "").Substring(0, Math.Min(If(query, "").Length, 80))}")
+
         Return selected
+    End Function
+
+    Private Shared Sub AddSelectedSkill(selected As List(Of SkillFileDefinition),
+                                        skill As SkillFileDefinition,
+                                        appType As String,
+                                        topN As Integer)
+        If selected Is Nothing OrElse skill Is Nothing OrElse String.IsNullOrWhiteSpace(skill.Name) Then Return
+        If selected.Count >= Math.Max(1, topN) Then Return
+        If Not SupportsApplication(skill, appType) Then Return
+        If selected.Any(Function(s) String.Equals(s.Name, skill.Name, StringComparison.OrdinalIgnoreCase)) Then Return
+        selected.Add(skill)
+    End Sub
+
+    Private Shared Function SupportsApplication(skill As SkillFileDefinition, appType As String) As Boolean
+        If skill Is Nothing OrElse String.IsNullOrWhiteSpace(appType) Then Return True
+        Dim scope = If(skill.Application, "")
+        If String.IsNullOrWhiteSpace(scope) Then scope = InferAppScope(skill)
+        ' 完全没有宿主信号的 Skill 视为 common；能够推断宿主时必须隔离，避免把
+        ' Excel 的“图表生成/数据分析”等旧 Skill 注入 PowerPoint。
+        If String.IsNullOrWhiteSpace(scope) Then Return True
+        Dim requested = NormalizeAppType(appType)
+        Return scope.Split({","c, ";"c, "|"c}, StringSplitOptions.RemoveEmptyEntries).
+            Any(Function(value) NormalizeAppType(value) = requested)
+    End Function
+
+    Private Shared Function NormalizeAppType(value As String) As String
+        Dim normalized = If(value, "").Trim().ToLowerInvariant()
+        If normalized = "ppt" OrElse normalized = "power point" Then Return "powerpoint"
+        If normalized = "xls" OrElse normalized = "xlsx" Then Return "excel"
+        If normalized = "doc" OrElse normalized = "docx" Then Return "word"
+        Return normalized
+    End Function
+
+    Private Shared Function IsDefaultForApplication(skill As SkillFileDefinition) As Boolean
+        If skill?.Metadata Is Nothing Then Return False
+        Dim raw As Object = Nothing
+        If Not skill.Metadata.TryGetValue("default_for_application", raw) Then Return False
+        Dim enabled As Boolean
+        Return Boolean.TryParse(If(raw, "").ToString(), enabled) AndAlso enabled
     End Function
 
     Public Function SelectSkills(query As String, intentType As String, appType As String, topN As Integer) As List(Of SkillRegistryRecord) Implements ISkillSelector.SelectSkills

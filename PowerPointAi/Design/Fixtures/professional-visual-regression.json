@@ -1,0 +1,169 @@
+{
+  "designSystem": "executive-light",
+  "slides": [
+    {
+      "slideType": "cover",
+      "eyebrow": "VISUAL REGRESSION FIXTURE",
+      "title": "Professional Scene primitives",
+      "subtitle": "Illustrative test content only; not for external presentation use",
+      "notes": "Regression fixture speaker note: notes must survive the rendered Scene."
+    },
+    {
+      "slideType": "content",
+      "title": "The verified series rises across all four test periods",
+      "keyMessage": "Vector chart geometry, labels, legend, source, and insights must remain readable",
+      "chart": {
+        "chartType": "column",
+        "title": "Illustrative regression series",
+        "categories": ["P1", "P2", "P3", "P4"],
+        "series": [
+          {
+            "name": "Fixture series",
+            "values": [42, 58, 73, 81]
+          }
+        ],
+        "valueSuffix": " pts",
+        "source": "Regression fixture: illustrative values, not external evidence"
+      },
+      "items": [
+        {
+          "title": "Shape fidelity",
+          "body": "Bars and labels remain editable PowerPoint objects."
+        },
+        {
+          "title": "Verification",
+          "body": "Overflow, overlap, contrast, and missing nodes fail delivery."
+        }
+      ]
+    },
+    {
+      "slideType": "content",
+      "title": "Signed variance crosses the zero baseline without losing semantic context",
+      "source": "Regression fixture: top-level source retained across nested Scene parsing",
+      "scene": {
+        "keyMessage": "Nested Scene fields override selectively while top-level type, title, and source remain intact",
+        "chart": {
+          "chartType": "line",
+          "title": "Illustrative signed variance",
+          "categories": ["Q1", "Q2", "Q3", "Q4"],
+          "series": [
+            {
+              "name": "Variance to plan",
+              "values": [-12, 3, -4, 18]
+            }
+          ],
+          "valueSuffix": " pts",
+          "source": "Regression fixture: illustrative signed values"
+        },
+        "items": [
+          {"title": "Zero baseline", "body": "Positive and negative values share one truthful scale."},
+          {"title": "Label clearance", "body": "Endpoint labels remain inside the plot region."},
+          {"title": "Scene merge", "body": "Top-level metadata survives nested Scene input."},
+          {"title": "Compact insights", "body": "Four conclusions adapt without caption-sized body text."}
+        ]
+      }
+    },
+    {
+      "slideType": "content",
+      "title": "The highlighted column preserves the intended comparison focus",
+      "table": {
+        "title": "Compact evidence grid",
+        "headers": ["Dimension", "Option A", "Option B"],
+        "rows": [
+          ["Readability", "Pass", "Pass"],
+          ["Editability", "Limited", "Full"],
+          ["Verification", "Manual", "Automatic"]
+        ],
+        "highlightColumn": 2,
+        "source": "Regression fixture: semantic labels only"
+      },
+      "items": [
+        {
+          "title": "No silent truncation",
+          "body": "Every header and row is represented in the Scene."
+        },
+        {
+          "title": "Local contrast",
+          "body": "Highlighted cells receive readable text colors."
+        }
+      ]
+    },
+    {
+      "slideType": "comparison",
+      "title": "Evidence-backed emphasis creates hierarchy without changing the comparison meaning",
+      "items": [
+        {
+          "title": "Baseline option",
+          "body": "A valid alternative remains fully readable at supporting visual weight."
+        },
+        {
+          "title": "Recommended option",
+          "body": "Explicit emphasis receives additional width, contrast, and depth.",
+          "emphasis": true
+        }
+      ]
+    },
+    {
+      "slideType": "kpi",
+      "variant": "hero-left",
+      "title": "One primary test metric leads the supporting checks",
+      "metrics": [
+        {
+          "value": "100%",
+          "label": "Fixture coverage",
+          "description": "All intended regression primitives are present",
+          "source": "Regression fixture assertion"
+        },
+        {
+          "value": "0",
+          "label": "Missing nodes",
+          "description": "Expected after a passing render",
+          "source": "Rendered node verifier"
+        },
+        {
+          "value": ">=78",
+          "label": "Aesthetic gate",
+          "description": "Delivery threshold used by the verifier",
+          "source": "PowerPointVisualVerifier contract"
+        }
+      ]
+    },
+    {
+      "slideType": "process",
+      "variant": "vertical",
+      "title": "The regression flow validates the real delivery lifecycle",
+      "items": [
+        {"title": "Parse", "body": "Preserve chart, table, metric, and item semantics."},
+        {"title": "Compile", "body": "Produce stable Scene nodes with unique IDs."},
+        {"title": "Preflight", "body": "Repair contrast and reject overflow or overlap."},
+        {"title": "Render", "body": "Create editable PowerPoint shapes on the UI thread."},
+        {"title": "Observe", "body": "Compare actual nodes and geometry with the plan."},
+        {"title": "Rollback", "body": "Remove only slides safely identified as part of the failed generation attempt."}
+      ]
+    },
+    {
+      "slideType": "architecture",
+      "variant": "hub-spoke",
+      "title": "A semantic core coordinates four independently verifiable capabilities",
+      "items": [
+        {"title": "Agent kernel", "body": "Owns planning, state, and repair decisions."},
+        {"title": "Context", "body": "Reads the active Office surface."},
+        {"title": "Tools", "body": "Executes registered capabilities."},
+        {"title": "Observe", "body": "Checks the rendered artifact."},
+        {"title": "Safety", "body": "Gates risky mutations."}
+      ]
+    },
+    {
+      "slideType": "matrix",
+      "title": "Every quadrant is interpreted through explicit test dimensions",
+      "xAxisLabel": "BUILD COST",
+      "yAxisLabel": "VALUE",
+      "items": [
+        {"title": "Quick validation", "body": "Low effort, high verification impact."},
+        {"title": "Deep rendering", "body": "High effort, high verification impact.", "emphasis": true},
+        {"title": "Cosmetic check", "body": "Low effort, lower verification impact."},
+        {"title": "Deferred experiment", "body": "High effort, lower verification impact."}
+      ]
+    }
+  ]
+}

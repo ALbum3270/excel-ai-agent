@@ -20,7 +20,6 @@ Public Class TranslateSettings
     Public Property SourceLanguage As String = "auto"
     Public Property TargetLanguage As String = "zh"
     Public Property MaxRequestsPerSecond As Integer = 5
-    Public Property EnableSelectionTranslate As Boolean = False
     Public Property PromptText As String = "你是一个专业的翻译，按要求翻译并保留格式。"
 
     ''' <summary>当前选中的翻译领域</summary>

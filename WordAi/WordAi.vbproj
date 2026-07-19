@@ -305,7 +305,6 @@
     <Compile Include="Context\WordContextProvider.vb" />
     <Compile Include="Services\ContentLocator.vb" />
     <Compile Include="Services\FormattingIntentCompiler.vb" />
-    <Compile Include="Services\FormattingPlanPromptBuilder.vb" />
     <Compile Include="Services\ProofreadIntentCompiler.vb" />
     <Compile Include="Services\SmartFormatter.vb" />
     <Compile Include="Services\WordActionHarness.vb" />
@@ -335,7 +334,6 @@
     <Compile Include="WebDataCapturePane.vb">
       <SubType>UserControl</SubType>
     </Compile>
-    <Compile Include="WordTranslateService.vb" />
     <Compile Include="OpenXmlWordTranslator.vb" />
     <Compile Include="WordDocumentTranslateService.vb" />
     <Compile Include="WordContinuationService.vb" />

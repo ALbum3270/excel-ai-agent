@@ -186,6 +186,23 @@ Namespace Agent
             sb.AppendLine("【用户请求】")
             sb.AppendLine(session.UserRequest)
 
+            If session.Spec IsNot Nothing Then
+                sb.AppendLine()
+                sb.AppendLine("【开放式任务规格（权威）】")
+                sb.AppendLine($"目标: {session.Spec.Goal}")
+                sb.AppendLine($"目标对象: {session.Spec.TargetObject}")
+                sb.AppendLine($"复杂度: {session.Spec.Complexity}; 风险: {session.Spec.RiskLevel}")
+                If session.Spec.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
+                    sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
+                End If
+                If session.Spec.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
+                    sb.AppendLine("成功标准: " & String.Join("; ", session.Spec.SuccessCriteria))
+                End If
+                If session.Spec.ExpectedOutputs IsNot Nothing AndAlso session.Spec.ExpectedOutputs.Count > 0 Then
+                    sb.AppendLine("必须实际产出并验证: " & String.Join(", ", session.Spec.ExpectedOutputs))
+                End If
+            End If
+
             If Not String.IsNullOrWhiteSpace(session.CurrentContent) Then
                 sb.AppendLine()
                 sb.AppendLine("【当前文档内容摘要】")
@@ -215,6 +232,8 @@ Namespace Agent
                 sb.AppendLine("若匹配技能提供了建议工具，并且能完成任务，优先在步骤 code 中使用这些工具。")
             End If
             sb.AppendLine("每个步骤必须能被已注册工具执行。工具 ID 必须原样照抄【已注册工具】中的 ID；不要把普通解释、手动操作说明或未注册命令写入 code。")
+            sb.AppendLine("兼容意图标签不是能力边界。应以开放式任务规格、命中的 Skill 和当前工具组合完成用户目标；若确实缺少原子能力，明确报告 capability gap，不得编造工具或宣称完成。")
+            sb.AppendLine("计划必须覆盖所有成功标准。要求图片时必须使用当前已注册且能产生真实图片的能力；PowerPoint 可在 CreateSlides 的 slides[].imagePath 中提供可访问路径。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
             sb.AppendLine("如果任务是生成可编辑文书模板，缺少具体字段时不要停在澄清问题；先用占位符生成模板草稿。")
             sb.AppendLine("返回 JSON 格式：")
             sb.AppendLine("```json")
@@ -228,7 +247,8 @@ Namespace Agent
             sb.AppendLine("      ""language"": ""json""")
             sb.AppendLine("    }")
             sb.AppendLine("  ],")
-            sb.AppendLine("  ""summary"": ""预期结果""")
+            sb.AppendLine("  ""summary"": ""预期结果"",")
+            sb.AppendLine("  ""capabilityGap"": ""无法执行时说明缺少的工具、数据或权限；可执行时为空""")
             sb.AppendLine("}")
             sb.AppendLine("```")
 
@@ -327,13 +347,6 @@ Namespace Agent
             Return Nothing
         End Function
 
-        ''' <summary>
-        ''' 重新加载所有提示词（支持热加载）
-        ''' </summary>
-        Public Sub Reload()
-            _promptCache.Clear()
-            LoadAllPrompts()
-        End Sub
     End Class
 
 End Namespace

@@ -226,55 +226,6 @@ Public Class MCPConnectionConfig
         Return result
     End Function
 
-    ' 从环境变量表格更新Env属性
-    Public Sub UpdateEnvFromGrid(grid As DataGridView)
-        Env.Clear()
-
-        For Each row As DataGridViewRow In grid.Rows
-            If row.IsNewRow Then Continue For
-
-            Dim key = TryCast(row.Cells("Key").Value, String)
-            Dim value = TryCast(row.Cells("Value").Value, String)
-
-            If Not String.IsNullOrEmpty(key) Then
-                Env(key) = If(value IsNot Nothing, value, "")
-            End If
-        Next
-    End Sub
-
-    ' 填充环境变量表格
-    Public Sub FillEnvGrid(grid As DataGridView)
-        grid.Rows.Clear()
-
-        For Each kvp In Env
-            Dim rowIndex = grid.Rows.Add()
-            grid.Rows(rowIndex).Cells("Key").Value = kvp.Key
-            grid.Rows(rowIndex).Cells("Value").Value = kvp.Value
-        Next
-    End Sub
-End Class
-
-' 自定义JSON转换器，确保路径中的反斜杠不被过度转义
-Public Class PathPreservingStringConverter
-    Inherits JsonConverter
-
-    Public Overrides Function CanConvert(objectType As Type) As Boolean
-        Return objectType = GetType(String)
-    End Function
-
-    Public Overrides Function ReadJson(reader As JsonReader, objectType As Type, existingValue As Object, serializer As JsonSerializer) As Object
-        Return reader.Value
-    End Function
-
-    Public Overrides Sub WriteJson(writer As JsonWriter, value As Object, serializer As JsonSerializer)
-        Dim str = TryCast(value, String)
-        If str IsNot Nothing Then
-            ' 直接写入字符串，不做任何转义
-            writer.WriteValue(str)
-        Else
-            writer.WriteNull()
-        End If
-    End Sub
 End Class
 
 Public Class MCPConnectionManager

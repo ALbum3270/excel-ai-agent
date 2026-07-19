@@ -48,50 +48,16 @@ End Class
 
 ''' <summary>
 ''' 排版知识引擎 - 管理内置和用户自定义的排版标准
-''' 提供标准检索、标签规则解释等功能
+''' 提供内置标准检索。
 ''' </summary>
 Public Class FormattingKnowledgeEngine
     Private ReadOnly _standards As New List(Of FormattingStandard)()
-    Private ReadOnly _ruleExplanations As Dictionary(Of String, String)
 
     Public Sub New()
         ' 从内置数据加载所有标准
         Dim builtInStandards = FormattingStandardData.GetAllBuiltInStandards()
         _standards.AddRange(builtInStandards)
 
-        ' 初始化规则解释
-        _ruleExplanations = New Dictionary(Of String, String) From {
-            {"title", "标题区域：文档标题的格式定义，包括字体、字号、对齐方式等"},
-            {"title.main", "文档主标题：使用较大字号居中加粗显示，是文档最主要的标题"},
-            {"title.1", "一级标题：公文正文一级标题，序号如「一、」，使用黑体三号，左对齐"},
-            {"title.2", "二级标题：公文正文二级标题，序号如「（一）」，使用楷体_GB2312三号，左对齐"},
-            {"title.3", "三级标题：公文正文三级标题，序号如「1.」，使用仿宋_GB2312三号加粗，左对齐"},
-            {"title.recipient", "主送机关：公文的主送机关名称，左对齐顶格排列"},
-            {"title.abstract", "摘要标题：用于标识摘要区域的标题，与正文区分"},
-            {"title.keywords", "关键词标题：用于标识关键词区域的标题"},
-            {"header", "页眉区域：公文页眉部分的格式定义"},
-            {"header.org", "发文机关标志：使用方正小标宋简体22pt加粗，红色(#C00000)居中显示"},
-            {"header.refno", "发文字号：使用仿宋_GB2312 16pt居中排列，包含机关代字、年份和顺序号"},
-            {"header.signer", "签发人：上行文签发人信息，使用仿宋_GB2312三号"},
-            {"header.separator", "红色分隔线：位于发文字号下方的红色横线，线宽2pt，颜色#C00000"},
-            {"body", "正文区域：文档正文的基础格式定义"},
-            {"body.normal", "正文段落：使用仿宋_GB2312 16pt，两端对齐，首行缩进2字符，行距28磅"},
-            {"body.attachment", "附件说明：用于标注文档附件，正文下空1行排列，左对齐"},
-            {"body.abstract", "摘要正文：学术论文摘要内容的格式定义，通常比正文紧凑"},
-            {"body.keywords", "关键词：学术论文关键词的格式定义，位于摘要之后"},
-            {"body.reference", "参考文献条目：参考文献列表中单条记录的格式定义"},
-            {"body.summary", "总结段落：用于报告或文章的摘要总结部分，与正文有所区分"},
-            {"heading", "通用章节标题：非公文文档章节标题的格式定义，按层级使用不同字体和字号"},
-            {"heading.1", "通用一级标题：非公文文档的一级章节标题"},
-            {"heading.2", "通用二级标题：非公文文档的二级章节标题"},
-            {"heading.3", "通用三级标题：非公文文档的三级章节标题"},
-            {"footer", "页脚区域：文档页脚部分的格式定义"},
-            {"footer.signature", "发文机关署名：位于成文日期之上的发文机关署名，右对齐"},
-            {"footer.date", "成文日期：使用阿拉伯数字表示的公文成文日期，右对齐，不编虚位"},
-            {"footer.note", "附注：联系人、联系电话等公文附注内容，居左空二字加圆括号"},
-            {"footer.cc", "抄送机关：版记中的抄送信息，以「抄送：」开头"},
-            {"footer.page", "页码：文档页脚处页码，通常居中排列"}
-        }
     End Sub
 
     ''' <summary>
@@ -111,62 +77,10 @@ Public Class FormattingKnowledgeEngine
     End Function
 
     ''' <summary>
-    ''' 获取所有已注册的标准
-    ''' </summary>
-    Public Function GetAllStandards() As List(Of FormattingStandard)
-        Return _standards.ToList()
-    End Function
-
-    ''' <summary>
     ''' 获取所有已激活的标准
     ''' </summary>
     Public Function GetActiveStandards() As List(Of FormattingStandard)
         Return _standards.Where(Function(s) s.IsActive).ToList()
-    End Function
-
-    ''' <summary>
-    ''' 注册新的排版标准（用户自定义）
-    ''' </summary>
-    Public Sub RegisterStandard(standard As FormattingStandard)
-        If standard Is Nothing Then Return
-        ' 避免重复注册同名标准
-        Dim existing = GetStandardByName(standard.Name)
-        If existing IsNot Nothing Then
-            _standards.Remove(existing)
-        End If
-        standard.IsBuiltIn = False
-        _standards.Add(standard)
-    End Sub
-
-    ''' <summary>
-    ''' 取消注册指定标准
-    ''' </summary>
-    Public Function UnregisterStandard(standardId As String) As Boolean
-        Dim standard = _standards.FirstOrDefault(Function(s) s.Id = standardId)
-        If standard IsNot Nothing AndAlso Not standard.IsBuiltIn Then
-            Return _standards.Remove(standard)
-        End If
-        Return False
-    End Function
-
-    ''' <summary>
-    ''' 解释指定语义标签的排版规则
-    ''' </summary>
-    Public Function ExplainRule(tagId As String) As String
-        If String.IsNullOrEmpty(tagId) Then Return "未指定标签。"
-
-        ' 优先返回精确解释
-        If _ruleExplanations.ContainsKey(tagId) Then
-            Return _ruleExplanations(tagId)
-        End If
-
-        ' 尝试返回父级标签的解释
-        Dim parentId = SemanticTagRegistry.GetParentTag(tagId)
-        If Not String.IsNullOrEmpty(parentId) AndAlso _ruleExplanations.ContainsKey(parentId) Then
-            Return $"{_ruleExplanations(parentId)}（{tagId} 是该大类下的具体细分标签）"
-        End If
-
-        Return $"标签「{tagId}」暂无详细解释，请参考所选排版标准的具体格式定义。"
     End Function
 
     ''' <summary>

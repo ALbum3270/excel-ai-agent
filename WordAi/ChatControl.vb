@@ -31,7 +31,6 @@ Public Class ChatControl
     Inherits BaseChatControl
 
 
-    Private sheetContentItems As New Dictionary(Of String, Tuple(Of System.Windows.Forms.Label, System.Windows.Forms.Button))
 
     ' 排版上下文：存储待格式化的段落和样式信息
     Private _reformatParagraphs As List(Of Object) = Nothing
@@ -1009,6 +1008,19 @@ Public Class ChatControl
             Dim plan = harness.Plan(userMessage, intent)
             If plan Is Nothing OrElse Not plan.ShouldHandle Then Return False
 
+            Dim recorder As New Agent.Harness.HostCapabilityRunRecorder(
+                "Word",
+                If(plan.Capability?.Id, plan.Kind.ToString()),
+                userMessage,
+                If(plan.Capability Is Nothing, "medium", plan.Capability.RiskLevel.ToString()))
+            plan.RunRecorder = recorder
+            Dim safetyDecision = recorder.EvaluateSafety()
+            If safetyDecision IsNot Nothing AndAlso safetyDecision.Action <> Agent.Execution.SafetyAction.Allow Then
+                recorder.CompleteSafetyDecision(safetyDecision)
+                GlobalStatusStrip.ShowWarning(If(safetyDecision.UserMessage, "该操作需要确认，已转入 Agent 安全路径"))
+                Return False
+            End If
+
             Debug.WriteLine($"[WordActionHarness] capability fast-path kind={plan.Kind}, confidence={plan.Confidence:0.00}, reason={plan.Reason}, capability={plan.CapabilitySummary}")
 
             Select Case plan.Kind
@@ -1047,6 +1059,12 @@ Public Class ChatControl
             AppLogger.Warn("WordCapability", message)
         End If
         Debug.WriteLine($"[WordCapability] {message}")
+
+        Try
+            plan?.RunRecorder?.Complete(result.ToToolResult())
+        Catch ex As Exception
+            AppLogger.Warn("WordCapability", $"fast-path trace failed: {AppLogger.Redact(ex.Message)}")
+        End Try
 
         Try
             If result.Status = Services.WordCapabilityExecutionStatus.Failed Then
@@ -1906,24 +1924,6 @@ Public Class ChatControl
     End Sub
 
 
-    ' 获取选中内容的详细信息
-    Private Function GetSelectionDetails(selection As Microsoft.Office.Interop.Word.Selection) As String
-        Dim details As New StringBuilder()
-
-        ' 添加基本信息
-        details.AppendLine($"开始位置: {selection.Start}")
-        details.AppendLine($"结束位置: {selection.End}")
-        details.AppendLine($"字符数: {selection.Characters.Count}")
-
-        ' 如果是表格，添加表格信息
-        If selection.Tables.Count > 0 Then
-            Dim table = selection.Tables(1)
-            details.AppendLine($"表格大小: {table.Rows.Count}行 x {table.Columns.Count}列")
-        End If
-
-        Return details.ToString()
-    End Function
-
     ' 初始化时注入基础 HTML 结构
     Private Async Sub MainForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         ' 初始化 WebView2
@@ -2356,146 +2356,6 @@ Public Class ChatControl
         Catch ex As Exception
             Debug.WriteLine($"HandleApplyRevisionSegment 出错: {ex.Message}")
             GlobalStatusStrip.ShowWarning("校对写回异常: " & ex.Message)
-        End Try
-    End Sub
-
-    ' 新增：在 Range 插入 WordProcessingML（OpenXML）片段
-    Private Function InsertOpenXmlIntoRange(openXml As String, targetRange As Object) As Boolean
-        Try
-            If String.IsNullOrEmpty(openXml) OrElse targetRange Is Nothing Then Return False
-
-            ' Word Range.InsertXML 需要完整的 WordProcessingML 文档结构
-            ' 如果传入的只是片段（如 <w:p>），需要包装成完整结构
-            Dim wrappedXml As String = WrapXmlFragment(openXml)
-
-            Try
-                Debug.Print("InsertOpenXmlIntoRange: " & wrappedXml.Substring(0, Math.Min(500, wrappedXml.Length)))
-                targetRange.InsertXML(wrappedXml)
-                Return True
-            Catch ex As Exception
-                Debug.WriteLine("InsertOpenXmlIntoRange: InsertXML 失败: " & ex.Message)
-                ' 回退：尝试直接设置文本
-                Try
-                    Dim plainText As String = ExtractTextFromXml(openXml)
-                    If Not String.IsNullOrEmpty(plainText) Then
-                        targetRange.Text = plainText
-                        Return True
-                    End If
-                Catch
-                End Try
-                Return False
-            End Try
-        Catch ex As Exception
-            Debug.WriteLine("InsertOpenXmlIntoRange 出错: " & ex.Message)
-            Return False
-        End Try
-    End Function
-
-    ' 将 OpenXML 片段包装成完整的 WordProcessingML 文档
-    Private Function WrapXmlFragment(fragment As String) As String
-        If String.IsNullOrEmpty(fragment) Then Return String.Empty
-
-        ' 检查是否已经是完整的文档结构
-        If fragment.Contains("<w:document") OrElse fragment.Contains("<pkg:package") Then
-            Return fragment
-        End If
-
-        ' 定义命名空间
-        Const wNs As String = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-        Const rNs As String = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
-        ' 包装成完整的 WordProcessingML 文档
-        Dim sb As New StringBuilder()
-        sb.Append("<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>")
-        sb.Append($"<w:document xmlns:w=""{wNs}"" xmlns:r=""{rNs}"">")
-        sb.Append("<w:body>")
-        sb.Append(fragment)
-        sb.Append("</w:body>")
-        sb.Append("</w:document>")
-
-        Return sb.ToString()
-    End Function
-
-    ' 从 OpenXML 片段中提取纯文本（作为回退方案）
-    Private Function ExtractTextFromXml(xml As String) As String
-        Try
-            If String.IsNullOrEmpty(xml) Then Return String.Empty
-            ' 简单的正则提取 <w:t> 标签内容
-            Dim matches = System.Text.RegularExpressions.Regex.Matches(xml, "<w:t[^>]*>([^<]*)</w:t>")
-            Dim result As New StringBuilder()
-            For Each m As System.Text.RegularExpressions.Match In matches
-                If m.Groups.Count > 1 Then
-                    result.Append(m.Groups(1).Value)
-                End If
-            Next
-            Return result.ToString()
-        Catch
-            Return String.Empty
-        End Try
-    End Function
-
-    ' applyRevision
-    Protected Overrides Sub HandleApplyRevisionAll(jsonDoc As JObject)
-        Try
-            Dim responseUuid As String = If(jsonDoc("uuid") IsNot Nothing, jsonDoc("uuid").ToString(), String.Empty)
-            Dim newContent As String = If(jsonDoc("newContent") IsNot Nothing, jsonDoc("newContent").ToString(), String.Empty)
-
-            If String.IsNullOrWhiteSpace(newContent) Then
-                GlobalStatusStrip.ShowWarning("没有接收到写回的新内容")
-                Return
-            End If
-
-            Dim appInfo As ApplicationInfo = GetApplication()
-            If appInfo Is Nothing OrElse appInfo.Type <> OfficeApplicationType.Word Then
-                GlobalStatusStrip.ShowWarning("写回操作仅在 Word 环境下支持（默认实现）")
-                Return
-            End If
-
-            ' 使用 GetOfficeApplicationObject 获取宿主 Word Application 对象（子类需实现）
-            Dim officeApp As Object = Nothing
-            Try
-                officeApp = GetOfficeApplicationObject()
-            Catch ex As Exception
-                Debug.WriteLine("获取 Office 应用对象失败: " & ex.Message)
-            End Try
-
-            If officeApp Is Nothing Then
-                GlobalStatusStrip.ShowWarning("无法获取 Word 应用对象，写回失败")
-                Return
-            End If
-
-            Try
-                ' 在审阅模式下写回：先开启 TrackRevisions，再执行删除/插入以产生审阅记录
-                Dim doc = officeApp.ActiveDocument
-                Dim selRange = officeApp.Selection.Range
-                Dim useRange = Nothing
-
-                If selRange IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(selRange.Text) Then
-                    useRange = selRange
-                Else
-                    useRange = doc.Content
-                End If
-
-                ' 开启审阅模式
-                Try
-                    doc.TrackRevisions = True
-                Catch
-                    ' 忽略，如果宿主不支持
-                End Try
-
-                ' 删除原文本（此操作会被记录为删除），然后插入新文本（被记录为插入）
-                useRange.Delete()
-                useRange.InsertAfter(newContent)
-
-                GlobalStatusStrip.ShowInfo("写回已完成（审阅模式）。请在审阅中查看修改。")
-            Catch ex As Exception
-                Debug.WriteLine("写回失败: " & ex.Message)
-                GlobalStatusStrip.ShowWarning("写回失败: " & ex.Message)
-            End Try
-
-        Catch ex As Exception
-            Debug.WriteLine($"HandleApplyRevisionAll 出错: {ex.Message}")
-            GlobalStatusStrip.ShowWarning("写回操作异常")
         End Try
     End Sub
 
@@ -3484,28 +3344,6 @@ Public Class ChatControl
         End Try
     End Sub
 
-    ' 辅助：由纯文本生成最简单的 WordProcessingML OpenXML 片段（每个换行生成一个段落）
-    Private Function BuildOpenXmlFromText(text As String) As String
-        Try
-            If String.IsNullOrEmpty(text) Then Return String.Empty
-            Dim ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-            Dim sb As New StringBuilder()
-            sb.Append($"<w:document xmlns:w=""{ns}""><w:body>")
-            Dim lines = text.Replace(vbCrLf, vbLf).Split(New Char() {vbLf})
-            For Each line In lines
-                Dim escaped = line
-                escaped = escaped.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
-                ' 保留前后空格
-                sb.Append($"<w:p><w:r><w:t xml:space=""preserve"">{escaped}</w:t></w:r></w:p>")
-            Next
-            sb.Append("</w:body></w:document>")
-            Return sb.ToString()
-        Catch ex As Exception
-            Debug.WriteLine("BuildOpenXmlFromText 出错: " & ex.Message)
-            Return String.Empty
-        End Try
-    End Function
-
     Protected Overrides Function CaptureCurrentSelectionInfo(mode As String) As SelectionInfo
         Try
             Dim sel = Globals.ThisAddIn.Application.Selection
@@ -3738,7 +3576,7 @@ Public Class ChatControl
     ''' <summary>
     ''' 执行JSON命令（重写基类方法）- 带严格验证，支持DSL和旧版格式
     ''' </summary>
-    Protected Overrides Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
+    Private Function ExecuteJsonCommandCore(jsonCode As String, preview As Boolean) As Boolean
         Try
             ' 预览模式下跳过自动执行（排版/校对模式的JSON用于预览，由用户手动点击应用）
             If IsInPreviewMode() Then
@@ -3809,13 +3647,13 @@ Public Class ChatControl
                     Return ExecuteWordCommandsArrayWithToolResult(jsonObj("commands"), preview)
                 Else
                     Dim command = jsonObj("command")?.ToString()
-                    If IsToolResultCommand(command) Then
+                    If Not String.IsNullOrWhiteSpace(command) Then
                         Return ExecuteWordCommandWithToolResult(jsonObj)
                     End If
                 End If
             End If
 
-            Dim ok = ExecuteJsonCommand(jsonCode, preview)
+            Dim ok = ExecuteJsonCommandCore(jsonCode, preview)
             If ok Then Return Agent.ToolResult.Succeed("", "执行成功")
             Return Agent.ToolResult.Failed("", "JSON命令执行失败")
 
@@ -3830,24 +3668,10 @@ Public Class ChatControl
         End Try
     End Function
 
-    Private Function IsToolResultCommand(command As String) As Boolean
-        Return IsReadToolCommand(command) OrElse IsWriteToolCommand(command)
-    End Function
-
     Private Function IsReadToolCommand(command As String) As Boolean
         If String.IsNullOrWhiteSpace(command) Then Return False
         Select Case command.Trim().ToLowerInvariant()
             Case "listparagraphs", "getparagraphinfo"
-                Return True
-            Case Else
-                Return False
-        End Select
-    End Function
-
-    Private Function IsWriteToolCommand(command As String) As Boolean
-        If String.IsNullOrWhiteSpace(command) Then Return False
-        Select Case command.Trim().ToLowerInvariant()
-            Case "inserttext", "formattext", "replacetext", "deletetext"
                 Return True
             Case Else
                 Return False
@@ -3930,17 +3754,10 @@ Public Class ChatControl
             Return ExecuteWordReadCommandWithToolResult(commandJson)
         End If
 
-        If Not IsWriteToolCommand(command) Then
-            Return Agent.ToolResult.Failed(If(command, ""),
-                                           $"不支持的Word命令: {command}",
-                                           errorCode:=ExceptionClassifier.CodeNotFound,
-                                           userMessage:=$"不支持的Word命令: {command}",
-                                           recoverable:=False)
-        End If
-
         Try
             Dim params = commandJson("params")
             Dim normalizedToolId = NormalizeWordToolId(command)
+            If String.IsNullOrWhiteSpace(normalizedToolId) Then normalizedToolId = If(command, "WordCommand")
             Dim doc = Globals.ThisAddIn.Application.ActiveDocument
             Dim selection = Globals.ThisAddIn.Application.Selection
             Dim beforeSnapshot = CaptureWordWriteSnapshot(normalizedToolId, params, doc, selection)
@@ -3955,6 +3772,9 @@ Public Class ChatControl
                     success = ExecuteReplaceText(params, doc)
                 Case "deletetext"
                     success = ExecuteDeleteText(params, doc, selection)
+                Case Else
+                    ' 其余 Word 原生命令继续复用已有执行器，但不再退化为空 ToolId 的 Boolean 假成功。
+                    success = ExecuteWordSingleCommand(commandJson, commandJson.ToString(Formatting.None), False)
             End Select
 
             Dim afterSnapshot = CaptureWordWriteSnapshot(normalizedToolId, params, doc, selection)
@@ -5384,56 +5204,6 @@ Public Class ChatControl
             Debug.WriteLine($"HandleSaveCurrentDocumentAsTemplate 出错: {ex.Message}")
             GlobalStatusStrip.ShowWarning($"分析文档格式失败: {ex.Message}")
         End Try
-    End Sub
-
-    ''' <summary>
-    ''' 上传 .docx 文件，用 AI 分析其格式生成 SemanticStyleMapping（AI辅助解析，区别于直接解析）
-    ''' </summary>
-    Protected Overrides Sub HandleUploadTemplateDocumentForAiAnalysis()
-        Dim act As System.Action = Sub()
-            Try
-                Using ofd As New OpenFileDialog With {
-                    .Filter = "Word文档 (*.docx;*.dotx)|*.docx;*.dotx|所有文件 (*.*)|*.*",
-                    .Title = "选择要分析格式的Word文档"
-                }
-                    If ofd.ShowDialog() <> DialogResult.OK Then Return
-
-                    Dim wordApp = Globals.ThisAddIn.Application
-                    Dim tempDoc As Microsoft.Office.Interop.Word.Document = Nothing
-                    Try
-                        ' 以只读方式临时打开文档以提取格式
-                        tempDoc = wordApp.Documents.Open(ofd.FileName, ReadOnly:=True, Visible:=False)
-                        Dim extracted = FormatMirrorService.ExtractFormattingFromDocument(wordApp, False)
-                        tempDoc.Close(SaveChanges:=False)
-                        tempDoc = Nothing
-
-                        If extracted.Count = 0 Then
-                            GlobalStatusStrip.ShowWarning("未能从文档中提取格式信息")
-                            Return
-                        End If
-
-                        _mirrorFormatDocName = Path.GetFileNameWithoutExtension(ofd.FileName)
-                        If String.IsNullOrEmpty(_mirrorFormatDocName) Then _mirrorFormatDocName = "上传文档格式"
-
-                        Dim prompt = FormatMirrorService.BuildClonePrompt(extracted)
-                        GlobalStatusStrip.ShowInfo($"正在分析「{_mirrorFormatDocName}」格式，请稍候…")
-                        Send("请根据以下格式信息生成 SemanticStyleMapping。", prompt, False, "mirror_format")
-                    Catch ex As Exception
-                        If tempDoc IsNot Nothing Then
-                            Try
-                                tempDoc.Close(SaveChanges:=False)
-                            Catch
-                            End Try
-                        End If
-                        Throw
-                    End Try
-                End Using
-            Catch ex As Exception
-                Debug.WriteLine($"HandleUploadTemplateDocumentForAiAnalysis 出错: {ex.Message}")
-                GlobalStatusStrip.ShowWarning($"文档格式分析失败: {ex.Message}")
-            End Try
-        End Sub
-        If InvokeRequired Then Me.Invoke(act) Else act()
     End Sub
 
     ''' <summary>

@@ -9,6 +9,9 @@ Namespace Agent.Harness
         Event ContextReady As EventHandler(Of HarnessContextEventArgs)
 
         Function RunAsync(turn As UserTurn, cancellationToken As CancellationToken) As Task(Of HarnessRunResult)
+        Function ApproveAsync(runId As String, approved As Boolean, cancellationToken As CancellationToken) As Task(Of HarnessRunResult)
+        Function ResumeAsync(runId As String, cancellationToken As CancellationToken) As Task(Of HarnessRunResult)
+        Function CancelAsync(runId As String, cancellationToken As CancellationToken) As Task(Of HarnessRunResult)
     End Interface
 
 End Namespace

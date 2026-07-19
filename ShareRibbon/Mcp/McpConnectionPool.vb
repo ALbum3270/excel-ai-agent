@@ -50,27 +50,6 @@ Public NotInheritable Class McpConnectionPool
         End Try
     End Function
 
-    Public Sub Invalidate(config As MCPConnectionConfig)
-        If config Is Nothing Then Return
-        Dim key = BuildKey(config)
-        Dim removed As PooledMcpConnection = Nothing
-        If _connections.TryRemove(key, removed) Then
-            removed.Dispose()
-        End If
-    End Sub
-
-    Public Sub CleanupIdleConnections(idleTimeout As TimeSpan)
-        Dim now = DateTime.UtcNow
-        For Each kvp In _connections
-            If now - kvp.Value.LastAccessUtc > idleTimeout Then
-                Dim removed As PooledMcpConnection = Nothing
-                If _connections.TryRemove(kvp.Key, removed) Then
-                    removed.Dispose()
-                End If
-            End If
-        Next
-    End Sub
-
     Private Shared Function BuildKey(config As MCPConnectionConfig) As String
         Dim name = If(config.Name, String.Empty).Trim()
         Dim url = If(config.Url, String.Empty).Trim()

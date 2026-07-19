@@ -34,23 +34,4 @@ Public NotInheritable Class ComObjectHelper
         End Try
     End Sub
 
-    Public Shared Sub FinalReleaseComObject(ByRef comObject As Object)
-        If comObject Is Nothing Then Return
-
-        Try
-            If Marshal.IsComObject(comObject) Then
-                Marshal.FinalReleaseComObject(comObject)
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"[ComObjectHelper] FinalReleaseComObject failed: {ex.Message}")
-        Finally
-            comObject = Nothing
-        End Try
-    End Sub
-
-    Public Shared Sub ForceGarbageCollection()
-        GC.Collect()
-        GC.WaitForPendingFinalizers()
-        GC.Collect()
-    End Sub
 End Class

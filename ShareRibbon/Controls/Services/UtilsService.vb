@@ -49,14 +49,6 @@ Public Class UtilsService
     End Function
 
     ''' <summary>
-    ''' Base64 解码
-    ''' </summary>
-    Public Shared Function DecodeBase64(base64 As String) As String
-        Dim bytes = Convert.FromBase64String(base64)
-        Return Encoding.UTF8.GetString(bytes)
-    End Function
-
-    ''' <summary>
     ''' 反转义 HTML 内容
     ''' </summary>
     Public Shared Function UnescapeHtmlContent(htmlContent As String) As String

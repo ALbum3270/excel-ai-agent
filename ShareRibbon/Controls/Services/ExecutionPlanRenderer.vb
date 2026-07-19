@@ -1,8 +1,6 @@
 ' ShareRibbon\Controls\Services\ExecutionPlanRenderer.vb
 ' 执行计划渲染服务：将JSON命令转换为用户友好的执行步骤
 
-Imports System.Text
-Imports System.Web
 Imports Newtonsoft.Json.Linq
 
 ''' <summary>
@@ -12,30 +10,6 @@ Imports Newtonsoft.Json.Linq
 Public Class ExecutionPlanRenderer
 
 #Region "命令描述映射"
-
-    ' 命令类型到描述模板的映射
-    Private Shared ReadOnly CommandDescriptions As New Dictionary(Of String, String) From {
-        {"ApplyFormula", "在 {targetRange} 应用公式"},
-        {"WriteData", "向 {targetRange} 写入数据"},
-        {"FormatRange", "格式化 {range} 区域"},
-        {"CreateChart", "创建 {type} 图表"},
-        {"CleanData", "清洗数据: {operation}"},
-        {"DataAnalysis", "执行数据分析: {type}"},
-        {"TransformData", "数据转换: {operation}"},
-        {"GenerateReport", "生成报表"}
-    }
-
-    ' 命令类型到图标的映射
-    Private Shared ReadOnly CommandIcons As New Dictionary(Of String, String) From {
-        {"ApplyFormula", "formula"},
-        {"WriteData", "data"},
-        {"FormatRange", "format"},
-        {"CreateChart", "chart"},
-        {"CleanData", "clean"},
-        {"DataAnalysis", "data"},
-        {"TransformData", "data"},
-        {"GenerateReport", "data"}
-    }
 
     ' 操作类型中文描述
     Private Shared ReadOnly OperationDescriptions As New Dictionary(Of String, String) From {
@@ -110,73 +84,6 @@ Public Class ExecutionPlanRenderer
         End Try
 
         Return plan
-    End Function
-
-    ''' <summary>
-    ''' 将执行计划渲染为HTML
-    ''' </summary>
-    Public Function RenderPlanToHtml(plan As List(Of ExecutionStep), uuid As String, originalJson As String) As String
-        If plan Is Nothing OrElse plan.Count = 0 Then
-            Return ""
-        End If
-
-        Dim sb As New StringBuilder()
-        sb.AppendLine($"<div class=""execution-plan-container"" data-uuid=""{uuid}"">")
-        sb.AppendLine("  <div class=""plan-header"">📋 执行计划</div>")
-        sb.AppendLine("  <div class=""plan-steps"">")
-
-        For Each execStep In plan
-            Dim icon = GetStepIconEmoji(execStep.Icon)
-            Dim modifyBadge = If(Not String.IsNullOrEmpty(execStep.WillModify),
-                                $"<span class=""modify-badge"">→ {HttpUtility.HtmlEncode(execStep.WillModify)}</span>", "")
-            Dim timeBadge = If(Not String.IsNullOrEmpty(execStep.EstimatedTime),
-                              $"<span class=""time-badge"">⏱️ {execStep.EstimatedTime}</span>", "")
-
-            sb.AppendLine($"    <div class=""plan-step"">")
-            sb.AppendLine($"      <span class=""step-badge"">{execStep.StepNumber}</span>")
-            sb.AppendLine($"      <div class=""step-content"">")
-            sb.AppendLine($"        <div class=""step-title"">{icon} {HttpUtility.HtmlEncode(execStep.Description)}</div>")
-            If Not String.IsNullOrEmpty(modifyBadge) OrElse Not String.IsNullOrEmpty(timeBadge) Then
-                sb.AppendLine($"        <div class=""step-details"">{modifyBadge}{timeBadge}</div>")
-            End If
-            sb.AppendLine("      </div>")
-            sb.AppendLine("    </div>")
-        Next
-
-        sb.AppendLine("  </div>")
-        sb.AppendLine("  <div class=""plan-actions"">")
-        sb.AppendLine($"    <button class=""execute-plan-btn"" onclick=""executePlanFromRenderer('{uuid}')"">执行此计划</button>")
-        sb.AppendLine($"    <button class=""show-code-btn"" onclick=""toggleCodeViewFromRenderer('{uuid}')"">查看代码</button>")
-        sb.AppendLine("  </div>")
-
-        ' 隐藏的原始代码区域
-        Dim escapedJson = HttpUtility.HtmlEncode(originalJson)
-        sb.AppendLine($"  <div class=""original-code"" id=""code-{uuid}"">")
-        sb.AppendLine($"    <pre><code class=""language-json"">{escapedJson}</code></pre>")
-        sb.AppendLine("  </div>")
-
-        sb.AppendLine("</div>")
-
-        Return sb.ToString()
-    End Function
-
-    ''' <summary>
-    ''' 将执行计划转换为JSON（供前端使用）
-    ''' </summary>
-    Public Function PlanToJson(plan As List(Of ExecutionStep)) As JArray
-        Dim result As New JArray()
-
-        For Each execStep In plan
-            Dim stepObj As New JObject()
-            stepObj("stepNumber") = execStep.StepNumber
-            stepObj("description") = execStep.Description
-            stepObj("icon") = execStep.Icon
-            stepObj("willModify") = If(execStep.WillModify, "")
-            stepObj("estimatedTime") = If(execStep.EstimatedTime, "1秒")
-            result.Add(stepObj)
-        Next
-
-        Return result
     End Function
 
 #End Region
@@ -407,28 +314,6 @@ Public Class ExecutionPlanRenderer
 #End Region
 
 #Region "辅助方法"
-
-    ''' <summary>
-    ''' 获取步骤图标的Emoji
-    ''' </summary>
-    Private Function GetStepIconEmoji(iconType As String) As String
-        Select Case iconType?.ToLower()
-            Case "search"
-                Return "🔍"
-            Case "data"
-                Return "📊"
-            Case "formula"
-                Return "🧮"
-            Case "chart"
-                Return "📈"
-            Case "format"
-                Return "🎨"
-            Case "clean"
-                Return "🧹"
-            Case Else
-                Return "⚡"
-        End Select
-    End Function
 
     ''' <summary>
     ''' 获取公式的友好描述

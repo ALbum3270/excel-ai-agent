@@ -41,6 +41,17 @@ Public Class ExecutionResult
 End Class
 
 ''' <summary>
+''' 修改过的 Range 信息（用于回滚）。
+''' </summary>
+Public Class ModifiedRangeInfo
+    Public Property InstructionId As String
+    Public Property Start As Integer
+    Public Property [End] As Integer
+    Public Property OriginalSnapshot As String
+    Public Property ParagraphIndex As Integer = -1
+End Class
+
+''' <summary>
 ''' 单个操作执行结果（P0-4：与 ToolResult 对齐的错误契约字段）
 ''' </summary>
 Public Class OperationResult

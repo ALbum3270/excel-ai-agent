@@ -35,17 +35,6 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
-// Strip HTML tags from string
-function stripHtml(html) {
-    try {
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html || '';
-        return (tmp.textContent || tmp.innerText || '').trim();
-    } catch (e) {
-        return html || '';
-    }
-}
-
 // Convert markdown to plain text
 function markdownToPlain(md) {
     try {

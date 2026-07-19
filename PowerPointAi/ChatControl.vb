@@ -25,7 +25,6 @@ Public Class ChatControl
     Inherits BaseChatControl
 
 
-    Private sheetContentItems As New Dictionary(Of String, Tuple(Of System.Windows.Forms.Label, System.Windows.Forms.Button))
 
     ' 排版上下文：存储待格式化的形状和类型信息
     Private _reformatShapes As List(Of Object) = Nothing
@@ -358,51 +357,6 @@ Public Class ChatControl
             Debug.WriteLine($"获取PowerPoint选中内容时出错: {ex.Message}")
         End Try
     End Sub
-
-    Private Function GetSelectionDetails(selection As Object) As String
-        Try
-            Dim details As New StringBuilder()
-            Dim ppSelection = TryCast(selection, Microsoft.Office.Interop.PowerPoint.Selection)
-
-            If ppSelection Is Nothing Then
-                Return "未选中任何内容"
-            End If
-
-            ' 添加基本信息
-            details.AppendLine($"选择类型: {ppSelection.Type}")
-
-            If ppSelection.Type = Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionShapes Then
-                Dim shapeRange = ppSelection.ShapeRange
-                details.AppendLine($"形状数量: {shapeRange.Count}")
-                For i = 1 To shapeRange.Count
-                    details.AppendLine($"形状 {i} 类型: {shapeRange(i).Type}")
-                    ' 检查是否是表格
-                    If shapeRange(i).HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                        Dim table = shapeRange(i).Table
-                        details.AppendLine($"表格大小: {table.Rows.Count}行 x {table.Columns.Count}列")
-                    ElseIf shapeRange(i).HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                        details.AppendLine($"形状 {i} 文本长度: {shapeRange(i).TextFrame.TextRange.Length}")
-                    End If
-                Next
-
-            ElseIf ppSelection.Type = Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionText Then
-                Dim textRange = ppSelection.TextRange
-                details.AppendLine($"文本长度: {textRange.Length}")
-                details.AppendLine($"字符数: {textRange.Length}")
-
-            ElseIf ppSelection.Type = Microsoft.Office.Interop.PowerPoint.PpSelectionType.ppSelectionSlides Then
-                Dim slideRange = ppSelection.SlideRange
-                details.AppendLine($"选中幻灯片数: {slideRange.Count}")
-                For i = 1 To slideRange.Count
-                    details.AppendLine($"幻灯片 {i} 标题: {slideRange(i).Name}")
-                Next
-            End If
-
-            Return details.ToString()
-        Catch ex As Exception
-            Return $"获取选择详情时出错: {ex.Message}"
-        End Try
-    End Function
 
     ' 初始化时注入基础 HTML 结构
     Private Async Sub MainForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
@@ -823,222 +777,6 @@ Public Class ChatControl
     End Function
 
     ' 处理形状选择（包括表格）
-    Private Sub ProcessShapeSelection(builder As StringBuilder, selection As Microsoft.Office.Interop.PowerPoint.Selection)
-        Try
-            Dim shapeRange = selection.ShapeRange
-            builder.AppendLine($"形状数量: {shapeRange.Count}")
-
-            ' 遍历选中的形状
-            For i = 1 To shapeRange.Count
-                builder.AppendLine($"形状 {i}:")
-
-                ' 检查是否是表格
-                If shapeRange(i).HasTable = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                    ProcessTable(builder, shapeRange(i).Table)
-                ElseIf shapeRange(i).HasTextFrame = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                    ' 处理包含文本的形状
-                    Dim textFrame = shapeRange(i).TextFrame
-                    If textFrame.HasText = Microsoft.Office.Core.MsoTriState.msoTrue Then
-                        Dim text = textFrame.TextRange.Text.Trim()
-                        ' 限制文本长度
-                        If text.Length > 1000 Then
-                            builder.AppendLine(text.Substring(0, 1000) & "...")
-                            builder.AppendLine($"[文本太长，仅显示前1000个字符，总计: {text.Length}个字符]")
-                        Else
-                            builder.AppendLine(text)
-                        End If
-                    Else
-                        builder.AppendLine("[空文本框]")
-                    End If
-                ElseIf shapeRange(i).Type = Microsoft.Office.Core.MsoShapeType.msoPicture Then
-                    ' 处理图片
-                    builder.AppendLine("[图片]")
-                    ' 尝试获取图片的替代文本（如果有）
-                    If shapeRange(i).AlternativeText <> "" Then
-                        builder.AppendLine($"替代文本: {shapeRange(i).AlternativeText}")
-                    End If
-                ElseIf shapeRange(i).Type = Microsoft.Office.Core.MsoShapeType.msoChart Then
-                    ' 处理图表
-                    builder.AppendLine("[图表]")
-                    If shapeRange(i).AlternativeText <> "" Then
-                        builder.AppendLine($"图表说明: {shapeRange(i).AlternativeText}")
-                    End If
-                ElseIf shapeRange(i).Type = Microsoft.Office.Core.MsoShapeType.msoSmartArt Then
-                    ' 处理SmartArt
-                    builder.AppendLine("[SmartArt图形]")
-                Else
-                    ' 其他类型的形状
-                    builder.AppendLine($"[形状类型: {shapeRange(i).Type}]")
-                End If
-
-                ' 形状之间添加分隔线
-                builder.AppendLine("---")
-            Next
-
-        Catch ex As Exception
-            builder.AppendLine($"[处理形状时出错: {ex.Message}]")
-        End Try
-    End Sub
-
-    ' 处理表格内容
-    Private Sub ProcessTable(builder As StringBuilder, table As Microsoft.Office.Interop.PowerPoint.Table)
-        Try
-            builder.AppendLine($"表格: {table.Rows.Count}行 × {table.Columns.Count}列")
-
-            ' 限制显示的行列数
-            Dim maxRows As Integer = Math.Min(table.Rows.Count, 20)
-            Dim maxCols As Integer = Math.Min(table.Columns.Count, 10)
-
-            ' 处理表格头部（表格第一行）
-            If table.Rows.Count > 0 Then
-                ' 构建表头和分隔线
-                Dim headerBuilder As New StringBuilder()
-                Dim separatorBuilder As New StringBuilder()
-
-                For col As Integer = 1 To maxCols
-                    Try
-                        Dim cellText As String = table.Cell(1, col).Shape.TextFrame.TextRange.Text.Trim()
-
-                        ' 限制单元格文本长度
-                        If cellText.Length > 20 Then
-                            cellText = cellText.Substring(0, 17) & "..."
-                        End If
-
-                        ' 填充表头
-                        If col > 1 Then
-                            headerBuilder.Append(" | ")
-                            separatorBuilder.Append("-+-")
-                        End If
-                        headerBuilder.Append(cellText)
-                        separatorBuilder.Append(New String("-"c, Math.Max(cellText.Length, 3)))
-                    Catch ex As Exception
-                        ' 忽略单元格处理错误
-                        If col > 1 Then
-                            headerBuilder.Append(" | ")
-                            separatorBuilder.Append("-+-")
-                        End If
-                        headerBuilder.Append("N/A")
-                        separatorBuilder.Append("---")
-                    End Try
-                Next
-
-                ' 添加表头和分隔线
-                builder.AppendLine(headerBuilder.ToString())
-                builder.AppendLine(separatorBuilder.ToString())
-            End If
-
-            ' 处理表格数据行
-            For row As Integer = 2 To maxRows ' 从第2行开始（跳过表头）
-                Dim rowBuilder As New StringBuilder()
-
-                For col As Integer = 1 To maxCols
-                    Try
-                        Dim cellText As String = table.Cell(row, col).Shape.TextFrame.TextRange.Text.Trim()
-
-                        ' 限制单元格文本长度
-                        If cellText.Length > 20 Then
-                            cellText = cellText.Substring(0, 17) & "..."
-                        End If
-
-                        ' 填充行数据
-                        If col > 1 Then
-                            rowBuilder.Append(" | ")
-                        End If
-                        rowBuilder.Append(cellText)
-                    Catch ex As Exception
-                        ' 忽略单元格处理错误
-                        If col > 1 Then
-                            rowBuilder.Append(" | ")
-                        End If
-                        rowBuilder.Append("N/A")
-                    End Try
-                Next
-
-                ' 添加行数据
-                builder.AppendLine(rowBuilder.ToString())
-            Next
-
-            ' 如果有更多行未显示，添加提示
-            If table.Rows.Count > maxRows Then
-                builder.AppendLine($"... [表格共有 {table.Rows.Count} 行，仅显示前 {maxRows} 行]")
-            End If
-
-            ' 如果有更多列未显示，添加提示
-            If table.Columns.Count > maxCols Then
-                builder.AppendLine($"... [表格共有 {table.Columns.Count} 列，仅显示前 {maxCols} 列]")
-            End If
-
-        Catch ex As Exception
-            builder.AppendLine($"[处理表格内容时出错: {ex.Message}]")
-        End Try
-    End Sub
-
-    ' 处理文本选择
-    Private Sub ProcessTextSelection(builder As StringBuilder, selection As Microsoft.Office.Interop.PowerPoint.Selection)
-        Try
-            Dim textRange = selection.TextRange
-
-            If textRange IsNot Nothing Then
-                builder.AppendLine($"文本长度: {textRange.Length} 个字符")
-
-                ' 获取文本内容并限制长度
-                Dim text = textRange.Text.Trim()
-                Dim maxLength As Integer = 2000
-
-                If text.Length > maxLength Then
-                    builder.AppendLine(text.Substring(0, maxLength) & "...")
-                    builder.AppendLine($"[文本太长，仅显示前{maxLength}个字符，总计: {text.Length}个字符]")
-                Else
-                    builder.AppendLine(text)
-                End If
-            Else
-                builder.AppendLine("[无法获取文本内容]")
-            End If
-
-        Catch ex As Exception
-            builder.AppendLine($"[处理文本选择时出错: {ex.Message}]")
-        End Try
-    End Sub
-
-    ' 处理幻灯片选择
-    Private Sub ProcessSlideSelection(builder As StringBuilder, selection As Microsoft.Office.Interop.PowerPoint.Selection)
-        Try
-            Dim slideRange = selection.SlideRange
-            builder.AppendLine($"选中幻灯片数: {slideRange.Count}")
-
-            ' 限制处理的幻灯片数量
-            Dim maxSlides As Integer = Math.Min(slideRange.Count, 10)
-
-            For i = 1 To maxSlides
-                Dim slide = slideRange(i)
-                builder.AppendLine($"幻灯片 {slide.SlideIndex}:")
-
-                ' 获取幻灯片标题
-                Dim title As String = GetSlideTitle(slide)
-                If Not String.IsNullOrEmpty(title) Then
-                    builder.AppendLine($"标题: {title}")
-                End If
-
-                ' 获取幻灯片上的内容
-                builder.AppendLine("内容:")
-                Dim slideContent = GetSlideContent(slide)
-                builder.AppendLine(slideContent)
-
-                ' 添加分隔线
-                builder.AppendLine("---")
-            Next
-
-            ' 如果有更多幻灯片未显示，添加提示
-            If slideRange.Count > maxSlides Then
-                builder.AppendLine($"... [共选中 {slideRange.Count} 张幻灯片，仅显示前 {maxSlides} 张]")
-            End If
-
-        Catch ex As Exception
-            builder.AppendLine($"[处理幻灯片选择时出错: {ex.Message}]")
-        End Try
-    End Sub
-
-    ' 获取幻灯片标题
     Private Function GetSlideTitle(slide As Microsoft.Office.Interop.PowerPoint.Slide) As String
         Try
             ' 检查幻灯片是否有标题占位符
@@ -1402,9 +1140,12 @@ Public Class ChatControl
 
                 ' 获取当前幻灯片信息
                 Try
-                    Dim slideIndex = Globals.ThisAddIn.Application.ActiveWindow.View.Slide.SlideIndex
-                    snapshot("currentSlide") = slideIndex
-                Catch
+                    Dim currentSlide As Object = Globals.ThisAddIn.Application.ActiveWindow.View.Slide
+                    If currentSlide IsNot Nothing Then
+                        snapshot("currentSlide") = CInt(CallByName(currentSlide, "SlideIndex", CallType.Get))
+                    End If
+                Catch ex As Exception
+                    Debug.WriteLine($"GetContextSnapshot 获取当前幻灯片失败: {ex.GetType().Name}: {ex.Message}")
                 End Try
             End If
 
@@ -1468,7 +1209,7 @@ Public Class ChatControl
     ''' <summary>
     ''' 执行JSON命令（重写基类方法）- 带严格验证
     ''' </summary>
-    Protected Overrides Function ExecuteJsonCommand(jsonCode As String, preview As Boolean) As Boolean
+    Private Function ExecuteJsonCommandCore(jsonCode As String, preview As Boolean) As Boolean
         Try
             ' 预览模式下跳过自动执行（排版/校对模式的JSON用于预览，由用户手动点击应用）
             If IsInPreviewMode() Then
@@ -1522,6 +1263,235 @@ Public Class ChatControl
     End Function
 
     ''' <summary>
+    ''' 为 Agent 原生 PPT 工具返回真实 ToolResult，并以演示文稿/目标页快照生成最小 Observation。
+    ''' </summary>
+    Protected Overrides Function ExecuteJsonCommandWithToolResult(jsonCode As String, preview As Boolean) As Agent.ToolResult
+        Dim envelope As JObject = Nothing
+        Dim toolId As String = "PowerPointCommands"
+        Try
+            envelope = ParsePowerPointCommandEnvelope(jsonCode)
+            Dim commandArray = TryCast(envelope?("commands"), JArray)
+            If commandArray IsNot Nothing AndAlso commandArray.Count > 1 AndAlso
+               commandArray.OfType(Of JObject)().Any(Function(item)
+                   Return String.Equals(item("command")?.ToString(), "CreateSlides", StringComparison.OrdinalIgnoreCase)
+               End Function) Then
+                Return Agent.ToolResult.Failed("CreateSlides",
+                                               "Professional CreateSlides must be the only command in its envelope",
+                                               errorCode:=ExceptionClassifier.CodeOperationSchemaInvalid,
+                                               userMessage:="专业整套幻灯片生成必须作为独立 CreateSlides 调用，请将后续图片、图表或对象操作拆成下一步",
+                                               recoverable:=True,
+                                               observation:=New JObject From {
+                                                   {"kind", "write"},
+                                                   {"summary", "CreateSlides 未执行：检测到混合命令数组"},
+                                                   {"changed", False},
+                                                   {"warnings", New JArray("mixed_create_slides_envelope")}
+                                               })
+            End If
+            toolId = GetPowerPointEnvelopeToolId(envelope)
+            If String.Equals(toolId, "DiscoverOfficeCapability", StringComparison.OrdinalIgnoreCase) Then
+                Return OfficeRuntime.PowerPointApiCatalogProvider.SearchAsToolResult(
+                    GetPowerPointEnvelopeParams(envelope))
+            End If
+            If String.Equals(toolId, "CreateSlides", StringComparison.OrdinalIgnoreCase) Then
+                Return Design.ProfessionalDeckExecutor.ExecuteAsToolResult(
+                    GetPowerPointEnvelopeParams(envelope), preview)
+            End If
+            If String.Equals(toolId, "OfficeObjectOperation", StringComparison.OrdinalIgnoreCase) Then
+                Return OfficeRuntime.PowerPointOperationExecutor.Execute(
+                    GetPowerPointEnvelopeParams(envelope))
+            End If
+            Dim beforeSnapshot = CapturePowerPointCommandSnapshot(envelope)
+            Dim success = ExecuteJsonCommandCore(jsonCode, preview)
+            Dim afterSnapshot = CapturePowerPointCommandSnapshot(envelope)
+            Dim observation = BuildPowerPointCommandObservation(toolId, success, beforeSnapshot, afterSnapshot)
+            Dim summary = If(observation?("summary")?.ToString(), $"{toolId} 执行完成")
+
+            If success Then
+                Return Agent.ToolResult.Succeed(toolId,
+                                                summary,
+                                                data:=New With {.targetRefs = observation("targetRefs")},
+                                                observation:=observation)
+            End If
+
+            Return Agent.ToolResult.Failed(toolId,
+                                           summary,
+                                           errorCode:=ExceptionClassifier.CodeUnknown,
+                                           userMessage:=summary,
+                                           recoverable:=True,
+                                           observation:=observation)
+        Catch ex As Exception
+            Return Agent.ToolResult.FromException(toolId, ex)
+        End Try
+    End Function
+
+    Private Shared Function ParsePowerPointCommandEnvelope(jsonCode As String) As JObject
+        If String.IsNullOrWhiteSpace(jsonCode) Then Return Nothing
+        Dim normalized = jsonCode
+        Dim escapedQuote = ChrW(92) & ChrW(34)
+        If normalized.Contains(escapedQuote) Then normalized = normalized.Replace(escapedQuote, ChrW(34))
+        Return TryCast(JToken.Parse(normalized), JObject)
+    End Function
+
+    Private Shared Function GetPowerPointEnvelopeToolId(envelope As JObject) As String
+        If envelope Is Nothing Then Return "PowerPointCommands"
+        Dim commands = TryCast(envelope("commands"), JArray)
+        If commands IsNot Nothing Then
+            If commands.Count = 1 AndAlso commands(0).Type = JTokenType.Object Then
+                Dim singleCommand = commands(0)("command")?.ToString()
+                If Not String.IsNullOrWhiteSpace(singleCommand) Then Return singleCommand.Trim()
+            End If
+            Return "PowerPointCommands"
+        End If
+        Dim command = envelope("command")?.ToString()
+        Return If(String.IsNullOrWhiteSpace(command), "PowerPointCommands", command.Trim())
+    End Function
+
+    Private Shared Function GetPowerPointEnvelopeParams(envelope As JObject) As JObject
+        If envelope Is Nothing Then Return Nothing
+        Dim commands = TryCast(envelope("commands"), JArray)
+        If commands IsNot Nothing AndAlso commands.Count = 1 AndAlso commands(0).Type = JTokenType.Object Then
+            Return TryCast(commands(0)("params"), JObject)
+        End If
+        Return TryCast(envelope("params"), JObject)
+    End Function
+
+    Private Function CapturePowerPointCommandSnapshot(envelope As JObject) As JObject
+        Dim snapshot As New JObject()
+        Try
+            Dim app = Globals.ThisAddIn.Application
+            Dim presentation = app.ActivePresentation
+            If presentation Is Nothing Then Return snapshot
+
+            snapshot("presentation") = If(presentation.Name, "")
+            snapshot("slideCount") = CInt(presentation.Slides.Count)
+
+            Dim slideIndex = ResolvePowerPointTargetSlideIndex(envelope, presentation.Slides.Count)
+            If slideIndex <= 0 Then
+                Try
+                    slideIndex = CInt(app.ActiveWindow.View.Slide.SlideIndex)
+                Catch
+                    If presentation.Slides.Count > 0 Then slideIndex = 1
+                End Try
+            End If
+            snapshot("slideIndex") = slideIndex
+
+            If slideIndex > 0 AndAlso slideIndex <= presentation.Slides.Count Then
+                Dim slide = presentation.Slides(slideIndex)
+                snapshot("shapeCount") = CInt(slide.Shapes.Count)
+                snapshot("titleHash") = ComputePowerPointObservationHash(GetPowerPointSlideTitle(slide))
+                snapshot("textHash") = ComputePowerPointObservationHash(GetPowerPointSlideText(slide))
+                snapshot("textPreview") = TruncatePowerPointObservationText(GetPowerPointSlideText(slide), 240)
+                snapshot("notesHash") = ComputePowerPointObservationHash(GetPowerPointNotesText(slide))
+            End If
+        Catch ex As Exception
+            snapshot("captureError") = AppLogger.Redact(ex.Message)
+        End Try
+        Return snapshot
+    End Function
+
+    Private Shared Function ResolvePowerPointTargetSlideIndex(envelope As JObject, slideCount As Integer) As Integer
+        If envelope Is Nothing Then Return 0
+        Dim command = envelope
+        If envelope("commands") IsNot Nothing AndAlso envelope("commands").Type = JTokenType.Array Then
+            command = TryCast(envelope("commands").FirstOrDefault(), JObject)
+        End If
+        Dim rawIndex = command?("params")?("slideIndex")?.Value(Of Integer)()
+        If rawIndex.HasValue Then
+            ' 现有 PPT 命令参数大多按 0-based 解释，快照转换为 Office 1-based。
+            Return Math.Max(1, Math.Min(slideCount, rawIndex.Value + 1))
+        End If
+        Return 0
+    End Function
+
+    Private Shared Function BuildPowerPointCommandObservation(toolId As String,
+                                                              success As Boolean,
+                                                              beforeSnapshot As JObject,
+                                                              afterSnapshot As JObject) As JObject
+        Dim changed = Not JToken.DeepEquals(beforeSnapshot, afterSnapshot)
+        Dim slideIndex = If(afterSnapshot?("slideIndex")?.Value(Of Integer)(), beforeSnapshot?("slideIndex")?.Value(Of Integer)())
+        Dim targetRefs As New JArray()
+        If slideIndex > 0 Then targetRefs.Add($"PowerPoint:Slide/{slideIndex}") Else targetRefs.Add("PowerPoint:Presentation")
+
+        Dim warnings As New JArray()
+        If success AndAlso Not changed Then warnings.Add("命令已处理，但幻灯片快照未检测到变化；可能为用户取消、格式等价或 noop")
+        If afterSnapshot?("captureError") IsNot Nothing Then warnings.Add(afterSnapshot("captureError"))
+
+        Dim diff As New JObject From {
+            {"slideCountDelta", GetPowerPointSnapshotInteger(afterSnapshot, "slideCount") - GetPowerPointSnapshotInteger(beforeSnapshot, "slideCount")},
+            {"shapeCountDelta", GetPowerPointSnapshotInteger(afterSnapshot, "shapeCount") - GetPowerPointSnapshotInteger(beforeSnapshot, "shapeCount")}
+        }
+
+        Return New JObject From {
+            {"kind", "write"},
+            {"summary", If(success, $"PowerPoint 工具 {toolId} 已执行", $"PowerPoint 工具 {toolId} 执行失败")},
+            {"targetRefs", targetRefs},
+            {"changed", changed},
+            {"before", beforeSnapshot},
+            {"after", afterSnapshot},
+            {"diff", diff},
+            {"warnings", warnings}
+        }
+    End Function
+
+    Private Shared Function GetPowerPointSnapshotInteger(snapshot As JObject, name As String) As Integer
+        If snapshot Is Nothing Then Return 0
+        Return If(snapshot(name)?.Value(Of Integer)(), 0)
+    End Function
+
+    Private Shared Function ComputePowerPointObservationHash(value As String) As String
+        Dim bytes = Encoding.UTF8.GetBytes(If(value, ""))
+        Using sha = System.Security.Cryptography.SHA256.Create()
+            Return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant()
+        End Using
+    End Function
+
+    Private Shared Function GetPowerPointSlideTitle(slide As Object) As String
+        Try
+            If slide.Shapes.Title IsNot Nothing AndAlso slide.Shapes.Title.HasTextFrame Then
+                Return If(slide.Shapes.Title.TextFrame.TextRange.Text, "")
+            End If
+        Catch
+        End Try
+        Return ""
+    End Function
+
+    Private Shared Function GetPowerPointSlideText(slide As Object) As String
+        Dim parts As New List(Of String)()
+        Try
+            For Each shape As Object In slide.Shapes
+                Try
+                    If shape.HasTextFrame AndAlso shape.TextFrame.HasText Then
+                        parts.Add(If(shape.TextFrame.TextRange.Text, ""))
+                    End If
+                Catch
+                End Try
+            Next
+        Catch
+        End Try
+        Return String.Join(vbLf, parts)
+    End Function
+
+    Private Shared Function GetPowerPointNotesText(slide As Object) As String
+        Dim parts As New List(Of String)()
+        Try
+            For Each shape As Object In slide.NotesPage.Shapes
+                Try
+                    If shape.HasTextFrame AndAlso shape.TextFrame.HasText Then parts.Add(If(shape.TextFrame.TextRange.Text, ""))
+                Catch
+                End Try
+            Next
+        Catch
+        End Try
+        Return String.Join(vbLf, parts)
+    End Function
+
+    Private Shared Function TruncatePowerPointObservationText(value As String, maxLength As Integer) As String
+        Dim text = If(value, "").Replace(vbCr, " ").Replace(vbLf, " ").Trim()
+        If text.Length <= maxLength Then Return text
+        Return text.Substring(0, maxLength)
+    End Function
+
+    ''' <summary>
     ''' 执行PPT命令数组
     ''' </summary>
     Private Function ExecutePPTCommandsArray(commandsArray As JToken, originalJson As String, preview As Boolean) As Boolean
@@ -1547,7 +1517,7 @@ Public Class ChatControl
             For Each cmd In commands
                 If cmd.Type = JTokenType.Object Then
                     Dim cmdObj = CType(cmd, JObject)
-                    If ExecutePPTCommand(cmdObj) Then
+                    If ExecutePPTCommand(cmdObj, preview) Then
                         successCount += 1
                     Else
                         failCount += 1
@@ -1586,7 +1556,7 @@ Public Class ChatControl
             End If
 
             ' 执行命令
-            Dim success = ExecutePPTCommand(commandJson)
+            Dim success = ExecutePPTCommand(commandJson, preview)
 
             If success Then
                 ShareRibbon.GlobalStatusStrip.ShowInfo($"命令 '{command}' 执行成功")
@@ -1605,7 +1575,7 @@ Public Class ChatControl
     ''' <summary>
     ''' 执行具体的PPT命令
     ''' </summary>
-    Private Function ExecutePPTCommand(commandJson As JObject) As Boolean
+    Private Function ExecutePPTCommand(commandJson As JObject, Optional preview As Boolean = False) As Boolean
         Try
             Dim command = commandJson("command")?.ToString()
             Dim params = commandJson("params")
@@ -1624,6 +1594,7 @@ Public Class ChatControl
                 Case "inserttable"
                     Return ExecuteInsertTable(params, pres)
                 Case "createslides"
+                    If preview AndAlso params IsNot Nothing Then params("preview") = True
                     Return ExecuteCreateSlides(params, pres)
                 Case "addanimation"
                     Return ExecuteAddAnimation(params, pres)
@@ -1637,7 +1608,7 @@ Public Class ChatControl
                     Return ExecuteDuplicateSlide(params, pres)
                 Case "moveslide"
                     Return ExecuteMoveSlide(params, pres)
-                Case "setslidelayout", "setsliidelayout"
+                Case "setslidelayout"
                     Return ExecuteSetSlideLayout(params, pres)
                 Case "applytheme"
                     Return ExecuteApplyTheme(params, pres)
@@ -1872,6 +1843,9 @@ Public Class ChatControl
                             AddTextBoxToSlide(slide, content, 50, 150, 620, 350, 18)
                         End If
                     End If
+
+                    ' CreateSlides 不能把 Office 默认白底文本当成可交付设计。
+                    BeautifySingleSlide(slide, BuildDefaultPptTheme(i))
                 Finally
                     ComObjectHelper.ReleaseComObject(slide)
                 End Try
@@ -2196,6 +2170,7 @@ Public Class ChatControl
 
     Private Sub BeautifySingleSlide(slide As Microsoft.Office.Interop.PowerPoint.Slide, theme As JToken)
         If slide Is Nothing Then Return
+        If theme Is Nothing Then theme = BuildDefaultPptTheme(Math.Max(0, slide.SlideIndex - 1))
 
         ' 应用背景色
         If theme IsNot Nothing AndAlso theme("background") IsNot Nothing Then
@@ -2239,6 +2214,26 @@ Public Class ChatControl
             ComObjectHelper.ReleaseComObject(shapes)
         End Try
     End Sub
+
+    Private Function BuildDefaultPptTheme(themeVariant As Integer) As JObject
+        Dim backgrounds = {"#F7F3EA", "#EEF4F7", "#F5F1F7"}
+        Dim accents = {"#7A3E2E", "#235B70", "#62406F"}
+        Dim index = Math.Abs(themeVariant) Mod backgrounds.Length
+        Return New JObject From {
+            {"background", backgrounds(index)},
+            {"titleFont", New JObject From {
+                {"name", "Microsoft YaHei"},
+                {"size", 30},
+                {"bold", True},
+                {"color", accents(index)}
+            }},
+            {"bodyFont", New JObject From {
+                {"name", "Microsoft YaHei"},
+                {"size", 20},
+                {"color", "#27323A"}
+            }}
+        }
+    End Function
 
     ''' <summary>
     ''' 应用字体样式

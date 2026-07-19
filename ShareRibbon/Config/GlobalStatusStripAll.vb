@@ -18,10 +18,6 @@ Public Module GlobalStatusStripAll
         Debug.WriteLine("GlobalStatusStrip已初始化，应用程序类型: " & application.GetType().FullName)
     End Sub
 
-    Public Sub ShowWarningStatus(message As String)
-        ShowWarning(message) ' 简化代码，使用同一个方法
-    End Sub
-
     ''' <summary>
     ''' 显示进度信息（只更新状态栏，不弹窗）
     ''' </summary>

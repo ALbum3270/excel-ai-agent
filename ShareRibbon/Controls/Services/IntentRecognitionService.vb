@@ -121,10 +121,7 @@ Public Class IntentResult
     ''' </summary>
     Public Property IsFollowUp As Boolean = False
 
-    ''' <summary>
-    ''' 识别出的核心话题关键词（供 ContextRelevanceService 使用）
-    ''' </summary>
-    Public Property TopicKeywords As List(Of String) = New List(Of String)()
+    Public Property RequestedOutputs As List(Of String) = New List(Of String)()
 End Class
 
 ''' <summary>
@@ -429,10 +426,13 @@ Public Class IntentRecognitionService
             End If
         Next
 
-        If maxScore > 0.1 Then
+        ' This is only the deterministic fallback when the LLM response is malformed.
+        ' One exact PowerPoint capability term must remain actionable instead of being
+        ' diluted by the total number of keywords in the category.
+        If maxScore > 0 Then
             result.OfficeIntent = maxIntent
             result.IntentType = ExcelIntentType.GENERAL_QUERY ' PPT意图映射到通用查询
-            result.Confidence = Math.Min(maxScore, 1.0)
+            result.Confidence = Math.Min(Math.Max(maxScore, 0.55), 1.0)
         End If
     End Sub
 
@@ -477,11 +477,15 @@ Public Class IntentRecognitionService
 
                     ' 如果LLM的意图类型判断更可信，也使用LLM的意图
                     If llmResult.Confidence > 0.3 Then
+                        ' OfficeIntent 才是跨宿主路由的权威字段。IntentType 仅保留给旧版 Excel
+                        ' 调用方兼容；只覆盖 IntentType 会把 Word/PPT 的 LLM 结果悄悄退回
+                        ' GENERAL_QUERY。
+                        result.OfficeIntent = llmResult.OfficeIntent
                         result.IntentType = llmResult.IntentType
                         result.UserFriendlyDescription = llmResult.UserFriendlyDescription
                     End If
 
-                    Debug.WriteLine($"LLM意图识别结果: {result.IntentType}, 置信度: {result.Confidence:F2}")
+                    Debug.WriteLine($"LLM意图识别结果: {result.OfficeIntent}, 置信度: {result.Confidence:F2}")
                 End If
             Catch ex As Exception
                 Debug.WriteLine($"LLM意图识别失败，使用默认置信度0.5: {ex.Message}")
@@ -497,8 +501,7 @@ Public Class IntentRecognitionService
     ''' 调用大模型识别意图 - 增强版，包含记忆上下文
     ''' </summary>
     Private Async Function IdentifyIntentWithLLMAsync(question As String, context As JObject) As Task(Of IntentResult)
-        Dim result As New IntentResult()
-        result.OriginalInput = question
+        Dim result As IntentResult = Nothing
 
         Try
             ' 获取API配置
@@ -602,20 +605,6 @@ Public Class IntentRecognitionService
     End Function
 
     ''' <summary>
-    ''' 获取意图识别系统提示词 - 根据AppType返回不同的提示词
-    ''' </summary>
-    Private Function GetIntentRecognitionSystemPrompt() As String
-        Select Case AppType
-            Case OfficeApplicationType.Word
-                Return GetWordIntentRecognitionPrompt()
-            Case OfficeApplicationType.PowerPoint
-                Return GetPowerPointIntentRecognitionPrompt()
-            Case Else ' Excel
-                Return GetExcelIntentRecognitionPrompt()
-        End Select
-    End Function
-
-    ''' <summary>
     ''' 增强版Excel意图识别提示词 - 更智能，支持记忆上下文
     ''' </summary>
     Private Function GetEnhancedExcelIntentRecognitionPrompt() As String
@@ -687,43 +676,6 @@ Public Class IntentRecognitionService
     ''' <summary>
     ''' Excel意图识别提示词
     ''' </summary>
-    Private Function GetExcelIntentRecognitionPrompt() As String
-        Return "你是一个Excel意图识别助手。分析用户的问题和上下文，识别用户想要执行的Excel操作。
-
-请用JSON格式返回识别结果：
-```json
-{
-  ""intentType"": ""DATA_ANALYSIS"",
-  ""confidence"": 0.85,
-  ""description"": ""用户想要对数据进行统计分析"",
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""直接执行数据分析""
-}
-```
-
-intentType必须是以下之一:
-- DATA_ANALYSIS: 数据分析（统计、汇总、透视表）
-- FORMULA_CALC: 公式计算
-- CHART_GEN: 图表生成
-- DATA_CLEANING: 数据清洗（去重、填充）
-- REPORT_GEN: 报表生成
-- DATA_TRANSFORMATION: 数据转换（合并、拆分）
-- FORMAT_STYLE: 格式样式调整
-- GENERAL_QUERY: 一般问答（不需要操作Excel）
-- UNCLEAR: 意图不明确，需要进一步询问
-
-confidence范围0-1，表示你对识别结果的确信程度。
-requiresConfirmation: 如果意图明确且操作安全，设为false；如果需要用户确认，设为true。
-
-注意：
-1. 如果用户只是打招呼或闲聊，intentType设为GENERAL_QUERY，confidence设为0.9
-2. 如果用户的请求涉及数据修改但表述不清，requiresConfirmation设为true
-3. 结合Excel上下文信息（如选中单元格、工作表）来更准确地判断意图"
-    End Function
-
-    ''' <summary>
-    ''' 增强版Word意图识别提示词
-    ''' </summary>
     Private Function GetEnhancedWordIntentRecognitionPrompt() As String
         Return "你是一个智能Word意图识别专家。深度分析用户的问题、上下文和相关记忆，精准识别用户的真实意图。
 
@@ -770,43 +722,6 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
     ''' <summary>
     ''' Word意图识别提示词
     ''' </summary>
-    Private Function GetWordIntentRecognitionPrompt() As String
-        Return "你是一个Word意图识别助手。分析用户的问题和上下文，识别用户想要执行的Word操作。
-
-请用JSON格式返回识别结果：
-```json
-{
-  ""intentType"": ""DOCUMENT_EDIT"",
-  ""confidence"": 0.85,
-  ""description"": ""用户想要编辑文档内容"",
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""直接执行文档编辑""
-}
-```
-
-intentType必须是以下之一:
-- DOCUMENT_EDIT: 文档编辑（插入、删除、替换文本）
-- TEXT_FORMAT: 文本格式化（字体、段落、样式）
-- TABLE_OPERATION: 表格操作（创建、编辑表格）
-- IMAGE_INSERT: 图片插入和处理
-- TOC_GENERATION: 目录生成和更新
-- REVIEW_COMMENT: 审阅和批注
-- FORMAT_STYLE: 格式样式调整
-- GENERAL_QUERY: 一般问答（不需要操作Word）
-- UNCLEAR: 意图不明确，需要进一步询问
-
-confidence范围0-1，表示你对识别结果的确信程度。
-requiresConfirmation: 如果意图明确且操作安全，设为false；如果需要用户确认，设为true。
-
-注意：
-1. 如果用户只是打招呼或闲聊，intentType设为GENERAL_QUERY，confidence设为0.9
-2. 如果用户的请求涉及文档大幅修改但表述不清，requiresConfirmation设为true
-3. 结合Word上下文信息（如选中文本、当前段落）来更准确地判断意图"
-    End Function
-
-    ''' <summary>
-    ''' 增强版PowerPoint意图识别提示词
-    ''' </summary>
     Private Function GetEnhancedPowerPointIntentRecognitionPrompt() As String
         Return "你是一个智能PowerPoint意图识别专家。深度分析用户的问题、上下文和相关记忆，精准识别用户的真实意图。
 
@@ -816,6 +731,8 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
   ""intentType"": ""SLIDE_CREATE"",
   ""confidence"": 0.90,
   ""description"": ""用户想要创建3页演示文稿"",
+  ""interactionMode"": ""execute"",
+  ""requestedOutputs"": [""slides"", ""images""],
   ""requiresConfirmation"": false,
   ""suggestedAction"": ""批量创建幻灯片"",
   ""executionPriority"": ""high"",
@@ -841,6 +758,9 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
 - MULTI_STEP_TASK: 多步骤复杂任务
 
 【智能判断】
+- interactionMode必须是 execute、answer、clarify 之一；它独立于intentType。
+- requestedOutputs列出执行后必须验证的产物，例如slides、images、chart、table、formatted_content。
+- 用户要求修改当前PPT时用execute；询问原因/用法时用answer；缺少阻塞信息时用clarify。
 - 用户说""做个PPT"" → MULTI_STEP_TASK, confidence=0.85
 - 用户说""添加动画"" → ANIMATION_EFFECT, confidence=0.92
 - 结合记忆中的模板偏好来判断"
@@ -849,54 +769,17 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
     ''' <summary>
     ''' PowerPoint意图识别提示词
     ''' </summary>
-    Private Function GetPowerPointIntentRecognitionPrompt() As String
-        Return "你是一个PowerPoint意图识别助手。分析用户的问题和上下文，识别用户想要执行的PPT操作。
-
-请用JSON格式返回识别结果：
-```json
-{
-  ""intentType"": ""SLIDE_CREATE"",
-  ""confidence"": 0.85,
-  ""description"": ""用户想要创建新幻灯片"",
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""直接创建幻灯片""
-}
-```
-
-intentType必须是以下之一:
-- SLIDE_CREATE: 创建幻灯片
-- SLIDE_LAYOUT: 幻灯片布局和版式
-- ANIMATION_EFFECT: 动画效果
-- TRANSITION_EFFECT: 切换效果
-- TEMPLATE_APPLY: 应用模板和主题
-- SPEAKER_NOTES: 演讲者备注
-- FORMAT_STYLE: 格式样式调整
-- GENERAL_QUERY: 一般问答（不需要操作PPT）
-- UNCLEAR: 意图不明确，需要进一步询问
-
-confidence范围0-1，表示你对识别结果的确信程度。
-requiresConfirmation: 如果意图明确且操作安全，设为false；如果需要用户确认，设为true。
-
-注意：
-1. 如果用户只是打招呼或闲聊，intentType设为GENERAL_QUERY，confidence设为0.9
-2. 如果用户的请求涉及幻灯片大幅修改但表述不清，requiresConfirmation设为true
-3. 结合PowerPoint上下文信息（如当前幻灯片、选中对象）来更准确地判断意图"
-    End Function
-
-    ''' <summary>
-    ''' 解析LLM返回的意图识别结果 - 支持不同Office应用
-    ''' </summary>
     Private Function ParseLLMIntentResponse(responseContent As String, originalQuestion As String) As IntentResult
         Dim result As New IntentResult()
         result.OriginalInput = originalQuestion
 
         Try
             Dim content = ExtractAssistantContentOrRaw(responseContent)
-            If String.IsNullOrEmpty(content) Then Return result
+            If String.IsNullOrEmpty(content) Then Return Nothing
 
             ' 提取JSON部分
             Dim jsonMatch = Regex.Match(content, "\{[\s\S]*\}")
-            If Not jsonMatch.Success Then Return result
+            If Not jsonMatch.Success Then Return Nothing
 
             Dim intentJson = JObject.Parse(jsonMatch.Value)
 
@@ -914,6 +797,16 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
                 result.UserFriendlyDescription = intentJson("description").ToString()
             End If
 
+            ' 与封闭意图枚举解耦：interactionMode 决定回答、澄清还是执行。
+            Dim interactionMode = intentJson("interactionMode")?.ToString()
+            If String.IsNullOrWhiteSpace(interactionMode) Then interactionMode = intentJson("responseMode")?.ToString()
+            result.ResponseMode = If(interactionMode, "").Trim().ToLowerInvariant()
+
+            Dim requestedOutputs = TryCast(intentJson("requestedOutputs"), JArray)
+            If requestedOutputs IsNot Nothing Then
+                result.RequestedOutputs = requestedOutputs.Select(Function(item) item.ToString().Trim().ToLowerInvariant()).Where(Function(item) Not String.IsNullOrWhiteSpace(item)).Distinct().ToList()
+            End If
+
             ' 解析是否需要确认
             If intentJson("requiresConfirmation") IsNot Nothing Then
                 Dim needsConfirm = CBool(intentJson("requiresConfirmation"))
@@ -926,6 +819,7 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
 
         Catch ex As Exception
             Debug.WriteLine($"ParseLLMIntentResponse 出错: {ex.Message}")
+            Return Nothing
         End Try
 
         Return result
@@ -1055,260 +949,7 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
     End Function
 
     ''' <summary>
-    ''' 根据Excel意图获取提示词
-    ''' </summary>
-    Private Function GetExcelPromptByIntent(intentType As ExcelIntentType) As String
-        Select Case intentType
-            Case ExcelIntentType.DATA_ANALYSIS
-                Return GetDataAnalysisPrompt()
-            Case ExcelIntentType.FORMULA_CALC
-                Return GetFormulaCalcPrompt()
-            Case ExcelIntentType.CHART_GEN
-                Return GetChartGenPrompt()
-            Case ExcelIntentType.DATA_CLEANING
-                Return GetDataCleaningPrompt()
-            Case ExcelIntentType.REPORT_GEN
-                Return GetReportGenPrompt()
-            Case ExcelIntentType.DATA_TRANSFORMATION
-                Return GetDataTransformPrompt()
-            Case ExcelIntentType.FORMAT_STYLE
-                Return GetFormatStylePrompt()
-            Case Else
-                Return GetGeneralPrompt()
-        End Select
-    End Function
-
-    ''' <summary>
-    ''' 根据Word意图获取提示词
-    ''' </summary>
-    Private Function GetWordPromptByIntent(intentType As OfficeIntentType) As String
-        Select Case intentType
-            Case OfficeIntentType.DOCUMENT_EDIT
-                Return GetWordDocumentEditPrompt()
-            Case OfficeIntentType.TEXT_FORMAT
-                Return GetWordTextFormatPrompt()
-            Case OfficeIntentType.TABLE_OPERATION
-                Return GetWordTableOperationPrompt()
-            Case OfficeIntentType.IMAGE_INSERT
-                Return GetWordImageInsertPrompt()
-            Case OfficeIntentType.TOC_GENERATION
-                Return GetWordTocGenerationPrompt()
-            Case OfficeIntentType.REVIEW_COMMENT
-                Return GetWordReviewCommentPrompt()
-            Case OfficeIntentType.FORMAT_STYLE
-                Return GetWordFormatStylePrompt()
-            Case Else
-                Return GetWordGeneralPrompt()
-        End Select
-    End Function
-
-    ''' <summary>
-    ''' 根据PowerPoint意图获取提示词
-    ''' </summary>
-    Private Function GetPowerPointPromptByIntent(intentType As OfficeIntentType) As String
-        Select Case intentType
-            Case OfficeIntentType.SLIDE_CREATE
-                Return GetPptSlideCreatePrompt()
-            Case OfficeIntentType.SLIDE_LAYOUT
-                Return GetPptSlideLayoutPrompt()
-            Case OfficeIntentType.ANIMATION_EFFECT
-                Return GetPptAnimationEffectPrompt()
-            Case OfficeIntentType.TRANSITION_EFFECT
-                Return GetPptTransitionEffectPrompt()
-            Case OfficeIntentType.TEMPLATE_APPLY
-                Return GetPptTemplateApplyPrompt()
-            Case OfficeIntentType.SPEAKER_NOTES
-                Return GetPptSpeakerNotesPrompt()
-            Case OfficeIntentType.FORMAT_STYLE
-                Return GetPptFormatStylePrompt()
-            Case Else
-                Return GetPptGeneralPrompt()
-        End Select
-    End Function
-
-    ''' <summary>
-    ''' 获取严格的JSON Schema约束 - 优先从PromptManager读取，否则使用内置默认值
-    ''' </summary>
-    Private Function GetStrictJsonSchemaConstraint() As String
-        Try
-            ' 优先从PromptManager获取（支持用户自定义）
-            Dim appTypeName = AppType.ToString()
-            Dim constraint = PromptManager.Instance.GetJsonSchemaConstraint(appTypeName)
-            If Not String.IsNullOrEmpty(constraint) Then
-                Return constraint
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"从PromptManager获取JsonSchemaConstraint失败: {ex.Message}")
-        End Try
-        
-        ' 回退到内置默认值
-        Select Case AppType
-            Case OfficeApplicationType.Word
-                Return GetWordJsonSchemaConstraintDefault()
-            Case OfficeApplicationType.PowerPoint
-                Return GetPptJsonSchemaConstraintDefault()
-            Case Else ' Excel
-                Return GetExcelJsonSchemaConstraintDefault()
-        End Select
-    End Function
-
-    ''' <summary>
     ''' Excel专用JSON Schema约束（内置默认值）
-    ''' </summary>
-    Private Function GetExcelJsonSchemaConstraintDefault() As String
-        Return "
-【Excel JSON输出格式规范 - 必须严格遵守】
-
-【重要】JSON必须使用Markdown代码块格式返回，例如：
-```json
-{""command"": ""ApplyFormula"", ""params"": {...}}
-```
-禁止直接返回裸JSON文本！
-
-你必须且只能返回以下两种格式之一：
-
-单命令格式：
-```json
-{""command"": ""ApplyFormula"", ""params"": {""targetRange"": ""C1:C{lastRow}"", ""formula"": ""=A1+B1""}}
-```
-
-多命令格式：
-```json
-{""commands"": [{""command"": ""ApplyFormula"", ""params"": {""targetRange"": ""C1"", ""formula"": ""=A1+B1""}}, {""command"": ""ApplyFormula"", ""params"": {""targetRange"": ""E1"", ""formula"": ""=C1*D1""}}]}
-```
-
-【绝对禁止】
-- 禁止使用 actions 数组
-- 禁止使用 operations 数组
-- 禁止省略 params 包装
-- 禁止自创任何其他格式
-- 禁止返回不带代码块的裸JSON
-
-【Excel command类型 - 只能使用以下5种】
-1. ApplyFormula - 应用公式
-2. WriteData - 写入数据
-3. FormatRange - 格式化范围
-4. CreateChart - 创建图表
-5. CleanData - 清洗数据
-
-【占位符】使用 {lastRow} 表示最后一行
-
-如果需求不明确，直接用中文回复询问用户。"
-    End Function
-
-    ''' <summary>
-    ''' Word专用JSON Schema约束（内置默认值）
-    ''' </summary>
-    Private Function GetWordJsonSchemaConstraintDefault() As String
-        Return "
-【Word JSON输出格式规范 - 必须严格遵守】
-
-【重要】JSON必须使用Markdown代码块格式返回，例如：
-```json
-{""command"": ""InsertText"", ""params"": {...}}
-```
-禁止直接返回裸JSON文本！
-
-你必须且只能返回以下两种格式之一：
-
-单命令格式：
-```json
-{""command"": ""InsertText"", ""params"": {""content"": ""内容"", ""position"": ""cursor""}}
-```
-
-多命令格式：
-```json
-{""commands"": [{""command"": ""InsertText"", ""params"": {""content"": ""内容1""}}, {""command"": ""FormatText"", ""params"": {""bold"": true}}]}
-```
-
-【绝对禁止】
-- 禁止使用 actions 数组
-- 禁止使用 operations 数组
-- 禁止省略 params 包装
-- 禁止自创任何其他格式
-- 禁止使用Excel命令(WriteData, ApplyFormula等)
-- 禁止使用PPT命令(InsertSlide, CreateSlides等)
-- 禁止返回不带代码块的裸JSON
-
-【Word command类型 - 只能使用以下7种】
-1. InsertText - 插入文本
-   params: {content, position(cursor/start/end)}
-2. FormatText - 格式化文本
-   params: {bold, italic, underline, fontSize, fontName, color}
-3. ReplaceText - 替换文本
-   params: {find, replace, matchCase}
-4. InsertTable - 插入表格
-   params: {rows, cols, data(二维数组)}
-5. ApplyStyle - 应用样式
-   params: {styleName(Heading1/Heading2/Normal等)}
-6. GenerateTOC - 生成目录
-   params: {position(start/cursor), levels(1-9), includePageNumbers}
-7. BeautifyDocument - 美化文档
-   params: {theme{h1,h2,h3,body}, margins{top,bottom,left,right}}
-
-如果需求不明确，直接用中文回复询问用户。"
-    End Function
-
-    ''' <summary>
-    ''' PowerPoint专用JSON Schema约束（内置默认值）
-    ''' </summary>
-    Private Function GetPptJsonSchemaConstraintDefault() As String
-        Return "
-【PowerPoint JSON输出格式规范 - 必须严格遵守】
-
-【重要】JSON必须使用Markdown代码块格式返回，例如：
-```json
-{""command"": ""InsertSlide"", ""params"": {...}}
-```
-禁止直接返回裸JSON文本！
-
-你必须且只能返回以下两种格式之一：
-
-单命令格式（必须包含command字段）：
-```json
-{""command"": ""InsertSlide"", ""params"": {""title"": ""标题"", ""content"": ""内容""}}
-```
-
-多命令格式（必须包含commands数组）：
-```json
-{""commands"": [{""command"": ""InsertSlide"", ""params"": {""title"": ""标题1""}}, {""command"": ""AddAnimation"", ""params"": {""effect"": ""fadeIn""}}]}
-```
-
-【绝对禁止】
-- 禁止使用 actions 数组
-- 禁止使用 operations 数组  
-- 禁止省略 params 包装
-- 禁止自创任何其他格式
-- 禁止使用Excel命令(WriteData, ApplyFormula等)
-- 禁止使用Word命令(GenerateTOC, BeautifyDocument等)
-- 禁止返回不带代码块的裸JSON
-- 禁止缺少command/commands字段的JSON
-
-【PowerPoint command类型 - 只能使用以下9种】
-1. InsertSlide - 插入单页幻灯片
-   params: {position(end/start/指定位置), title, content, layout}
-2. CreateSlides - 批量创建多页幻灯片(推荐)
-   params: {slides数组[{title, content, layout}]}
-3. InsertText - 插入文本到幻灯片
-   params: {content, slideIndex(-1当前/0第一页)}
-4. InsertShape - 插入形状
-   params: {shapeType, x, y, width, height}
-5. FormatSlide - 格式化幻灯片
-   params: {slideIndex, background, transition, layout}
-6. InsertTable - 插入表格到幻灯片
-   params: {rows, cols, data, slideIndex}
-7. AddAnimation - 添加动画效果
-   params: {slideIndex(-1当前), effect(fadeIn/flyIn/zoom等), targetShapes(all/title/content)}
-8. ApplyTransition - 应用切换效果
-   params: {scope(all/current), transitionType(fade/push/wipe等), duration}
-9. BeautifySlides - 美化幻灯片
-   params: {scope(all/current), theme{background, titleFont, bodyFont}}
-
-如果需求不明确，直接用中文回复询问用户。"
-    End Function
-
-    ''' <summary>
-    ''' 生成用户友好的意图描述 - 根据AppType返回不同描述
     ''' </summary>
     Public Function GenerateUserFriendlyDescription(intent As IntentResult) As String
         Dim description As String
@@ -1469,352 +1110,10 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
         Return plan
     End Function
 
-    ''' <summary>
-    ''' 生成完整的意图澄清结果
-    ''' </summary>
-    Public Function GenerateIntentClarification(question As String, Optional context As JObject = Nothing) As IntentClarification
-        Dim clarification As New IntentClarification()
-        clarification.OriginalInput = question
-
-        ' 识别意图
-        Dim intent = IdentifyIntent(question, context)
-
-        ' 生成描述
-        clarification.Description = GenerateUserFriendlyDescription(intent)
-
-        ' 构建执行计划
-        clarification.ExecutionPlan = BuildExecutionPlanPreview(intent)
-
-        ' 所有模式都需要确认
-        clarification.RequiresConfirmation = True
-
-        Return clarification
-    End Function
-
-    ''' <summary>
-    ''' 将意图澄清结果转换为JSON（供前端使用）
-    ''' </summary>
-    Public Function IntentClarificationToJson(clarification As IntentClarification) As JObject
-        Dim result As New JObject()
-        result("description") = clarification.Description
-        result("originalInput") = clarification.OriginalInput
-        result("requiresConfirmation") = clarification.RequiresConfirmation
-
-        Dim planArray As New JArray()
-        For Each execStep In clarification.ExecutionPlan
-            Dim stepObj As New JObject()
-            stepObj("stepNumber") = execStep.StepNumber
-            stepObj("description") = execStep.Description
-            stepObj("icon") = execStep.Icon
-            stepObj("willModify") = If(execStep.WillModify, "")
-            stepObj("estimatedTime") = If(execStep.EstimatedTime, "1秒")
-            planArray.Add(stepObj)
-        Next
-        result("plan") = planArray
-
-        If clarification.ClarifyingQuestions.Count > 0 Then
-            Dim questionsArray As New JArray()
-            For Each q In clarification.ClarifyingQuestions
-                questionsArray.Add(q)
-            Next
-            result("clarifyingQuestions") = questionsArray
-        End If
-
-        Return result
-    End Function
-
 #End Region
 
 #Region "提示词模板"
 
-    Private Function GetDataAnalysisPrompt() As String
-        Return "你是Excel数据分析助手。
-
-如果用户需求明确，返回JSON命令执行。
-如果用户需求不明确，请先询问用户想要什么样的分析结果。
-
-支持的操作: 公式计算、数据汇总、图表生成、数据清洗"
-    End Function
-
-    Private Function GetFormulaCalcPrompt() As String
-        Return "你是Excel公式助手。
-
-如果用户需求明确，返回JSON命令执行公式。
-如果用户需求不明确，请先询问用户具体想计算什么。"
-    End Function
-
-    Private Function GetChartGenPrompt() As String
-        Return "你是Excel图表助手。
-
-如果用户需求明确，返回JSON命令创建图表。
-如果用户需求不明确，请先询问用户想要什么类型的图表、数据范围等。"
-    End Function
-
-    Private Function GetDataCleaningPrompt() As String
-        Return "你是Excel数据清洗助手。
-
-如果用户需求明确，返回JSON命令清洗数据。
-如果用户需求不明确，请先询问用户具体要做什么（去重、填充空值、去空格等）。"
-    End Function
-
-    Private Function GetReportGenPrompt() As String
-        Return "你是Excel报表助手。
-
-如果用户需求明确，返回JSON命令生成报表。
-如果用户需求不明确，请先询问用户报表的具体内容和格式要求。"
-    End Function
-
-    Private Function GetDataTransformPrompt() As String
-        Return "你是Excel数据转换助手。
-
-如果用户需求明确，返回JSON命令进行数据转换。
-如果用户需求不明确，请先询问用户具体的转换需求。"
-    End Function
-
-    Private Function GetFormatStylePrompt() As String
-        Return "你是Excel格式化助手。
-
-如果用户需求明确，返回JSON命令设置格式。
-如果用户需求不明确，请先询问用户想要什么样的格式效果。"
-    End Function
-
-    Private Function GetGeneralPrompt() As String
-        Return "你是Excel助手。
-
-【重要原则】
-1. 如果用户需求明确且可以执行，返回JSON命令
-2. 如果用户需求不明确，必须先询问用户澄清：
-   - 用户想对哪些数据操作？
-   - 用户期望的结果是什么？
-   - 涉及多个工作表时，请确认具体工作表名称
-3. 对于简单问候或问答，直接用中文回复即可"
-    End Function
-
-#End Region
-
-#Region "Word提示词模板"
-
-    Private Function GetWordDocumentEditPrompt() As String
-        Return "你是Word文档编辑助手。
-
-如果用户需求明确，返回JSON命令执行文档编辑操作。
-如果用户需求不明确，请先询问用户想要编辑什么内容。
-
-支持的操作: 插入文本、删除文本、替换文本、查找定位"
-    End Function
-
-    Private Function GetWordTextFormatPrompt() As String
-        Return "你是Word文本格式化助手。
-
-如果用户需求明确，返回JSON命令设置文本格式。
-如果用户需求不明确，请先询问用户想要什么样的格式效果（字体、字号、颜色、段落等）。"
-    End Function
-
-    Private Function GetWordTableOperationPrompt() As String
-        Return "你是Word表格操作助手。
-
-如果用户需求明确，返回JSON命令操作表格。
-如果用户需求不明确，请先询问用户想要创建、编辑还是删除表格，以及具体的行列数。"
-    End Function
-
-    Private Function GetWordImageInsertPrompt() As String
-        Return "你是Word图片处理助手。
-
-如果用户需求明确，返回JSON命令插入或处理图片。
-如果用户需求不明确，请先询问用户图片来源和插入位置。"
-    End Function
-
-    Private Function GetWordTocGenerationPrompt() As String
-        Return "你是Word目录生成助手。
-
-【支持的JSON命令】
-- GenerateTOC: 生成目录
-
-【GenerateTOC命令格式】
-```json
-{""command"": ""GenerateTOC"", ""params"": {""position"": ""start"", ""levels"": 3, ""includePageNumbers"": true}}
-```
-
-【参数说明】
-- position: start(文档开头) 或 cursor(光标位置)
-- levels: 目录层级(1-9)
-- includePageNumbers: 是否显示页码
-
-如果用户需求明确（如'生成目录'、'添加目录'），直接返回GenerateTOC命令。
-如果用户需求不明确，请先询问：目录放在开头还是当前位置？显示几级标题？"
-    End Function
-
-    Private Function GetWordReviewCommentPrompt() As String
-        Return "你是Word审阅批注助手。
-
-如果用户需求明确，返回JSON命令添加批注或处理修订。
-如果用户需求不明确，请先询问用户想要添加什么类型的批注。"
-    End Function
-
-    Private Function GetWordFormatStylePrompt() As String
-        Return "你是Word格式样式助手。
-
-【支持的JSON命令】
-- BeautifyDocument: 美化文档（应用统一样式、字体、页边距）
-- ApplyStyle: 应用单个样式
-
-【BeautifyDocument命令格式】
-```json
-{""command"": ""BeautifyDocument"", ""params"": {""theme"": {""h1"": {""font"": ""微软雅黑"", ""size"": 22, ""bold"": true}, ""h2"": {""font"": ""微软雅黑"", ""size"": 18, ""bold"": true}, ""body"": {""font"": ""宋体"", ""size"": 12, ""lineSpacing"": 1.5}}, ""margins"": {""top"": 2.5, ""bottom"": 2.5, ""left"": 3.0, ""right"": 3.0}}}
-```
-
-【参数说明】
-- theme.h1/h2/h3: 各级标题样式
-- theme.body: 正文样式(含lineSpacing行间距)
-- margins: 页边距(单位:厘米)
-
-当用户说'美化文档'、'统一格式'、'调整样式'时，返回BeautifyDocument命令。
-如果用户需求不明确，请先询问：想要什么字体？行间距多少？页边距要求？"
-    End Function
-
-    Private Function GetWordGeneralPrompt() As String
-        Return "你是Word助手。
-
-【重要原则】
-1. 如果用户需求明确且可以执行，一定要返回可解析成code区的JSON代码，而不是普通文本
-2. 如果用户需求不明确，必须先询问用户澄清：
-   - 用户想对文档哪部分操作？
-   - 用户期望的结果是什么？
-3. 对于简单问候或问答，直接用中文回复即可"
-    End Function
-
-#End Region
-
-#Region "PowerPoint提示词模板"
-
-    Private Function GetPptSlideCreatePrompt() As String
-        Return "你是PowerPoint幻灯片创建助手。
-
-【支持的JSON命令】
-- InsertSlide: 创建单页幻灯片
-- CreateSlides: 批量创建多页幻灯片（推荐用于创建多页）
-
-【CreateSlides命令格式（批量创建）】
-```json
-{""command"": ""CreateSlides"", ""params"": {""slides"": [{""title"": ""标题1"", ""content"": ""内容1"", ""layout"": ""titleAndContent""}, {""title"": ""标题2"", ""content"": ""内容2""}]}}
-```
-
-【InsertSlide命令格式（单页）】
-```json
-{""command"": ""InsertSlide"", ""params"": {""position"": ""end"", ""title"": ""标题"", ""content"": ""内容""}}
-```
-
-【layout可选值】
-- title: 仅标题
-- titleAndContent: 标题和内容（默认）
-- twoContent: 两栏内容
-- blank: 空白
-
-当用户说'生成10页PPT'、'创建关于AI的演示文稿'时，使用CreateSlides命令批量创建。
-当用户说'添加一页'、'新建幻灯片'时，使用InsertSlide命令创建单页。
-如果用户需求不明确，请先询问：需要几页？每页的标题和内容？"
-    End Function
-
-    Private Function GetPptSlideLayoutPrompt() As String
-        Return "你是PowerPoint布局助手。
-
-如果用户需求明确，返回JSON命令调整幻灯片布局。
-如果用户需求不明确，请先询问用户想要什么样的版式。"
-    End Function
-
-    Private Function GetPptAnimationEffectPrompt() As String
-        Return "你是PowerPoint动画效果助手。
-
-【支持的JSON命令】
-- AddAnimation: 为幻灯片元素添加动画
-
-【AddAnimation命令格式】
-```json
-{""command"": ""AddAnimation"", ""params"": {""slideIndex"": -1, ""effect"": ""fadeIn"", ""targetShapes"": ""all""}}
-```
-
-【参数说明】
-- slideIndex: -1表示当前幻灯片，0表示第一页
-- effect: fadeIn(淡入), flyIn(飞入), zoom(缩放), wipe(擦除), appear(出现), float(浮动)
-- targetShapes: all(所有元素), title(仅标题), content(仅内容)
-
-当用户说'添加动画'、'让元素淡入'时，直接返回AddAnimation命令。
-如果用户需求不明确，请先询问：要添加什么效果？应用到哪些元素？"
-    End Function
-
-    Private Function GetPptTransitionEffectPrompt() As String
-        Return "你是PowerPoint切换效果助手。
-
-【支持的JSON命令】
-- ApplyTransition: 设置幻灯片切换效果
-
-【ApplyTransition命令格式】
-```json
-{""command"": ""ApplyTransition"", ""params"": {""scope"": ""all"", ""transitionType"": ""fade"", ""duration"": 1.0}}
-```
-
-【参数说明】
-- scope: all(所有幻灯片), current(当前幻灯片)
-- transitionType: fade(淡出), push(推入), wipe(擦除), split(拆分), reveal(显示), random(随机)
-- duration: 切换时间(秒)
-
-当用户说'添加切换效果'、'设置幻灯片过渡'时，直接返回ApplyTransition命令。
-如果用户需求不明确，请先询问：应用到所有幻灯片还是当前页？要什么效果？"
-    End Function
-
-    Private Function GetPptTemplateApplyPrompt() As String
-        Return "你是PowerPoint模板主题助手。
-
-【支持的JSON命令】
-- BeautifySlides: 美化幻灯片（应用统一主题、字体、配色）
-
-【BeautifySlides命令格式】
-```json
-{""command"": ""BeautifySlides"", ""params"": {""scope"": ""all"", ""theme"": {""background"": ""#F5F5F5"", ""titleFont"": {""name"": ""微软雅黑"", ""size"": 28, ""color"": ""#333333""}, ""bodyFont"": {""name"": ""微软雅黑"", ""size"": 18, ""color"": ""#666666""}}}}
-```
-
-【参数说明】
-- scope: all(所有幻灯片), current(当前幻灯片)
-- theme.background: 背景颜色(十六进制)
-- theme.titleFont: 标题字体设置
-- theme.bodyFont: 正文字体设置
-
-当用户说'美化PPT'、'统一风格'、'应用主题'时，返回BeautifySlides命令。
-如果用户需求不明确，请先询问：想要什么配色？字体有什么要求？"
-    End Function
-
-    Private Function GetPptSpeakerNotesPrompt() As String
-        Return "你是PowerPoint演讲者备注助手。
-
-如果用户需求明确，返回JSON命令编辑演讲者备注。
-如果用户需求不明确，请先询问用户想要添加什么内容到备注。"
-    End Function
-
-    Private Function GetPptFormatStylePrompt() As String
-        Return "你是PowerPoint格式样式助手。
-
-如果用户需求明确，返回JSON命令设置幻灯片格式。
-如果用户需求不明确，请先询问用户想要什么样的格式效果。"
-    End Function
-
-    Private Function GetPptGeneralPrompt() As String
-        Return "你是PowerPoint助手。
-
-【重要原则】
-1. 如果用户需求明确且可以执行，返回JSON命令
-2. 如果用户需求不明确，必须先询问用户澄清：
-   - 用户想对哪张幻灯片操作？
-   - 用户期望的结果是什么？
-3. 对于简单问候或问答，直接用中文回复即可"
-    End Function
-
-#End Region
-
-#Region "辅助方法"
-
-    ''' <summary>
-    ''' 计算关键词匹配分数
-    ''' </summary>
     Private Function CalculateKeywordScore(text As String, keywords As String()) As Double
         Dim matchCount As Integer = 0
         Dim totalWeight As Double = 0
@@ -2027,6 +1326,11 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
     Private Function ExtractAssistantContentOrRaw(responseContent As String) As String
         If String.IsNullOrWhiteSpace(responseContent) Then Return ""
 
+        Dim trimmed = responseContent.TrimStart()
+        ' 普通文本/Markdown 是合法响应，不应先用 JObject.Parse 制造 first-chance
+        ' JsonReaderException。只有看起来像 API envelope 时才尝试解析。
+        If Not trimmed.StartsWith("{") Then Return responseContent
+
         Try
             Dim responseJson = JObject.Parse(responseContent)
             Dim choices = responseJson("choices")
@@ -2038,69 +1342,6 @@ requiresConfirmation: 如果意图明确且操作安全，设为false；如果�
         End Try
 
         Return responseContent
-    End Function
-
-#End Region
-
-#Region "上下文感知意图增强"
-
-    ''' <summary>
-    ''' 综合历史上下文的意图识别：在 IdentifyIntent 基础上叠加上下文连续性分析。
-    ''' 当 TopicContinuityScore > 0.6 时将 IsFollowUp 设为 True，无需调用 LLM。
-    ''' </summary>
-    Public Function AnalyzeContextualIntent(userMessage As String, historyMessages As List(Of HistoryMessage), Optional appType As String = Nothing) As IntentResult
-        ' 先做基础关键词意图识别
-        Dim result = IdentifyIntent(userMessage)
-
-        If historyMessages Is Nothing OrElse historyMessages.Where(Function(m) m.role <> "system").Count() < 2 Then
-            ' 历史太短，无法判断连续性
-            result.IsFollowUp = False
-            Return result
-        End If
-
-        ' 计算话题连续性分数（本地，不调用 LLM）
-        Dim continuityScore = TopicContinuityScore(userMessage, historyMessages)
-        Debug.WriteLine($"[IntentService] 话题连续性分数: {continuityScore:F3}")
-
-        result.IsFollowUp = continuityScore > 0.6
-
-        ' 提取 TopicKeywords，供 ContextRelevanceService 使用
-        result.TopicKeywords = ContextRelevanceService.ExtractKeywords(userMessage).Take(10).ToList()
-
-        ' 若为追问，提升意图置信度（承接上文意图更可信）
-        If result.IsFollowUp Then
-            result.Confidence = Math.Min(result.Confidence + 0.1, 1.0)
-            Debug.WriteLine($"[IntentService] 识别为追问，置信度提升至: {result.Confidence:F3}")
-        End If
-
-        Return result
-    End Function
-
-    ''' <summary>
-    ''' 计算新消息与历史消息的话题连续性分数（0=完全无关，1=高度连续）。
-    ''' 基于关键词 Jaccard 相似度，纯本地计算，零延迟。
-    ''' </summary>
-    Public Shared Function TopicContinuityScore(newMessage As String, historyMessages As List(Of HistoryMessage)) As Double
-        If String.IsNullOrWhiteSpace(newMessage) OrElse historyMessages Is Nothing Then Return 0.0
-
-        ' 只取最近 4 条非 system 消息做对比
-        Dim allRecent = historyMessages.
-            Where(Function(m) m.role <> "system" AndAlso Not String.IsNullOrWhiteSpace(m.content)).ToList()
-        Dim recentHistory = allRecent.Skip(Math.Max(0, allRecent.Count - 4)).ToList()
-
-        If recentHistory.Count = 0 Then Return 0.0
-
-        Dim newKeywords = ContextRelevanceService.ExtractKeywords(newMessage)
-        If newKeywords.Count = 0 Then Return 0.5 ' 关键词为空时默认中性
-
-        Dim histKeywords As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
-        For Each msg In recentHistory
-            For Each kw In ContextRelevanceService.ExtractKeywords(msg.content)
-                histKeywords.Add(kw)
-            Next
-        Next
-
-        Return ContextRelevanceService.JaccardSimilarity(newKeywords, histKeywords)
     End Function
 
 #End Region

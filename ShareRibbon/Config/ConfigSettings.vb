@@ -21,15 +21,5 @@ Public Class ConfigSettings
     Public Shared Property propmtName As String
     Public Shared Property propmtContent As String
 
-    ' OBSOLETE for smart-mode routing (P0-2): product path is always AgentKernel via ExecutionPathPolicy.
-    ' Kept for binary/config compatibility; ChatRoutingOrchestrator ignores false for smart-mode.
-    ' Prefer reading Agent.ExecutionPathPolicy.PreferAgentKernelForSmartMode instead of this flag.
-    Public Shared Property UseNewAgentKernel As Boolean = True
-
-    ' Loop 框架配置
-    Public Shared Property UseLoopFramework As Boolean = True
-    Public Shared Property UseAdvancedPlanning As Boolean = True
-    Public Shared Property MaxLoopIterations As Integer = 3
-
     Public Const OfficeAiAppDataFolder As String = "OfficeAiAppData"
 End Class

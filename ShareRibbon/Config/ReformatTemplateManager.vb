@@ -233,14 +233,6 @@ Public Class ReformatTemplateManager
         Return _templates.FirstOrDefault(Function(t) t.Id = templateId)
     End Function
 
-    ''' <summary>按分类获取模板</summary>
-    Public Function GetTemplatesByCategory(category As String) As List(Of ReformatTemplate)
-        If String.IsNullOrEmpty(category) OrElse category = "全部" Then
-            Return _templates.ToList()
-        End If
-        Return _templates.Where(Function(t) t.Category = category).ToList()
-    End Function
-
     ''' <summary>按应用类型获取模板</summary>
     Public Function GetTemplatesByApp(targetApp As String) As List(Of ReformatTemplate)
         Return _repository.GetTemplatesByApp(targetApp)

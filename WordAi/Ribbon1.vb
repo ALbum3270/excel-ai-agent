@@ -84,41 +84,6 @@ Public Class Ribbon1
         End Try
     End Sub
 
-    Private Function HasUsableFormattingSelection() As Boolean
-        Try
-            Dim wordApp = Globals.ThisAddIn.Application
-            If wordApp Is Nothing OrElse wordApp.Selection Is Nothing OrElse wordApp.Selection.Range Is Nothing Then
-                Return False
-            End If
-
-            If wordApp.Selection.Type = Microsoft.Office.Interop.Word.WdSelectionType.wdSelectionIP Then
-                Return False
-            End If
-
-            Dim selectedRange = wordApp.Selection.Range
-            Dim selectedText = If(selectedRange.Text, String.Empty)
-            Dim normalizedText = selectedText.
-                Replace(vbCr, String.Empty).
-                Replace(vbLf, String.Empty).
-                Replace(ChrW(7), String.Empty).
-                Trim()
-
-            If normalizedText.Length > 0 Then
-                Return True
-            End If
-
-            Try
-                If selectedRange.Tables IsNot Nothing AndAlso selectedRange.Tables.Count > 0 Then Return True
-                If selectedRange.InlineShapes IsNot Nothing AndAlso selectedRange.InlineShapes.Count > 0 Then Return True
-            Catch
-            End Try
-        Catch ex As Exception
-            Debug.WriteLine($"HasUsableFormattingSelection error: {ex.Message}")
-        End Try
-
-        Return False
-    End Function
-
     ' 一键翻译功能
     Protected Overrides Async Sub TranslateButton_Click(sender As Object, e As RibbonControlEventArgs)
         Try

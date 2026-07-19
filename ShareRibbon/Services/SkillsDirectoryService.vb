@@ -55,9 +55,6 @@ Public Class SkillFileDefinition
     ''' <summary>脚本列表（从 scripts/ 目录解析）</summary>
     Public Property Scripts As List(Of SkillScript) = New List(Of SkillScript)()
 
-    ''' <summary>默认脚本文件名（可选）</summary>
-    Public Property DefaultScript As String = ""
-
     Public ReadOnly Property AllowedToolsText As String
         Get
             If AllowedTools Is Nothing OrElse AllowedTools.Count = 0 Then Return ""
@@ -83,16 +80,6 @@ Public Class SkillFileDefinition
         End Get
     End Property
 
-    ''' <summary>
-    ''' 获取默认脚本（用于执行）
-    ''' </summary>
-    Public Function GetDefaultScript() As SkillScript
-        If Scripts Is Nothing OrElse Scripts.Count = 0 Then Return Nothing
-        If Not String.IsNullOrEmpty(DefaultScript) Then
-            Return Scripts.FirstOrDefault(Function(s) s.FileName = DefaultScript)
-        End If
-        Return Scripts.First()
-    End Function
 End Class
 
 ''' <summary>
@@ -156,14 +143,24 @@ Public Class SkillsDirectoryService
     Public Shared Function GetSkillsDirectories() As List(Of String)
         Dim dirs As New List(Of String)()
         Dim userDir = GetSkillsDirectory()
-        If Not String.IsNullOrWhiteSpace(userDir) Then dirs.Add(userDir)
+        AddSkillsDirectory(dirs, userDir)
 
         Try
-            Dim baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
-            If Not String.IsNullOrWhiteSpace(baseDir) Then
-                Dim bundledDir = Path.Combine(baseDir, "Skills")
-                If Not dirs.Any(Function(d) SamePath(d, bundledDir)) Then dirs.Add(bundledDir)
-            End If
+            Dim roots As New List(Of String) From {
+                Path.GetDirectoryName(GetType(SkillsDirectoryService).Assembly.Location),
+                AppDomain.CurrentDomain.BaseDirectory
+            }
+
+            ' VSTO 项目引用不会稳定地把 ShareRibbon 的 Content 传递复制到宿主输出目录。
+            ' 从程序集/宿主目录向上查找，兼容开发目录、安装目录和直接运行 ShareRibbon。
+            For Each root In roots.Where(Function(r) Not String.IsNullOrWhiteSpace(r))
+                Dim current = root
+                While Not String.IsNullOrWhiteSpace(current)
+                    AddSkillsDirectory(dirs, Path.Combine(current, "Skills"))
+                    AddSkillsDirectory(dirs, Path.Combine(current, "ShareRibbon", "Skills"))
+                    current = Path.GetDirectoryName(current)
+                End While
+            Next
         Catch ex As Exception
             Debug.WriteLine($"[SkillsDirectoryService] 获取内置 Skills 目录失败: {ex.Message}")
         End Try
@@ -171,15 +168,10 @@ Public Class SkillsDirectoryService
         Return dirs
     End Function
 
-    ''' <summary>
-    ''' 设置Skills目录路径
-    ''' </summary>
-    Public Shared Sub SetSkillsDirectory(path As String)
-        _skillsDirectory = path
-        _cachedSkills.Clear()
-        _cachedSkillCatalog.Clear()
-        _lastRefreshTime = DateTime.MinValue
-        _lastCatalogRefreshTime = DateTime.MinValue
+    Private Shared Sub AddSkillsDirectory(dirs As List(Of String), path As String)
+        If dirs Is Nothing OrElse String.IsNullOrWhiteSpace(path) Then Return
+        If dirs.Any(Function(d) SamePath(d, path)) Then Return
+        dirs.Add(path)
     End Sub
 
     ''' <summary>
@@ -242,6 +234,8 @@ Public Class SkillsDirectoryService
         Next
 
         _lastCatalogRefreshTime = DateTime.Now
+        Dim existingRoots = GetSkillsDirectories().Where(Function(d) Directory.Exists(d)).ToList()
+        Debug.WriteLine($"[SkillsDirectoryService] Skill catalog={_cachedSkillCatalog.Count}, roots={String.Join("; ", existingRoots)}")
     End Sub
 
     Private Shared Sub LoadSkillsFromRoot(rootDir As String, includeDetails As Boolean, target As List(Of SkillFileDefinition))
@@ -589,8 +583,11 @@ Public Class SkillsDirectoryService
                     Case "intent", "intents", "intent-type", "intent_type", "intent_types"
                         If skill.Metadata Is Nothing Then skill.Metadata = New Dictionary(Of String, Object)()
                         skill.Metadata("intent_types") = value
-                    Case "default-script"
-                        skill.DefaultScript = value
+                    Case Else
+                        ' 保留扩展 front matter，供运行时选择策略使用，例如
+                        ' default_for_application。未知元数据不应因解析器升级滞后而丢失。
+                        If skill.Metadata Is Nothing Then skill.Metadata = New Dictionary(Of String, Object)()
+                        skill.Metadata(key.ToLowerInvariant().Replace("-", "_")) = value
                 End Select
             End If
         Next

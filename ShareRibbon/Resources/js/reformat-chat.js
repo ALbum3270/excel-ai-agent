@@ -222,45 +222,6 @@
 '.formatting-refine-send-btn:hover {\n' +
 '    background: #1d4ed8;\n' +
 '}\n' +
-'.quick-reformat-indicator {\n' +
-'    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n' +
-'    border-radius: 8px;\n' +
-'    padding: 10px 16px;\n' +
-'    margin-bottom: 12px;\n' +
-'    color: white;\n' +
-'    animation: fadeIn 0.3s ease;\n' +
-'}\n' +
-'.quick-reformat-indicator-content {\n' +
-'    display: flex;\n' +
-'    align-items: center;\n' +
-'    gap: 8px;\n' +
-'}\n' +
-'.quick-reformat-icon {\n' +
-'    font-size: 18px;\n' +
-'}\n' +
-'.quick-reformat-text {\n' +
-'    flex: 1;\n' +
-'    font-size: 14px;\n' +
-'    font-weight: 500;\n' +
-'}\n' +
-'.quick-reformat-dismiss {\n' +
-'    background: rgba(255,255,255,0.2);\n' +
-'    border: none;\n' +
-'    color: white;\n' +
-'    width: 24px;\n' +
-'    height: 24px;\n' +
-'    border-radius: 50%;\n' +
-'    cursor: pointer;\n' +
-'    display: flex;\n' +
-'    align-items: center;\n' +
-'    justify-content: center;\n' +
-'    font-size: 16px;\n' +
-'    transition: background 0.2s;\n' +
-'}\n' +
-'.quick-reformat-dismiss:hover {\n' +
-'    background: rgba(255,255,255,0.35);\n' +
-'}\n' +
-'\n' +
 '/* ====== 智能排版面板（模板Tab内） ====== */\n' +
 '.smart-format-panel {\n' +
 '    display: flex;\n' +
@@ -585,14 +546,6 @@ window.sendRefinementCommand = function(uuid, command) {
  * 从卡片输入框读取内容并发送微调指令。
  * @param {string} uuid - 卡片UUID
  */
-window.sendRefinementFromCard = function(uuid) {
-    var input = document.querySelector('#content-' + uuid + ' .formatting-refine-input');
-    if (input && input.value.trim()) {
-        sendRefinementCommand(uuid, input.value.trim());
-        input.value = '';
-    }
-};
-
 /**
  * 切换微调输入区域的显示/隐藏。
  * @param {string} uuid - 卡片UUID
@@ -608,88 +561,4 @@ window.toggleRefinementInput = function(uuid) {
         var input = refineArea.querySelector('.formatting-refine-input');
         if (input) setTimeout(function() { input.focus(); }, 50);
     }
-};
-
-// ====== 速排指示器 ======
-
-/**
- * 在Chat顶部显示速排模式指示条。
- */
-window.showQuickReformatIndicator = function() {
-    var existing = document.getElementById('quick-reformat-indicator');
-    if (existing) return;
-
-    var chatContainer = document.getElementById('chat-container');
-    if (!chatContainer) return;
-
-    var indicator = document.createElement('div');
-    indicator.id = 'quick-reformat-indicator';
-    indicator.className = 'quick-reformat-indicator';
-    indicator.innerHTML =
-        '<div class="quick-reformat-indicator-content">' +
-        '  <span class="quick-reformat-icon">⚡</span>' +
-        '  <span class="quick-reformat-text">速排模式已开启</span>' +
-        '  <button class="quick-reformat-dismiss" id="quick-reformat-dismiss-btn">&times;</button>' +
-        '</div>';
-
-    chatContainer.insertBefore(indicator, chatContainer.firstChild);
-
-    var dismissBtn = document.getElementById('quick-reformat-dismiss-btn');
-    if (dismissBtn) {
-        dismissBtn.addEventListener('click', function() {
-            window.dismissQuickReformatIndicator();
-        });
-    }
-};
-
-/**
- * 关闭速排指示器。
- */
-window.dismissQuickReformatIndicator = function() {
-    var indicator = document.getElementById('quick-reformat-indicator');
-    if (indicator) indicator.remove();
-};
-
-// ====== 智能排版模式切换 ======
-
-/**
- * 进入智能排版模式。
- */
-window.enterSmartReformatMode = function() {
-    document.body.classList.add('smart-reformat-mode');
-    showQuickReformatIndicator();
-};
-
-/**
- * 退出智能排版模式。
- */
-window.exitSmartReformatMode = function() {
-    document.body.classList.remove('smart-reformat-mode');
-};
-
-/**
- * 显示排版引导提示（当用户未选中文本时由 Ribbon 按钮调用）
- */
-window.showQuickReformatGuide = function() {
-    var existing = document.getElementById('quick-reformat-guide');
-    if (existing) return;
-
-    var chatContainer = document.getElementById('chat-container');
-    if (!chatContainer) return;
-
-    var guide = document.createElement('div');
-    guide.id = 'quick-reformat-guide';
-    guide.className = 'quick-reformat-guide';
-    guide.innerHTML =
-        '<div class="quick-reformat-guide-content" style="background:#f0f7ff;border:1px solid #b3d4fc;border-radius:8px;padding:16px;margin:12px;">' +
-        '  <div style="font-weight:600;color:#1a56db;margin-bottom:8px;">&#x1F4D0; 智能排版使用说明</div>' +
-        '  <ul style="margin:0;padding-left:20px;color:#444;font-size:13px;line-height:1.8;">' +
-        '    <li>在文档中<span style="font-weight:600;">选中需要排版的内容</span>，然后点击 Ribbon 上的"排版"按钮</li>' +
-        '    <li>或在 Chat 中输入排版指令，如：<code style="background:#e8e8e8;padding:2px 6px;border-radius:3px;">按公文标准排版</code></li>' +
-        '    <li>支持标准：公文(GB/T 9704)、学术论文、商务报告、合同等</li>' +
-        '  </ul>' +
-        '  <button onclick="this.parentElement.parentElement.remove()" style="margin-top:8px;padding:4px 12px;border:1px solid #1a56db;background:white;color:#1a56db;border-radius:4px;cursor:pointer;font-size:12px;">知道了</button>' +
-        '</div>';
-
-    chatContainer.insertBefore(guide, chatContainer.firstChild);
 };

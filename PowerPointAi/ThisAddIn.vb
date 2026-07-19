@@ -10,7 +10,6 @@ Public Class ThisAddIn
     Private chatTaskPane As Microsoft.Office.Tools.CustomTaskPane
     Public Shared chatControl As ChatControl
     ' 翻译服务：延迟初始化，首次使用时创建
-    Private _translateService As PowerPointTranslateService
 
     ' 在类中添加以下变量
     Private _deepseekControl As DeepseekControl
@@ -42,7 +41,6 @@ Public Class ThisAddIn
     ''' 确保核心服务已加载（WebView2 + SQLite），首次调用时初始化
     ''' </summary>
     Private Sub EnsureCoreServicesLoaded()
-        If PhaseStartupManager.Instance.IsBackgroundReady Then Return
         Try
             Dim webView2Init = _lazyWebView2.Value
         Catch ex As Exception
@@ -128,6 +126,7 @@ Public Class ThisAddIn
             chatTaskPane = Me.CustomTaskPanes.Add(chatControl, "PPT AI智能助手")
             chatTaskPane.DockPosition = MsoCTPDockPosition.msoCTPDockPositionRight
             chatTaskPane.Width = 420
+            AddHandler chatTaskPane.VisibleChanged, AddressOf ChatTaskPane_VisibleChanged
         Catch ex As Exception
             MessageBox.Show($"初始化 PPT AI 任务窗格失败: {ex.Message}")
         End Try

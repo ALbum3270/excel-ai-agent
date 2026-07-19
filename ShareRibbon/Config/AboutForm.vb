@@ -10,7 +10,6 @@ Public Class AboutForm
 
     Private lblTitle As Label
     Private lblDescription As Label
-    Private lblAuthor As Label
     Private lblDataPath As Label
     Private lblBili As LinkLabel
     Private lblGitee As LinkLabel

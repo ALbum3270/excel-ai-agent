@@ -8,12 +8,6 @@ Namespace Handlers
     ''' </summary>
     Public Class FormulaHandler
 
-        Private ReadOnly _app As Excel.Application
-
-        Public Sub New(app As Excel.Application)
-            _app = app
-        End Sub
-
         ''' <summary>
         ''' 根据 AI 响应生成并应用公式
         ''' </summary>
@@ -102,124 +96,6 @@ Namespace Handlers
 
             Catch ex As Exception
                 Return False
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 生成常用公式的辅助方法
-        ''' </summary>
-        Public Class FormulaBuilder
-
-            ''' <summary>
-            ''' 生成 SUM 公式
-            ''' </summary>
-            Public Shared Function Sum(range As String) As String
-                Return String.Format("=SUM({0})", range)
-            End Function
-
-            ''' <summary>
-            ''' 生成 AVERAGE 公式
-            ''' </summary>
-            Public Shared Function Average(range As String) As String
-                Return String.Format("=AVERAGE({0})", range)
-            End Function
-
-            ''' <summary>
-            ''' 生成 COUNT 公式
-            ''' </summary>
-            Public Shared Function Count(range As String) As String
-                Return String.Format("=COUNT({0})", range)
-            End Function
-
-            ''' <summary>
-            ''' 生成 IF 公式
-            ''' </summary>
-            Public Shared Function IfFormula(condition As String, valueIfTrue As String, valueIfFalse As String) As String
-                Return String.Format("=IF({0},{1},{2})", condition, valueIfTrue, valueIfFalse)
-            End Function
-
-            ''' <summary>
-            ''' 生成 VLOOKUP 公式
-            ''' </summary>
-            Public Shared Function VLookup(lookupValue As String, tableArray As String, columnIndex As Integer, Optional rangeLookup As Boolean = False) As String
-                Return String.Format("=VLOOKUP({0},{1},{2},{3})", lookupValue, tableArray, columnIndex, If(rangeLookup, "TRUE", "FALSE"))
-            End Function
-
-            ''' <summary>
-            ''' 生成 CONCATENATE 公式
-            ''' </summary>
-            Public Shared Function Concatenate(ParamArray values As String()) As String
-                Return String.Format("=CONCATENATE({0})", String.Join(",", values))
-            End Function
-
-            ''' <summary>
-            ''' 生成 SUMIF 公式
-            ''' </summary>
-            Public Shared Function SumIf(range As String, criteria As String, Optional sumRange As String = Nothing) As String
-                If String.IsNullOrEmpty(sumRange) Then
-                    Return String.Format("=SUMIF({0},{1})", range, criteria)
-                Else
-                    Return String.Format("=SUMIF({0},{1},{2})", range, criteria, sumRange)
-                End If
-            End Function
-
-            ''' <summary>
-            ''' 生成 COUNTIF 公式
-            ''' </summary>
-            Public Shared Function CountIf(range As String, criteria As String) As String
-                Return String.Format("=COUNTIF({0},{1})", range, criteria)
-            End Function
-
-        End Class
-
-        ''' <summary>
-        ''' 智能单元格引用 - 将相对描述转换为单元格引用
-        ''' </summary>
-        Public Function ResolveReference(description As String, currentCell As Excel.Range) As String
-            Try
-                ' 处理相对引用
-                Dim lowerDesc As String = description.ToLower().Trim()
-
-                ' "上方" -> 上一行
-                If lowerDesc.Contains("上方") OrElse lowerDesc.Contains("上面") Then
-                    Return currentCell.Offset(-1, 0).Address(False, False)
-                End If
-
-                ' "下方" -> 下一行
-                If lowerDesc.Contains("下方") OrElse lowerDesc.Contains("下面") Then
-                    Return currentCell.Offset(1, 0).Address(False, False)
-                End If
-
-                ' "左边" -> 左一列
-                If lowerDesc.Contains("左边") OrElse lowerDesc.Contains("左侧") Then
-                    Return currentCell.Offset(0, -1).Address(False, False)
-                End If
-
-                ' "右边" -> 右一列
-                If lowerDesc.Contains("右边") OrElse lowerDesc.Contains("右侧") Then
-                    Return currentCell.Offset(0, 1).Address(False, False)
-                End If
-
-                ' "本行" -> 当前行
-                If lowerDesc.Contains("本行") OrElse lowerDesc.Contains("当前行") Then
-                    Dim startCell As Excel.Range = _app.Cells(currentCell.Row, 1)
-                    Dim endCell As Excel.Range = _app.Cells(currentCell.Row, currentCell.Column - 1)
-                    Return String.Format("{0}:{1}", startCell.Address(False, False), endCell.Address(False, False))
-                End If
-
-                ' "本列" -> 当前列
-                If lowerDesc.Contains("本列") OrElse lowerDesc.Contains("当前列") Then
-                    Dim startCell As Excel.Range = _app.Cells(1, currentCell.Column)
-                    Dim endCell As Excel.Range = _app.Cells(currentCell.Row - 1, currentCell.Column)
-                    Return String.Format("{0}:{1}", startCell.Address(False, False), endCell.Address(False, False))
-                End If
-
-                ' 默认返回原始描述（可能已经是单元格引用）
-                Return description
-
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine(String.Format("[FormulaHandler] 解析引用失败: {0}", ex.Message))
-                Return description
             End Try
         End Function
 

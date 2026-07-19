@@ -124,37 +124,6 @@ Public Class FormatTemplateRepository
         End Using
     End Function
 
-    ''' <summary>
-    ''' 获取源文件Blob
-    ''' </summary>
-    Public Function GetSourceFileBlob(templateId As String) As Byte()
-        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
-            conn.Open()
-            Using cmd As New SQLiteCommand("SELECT source_file_blob FROM format_template WHERE template_id = @templateId", conn)
-                cmd.Parameters.AddWithValue("@templateId", templateId)
-                Dim result = cmd.ExecuteScalar()
-                If result IsNot Nothing AndAlso Not IsDBNull(result) Then
-                    Return DirectCast(result, Byte())
-                End If
-            End Using
-        End Using
-        Return Nothing
-    End Function
-
-    ''' <summary>
-    ''' 保存源文件Blob
-    ''' </summary>
-    Public Sub SaveSourceFileBlob(templateId As String, fileBytes As Byte())
-        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
-            conn.Open()
-            Using cmd As New SQLiteCommand("UPDATE format_template SET source_file_blob = @blob WHERE template_id = @templateId", conn)
-                cmd.Parameters.AddWithValue("@templateId", templateId)
-                cmd.Parameters.AddWithValue("@blob", fileBytes)
-                cmd.ExecuteNonQuery()
-            End Using
-        End Using
-    End Sub
-
     Private Function ReadTemplateFromReader(reader As SQLiteDataReader) As ReformatTemplate
         Dim template As New ReformatTemplate With {
             .Id = If(IsDBNull(reader("template_id")), "", reader("template_id").ToString()),

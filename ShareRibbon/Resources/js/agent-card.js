@@ -48,6 +48,26 @@ function unlockChatInput() {
 }
 
 /**
+ * 恢复一次 Agent 请求占用的全部输入 UI。
+ * 输入锁和发送/终止按钮由不同模块管理，Agent 进入终态时必须同时复位。
+ */
+function restoreAgentRequestUi() {
+    unlockChatInput();
+
+    if (typeof changeSendButton === 'function') {
+        changeSendButton();
+        return;
+    }
+
+    // 脚本异常或加载顺序变化时的兜底，避免终止按钮永久停留。
+    const sendButton = document.getElementById('send-button');
+    const stopButton = document.getElementById('stop-button');
+    if (sendButton) sendButton.style.setProperty('display', 'flex', 'important');
+    if (stopButton) stopButton.style.setProperty('display', 'none', 'important');
+    if (typeof hideLoadingIndicator === 'function') hideLoadingIndicator();
+}
+
+/**
  * 检查是否被 Agent 锁定
  */
 function isAgentLocked() {
@@ -420,7 +440,7 @@ function abortAgent(uuid) {
         actions.innerHTML = '<span class="agent-terminated">已终止</span>';
     }
     requestAbortAgent();
-    unlockChatInput();
+    restoreAgentRequestUi();
 }
 
 /**
@@ -454,7 +474,7 @@ function updateAgentStatus(uuid, status, text) {
  * @param {boolean} success - 是否成功
  * @param {string} message - 完成消息
  */
-function completeAgent(uuid, success, message) {
+function completeAgent(uuid, success, message, thinkingUuid) {
     try {
         const statusBar = document.getElementById('agent-status-' + uuid);
         if (statusBar) {
@@ -471,12 +491,25 @@ function completeAgent(uuid, success, message) {
             actions.innerHTML = `<span class="agent-finished">${success ? '✅ 已完成' : '❌ 已失败'}</span>`;
         }
 
+        // 没有生成 plan card 时，状态仍显示在最初的 thinking 消息中。
+        if (thinkingUuid) {
+            const thinkingDiv = document.getElementById('content-' + thinkingUuid);
+            if (thinkingDiv) {
+                const icon = success ? '✅' : '❌';
+                const text = success ? '任务完成' : '任务失败';
+                thinkingDiv.innerHTML = `<div class="agent-terminal-message ${success ? 'success' : 'failed'}">` +
+                    `<span class="status-icon">${icon}</span>` +
+                    `<span class="status-text">${text}${message ? ': ' + escapeHtml(message) : ''}</span>` +
+                    `</div>`;
+            }
+        }
+
         window.agentCardState.active = false;
         window.agentCardState.session = null;
-        unlockChatInput();
     } catch (err) {
         console.error('completeAgent error:', err);
-        unlockChatInput();
+    } finally {
+        restoreAgentRequestUi();
     }
 }
 
@@ -492,22 +525,6 @@ function getStepIcon(status) {
         skipped: '⏭'
     };
     return icons[status] || '⏳';
-}
-
-/**
- * 获取状态文本
- */
-function getStatusText(status) {
-    const texts = {
-        planning: '规划中...',
-        ready: '准备就绪',
-        running: '执行中...',
-        paused: '已暂停',
-        completed: '已完成',
-        failed: '失败',
-        aborted: '已终止'
-    };
-    return texts[status] || status;
 }
 
 // 导出到全局
@@ -526,4 +543,5 @@ window.updateAgentStatus = updateAgentStatus;
 window.completeAgent = completeAgent;
 window.lockChatInput = lockChatInput;
 window.unlockChatInput = unlockChatInput;
+window.restoreAgentRequestUi = restoreAgentRequestUi;
 window.isAgentLocked = isAgentLocked;

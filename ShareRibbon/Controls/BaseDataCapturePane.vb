@@ -32,7 +32,6 @@ Public MustInherit Class BaseDataCapturePane
     Private navigationTimer As Timer
     Private Const NAVIGATION_TIMEOUT As Integer = 10000 ' 10秒超时
 
-    Private domSelectionMode As Boolean = False
     Private selectedDomPath As String = ""
 
     Private isInitialized As Boolean = False

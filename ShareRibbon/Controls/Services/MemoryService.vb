@@ -89,54 +89,6 @@ Public Class MemoryService
     End Function
 
     ''' <summary>
-    ''' 异步写入原子记忆（fire-and-forget），含简单去重。appType 为当前宿主（Excel/Word/PowerPoint），用于按应用筛选展示。
-    ''' </summary>
-    Public Shared Sub SaveAtomicMemoryAsync(userPrompt As String, assistantReply As String, sessionId As String, Optional appType As String = Nothing)
-        Task.Run(Async Function()
-                     Try
-                         If String.IsNullOrWhiteSpace(userPrompt) AndAlso String.IsNullOrWhiteSpace(assistantReply) Then Return
-
-                         ' 简化：取 user 前 N 字 + assistant 前 M 字 作为候选 content
-                         Dim maxLen = MemoryConfig.AtomicContentMaxLength
-                         Dim u = (If(userPrompt, "").Trim())
-                         Dim a = (If(assistantReply, "").Trim())
-                         Dim uPart = If(u.Length > maxLen \ 2, u.Substring(0, maxLen \ 2), u)
-                         Dim aPart = If(a.Length > maxLen \ 2, a.Substring(0, maxLen \ 2), a)
-                         Dim candidate = uPart & " | " & aPart
-                         If String.IsNullOrWhiteSpace(candidate) OrElse candidate.Length < 10 Then Return
-
-                         Dim prefix = candidate.Substring(0, Math.Min(50, candidate.Length))
-                         If MemoryRepository.ExistsMemoryWithPrefix(sessionId, prefix, "short_term") Then Return
-
-                         ' 异步生成向量嵌入
-                         Dim embeddingJson As String = Nothing
-                         Try
-                             Debug.WriteLine($"[MemoryService] 正在生成记忆向量...")
-                             Dim embedding = Await EmbeddingService.GetEmbeddingAsync(candidate)
-                             If embedding IsNot Nothing Then
-                                 embeddingJson = EmbeddingService.SerializeVector(embedding)
-                                 Debug.WriteLine($"[MemoryService] 记忆向量生成成功，维度: {embedding.Length}")
-                             End If
-                         Catch vecEx As Exception
-                             Debug.WriteLine($"[MemoryService] 生成记忆向量失败: {vecEx.Message}")
-                         End Try
-
-                         ' 使用增强重要性评分和知识关联
-                        Dim importance = UnifiedMemoryService.CalculateImportance(candidate, "conversation", Nothing)
-                        Dim memoryId = MemoryRepository.InsertMemory(candidate, embeddingJson, sessionId, appType, "short_term", importance, "conversation")
-                        Debug.WriteLine($"[MemoryService] 原子记忆已保存(ID={memoryId})，长度: {candidate.Length}, 重要性: {importance:F2}")
-
-                        ' 异步建立知识关联（fire-and-forget，不影响主流程）
-                        If memoryId > 0 Then
-                            Task.Run(Sub() UnifiedMemoryService.BuildMemoryAssociations(memoryId, candidate))
-                        End If
-                     Catch ex As Exception
-                         Debug.WriteLine($"SaveAtomicMemoryAsync 失败: {ex.Message}")
-                     End Try
-                 End Function)
-    End Sub
-
-    ''' <summary>
     ''' 保存文件解析内容到记忆（用于在收到AI回复前保存引用的文件内容）- 同步保存确保立即可用
     ''' </summary>
     Public Shared Sub SaveFileContentToMemory(userPrompt As String, fileContent As String, sessionId As String, Optional appType As String = Nothing)

@@ -16,17 +16,11 @@ Public Class OfficeCompletionService
         .Timeout = TimeSpan.FromSeconds(8)
     }
     
-    Private _debounceTimer As Timer
-    Private _lastInputText As String = ""
     Private _isEnabled As Boolean = False
     Private _currentCompletions As List(Of String)
-    Private _completionCallback As Action(Of List(Of String), System.Drawing.Point)
     
     ' 取消令牌源（用于取消进行中的请求）
     Private _cancellationTokenSource As CancellationTokenSource
-    
-    ' 防抖延迟（毫秒）
-    Private Const DEBOUNCE_DELAY_MS As Integer = 800
     
     ''' <summary>
     ''' 获取单例实例
@@ -65,50 +59,9 @@ Public Class OfficeCompletionService
     End Property
     
     ''' <summary>
-    ''' 设置补全回调（用于显示补全UI）
-    ''' </summary>
-    Public Sub SetCompletionCallback(callback As Action(Of List(Of String), System.Drawing.Point))
-        _completionCallback = callback
-    End Sub
-    
-    ''' <summary>
-    ''' 用户输入变化时调用（带防抖）
-    ''' </summary>
-    Public Sub OnTextChanged(inputText As String, cursorPosition As System.Drawing.Point, appType As String)
-        If Not _isEnabled OrElse Not ChatSettings.EnableAutocomplete Then
-            Return
-        End If
-        
-        ' 取消之前的定时器
-        CancelPendingRequest()
-        
-        ' 输入太短不触发
-        If String.IsNullOrWhiteSpace(inputText) OrElse inputText.Length < 3 Then
-            Return
-        End If
-        
-        _lastInputText = inputText
-        
-        ' 设置防抖定时器
-        _debounceTimer = New Timer(
-            Sub(state)
-                RequestCompletionAsync(inputText, cursorPosition, appType)
-            End Sub,
-            Nothing,
-            DEBOUNCE_DELAY_MS,
-            Timeout.Infinite
-        )
-    End Sub
-    
-    ''' <summary>
     ''' 取消待处理的请求
     ''' </summary>
     Public Sub CancelPendingRequest()
-        If _debounceTimer IsNot Nothing Then
-            _debounceTimer.Dispose()
-            _debounceTimer = Nothing
-        End If
-        
         ' 取消进行中的 HTTP 请求
         If _cancellationTokenSource IsNot Nothing Then
             Try
@@ -118,35 +71,6 @@ Public Class OfficeCompletionService
             End Try
         End If
         _cancellationTokenSource = New CancellationTokenSource()
-    End Sub
-    
-    ''' <summary>
-    ''' 异步请求补全
-    ''' </summary>
-    Private Async Sub RequestCompletionAsync(inputText As String, cursorPosition As System.Drawing.Point, appType As String)
-        Try
-            ' 检查输入是否已变化
-            If inputText <> _lastInputText Then
-                Return
-            End If
-            
-            Dim completions = Await GetCompletionsFromLLM(inputText, appType)
-            
-            ' 再次检查输入是否已变化
-            If inputText <> _lastInputText Then
-                Return
-            End If
-            
-            _currentCompletions = completions
-            
-            ' 回调显示补全
-            If completions.Count > 0 AndAlso _completionCallback IsNot Nothing Then
-                _completionCallback.Invoke(completions, cursorPosition)
-            End If
-            
-        Catch ex As Exception
-            Debug.WriteLine($"RequestCompletionAsync 出错: {ex.Message}")
-        End Try
     End Sub
     
     ''' <summary>
@@ -322,13 +246,6 @@ Public Class OfficeCompletionService
         Dim completions = Await GetCompletionsFromLLM(inputText, appType, token)
         _currentCompletions = completions
         Return completions
-    End Function
-    
-    ''' <summary>
-    ''' 获取当前补全列表
-    ''' </summary>
-    Public Function GetCurrentCompletions() As List(Of String)
-        Return _currentCompletions
     End Function
     
     ''' <summary>

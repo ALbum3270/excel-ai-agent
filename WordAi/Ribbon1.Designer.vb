@@ -51,7 +51,6 @@ Partial Class Ribbon1
         ' 提示词配置
         Me.PromptConfigButton.Image = ShareRibbon.SharedResources.promptconfig
         ' 自动补全（已禁用）
-        ' Me.AutocompleteSettingsButton.Image = ShareRibbon.SharedResources.autocomplete
 
         Me.ChatButton.Image = ShareRibbon.SharedResources.Chat
         Me.AboutButton.Image = ShareRibbon.SharedResources.About

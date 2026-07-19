@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | **v0.2（评审修订）** |
 | 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：`ToolResult` 已有 `ErrorCode/UserMessage/DebugDetail/Recoverable/ToolId/Data/Observation/UndoPointId/Artifacts`；原生 Office tool 已支持 `ToolResult` 回灌；Word `ListParagraphs/GetParagraphInfo` 已回传结构化 `Data`；Word `InsertText/FormatText/ReplaceText/DeleteText` 已返回 before/after/diff Observation；`LoopEngine` 已把 `ObservationJson` 与读工具 `DataSummaryJson` 写入 `ExecutionExplanation`，供 Agent 卡片和 RunTrace step 使用。UndoPoint 稳定绑定、Excel/PPT 写工具 Observation 仍待后续。 |
+| 实现状态 | **三端最小回执已实现**：`ToolResult` 完整字段、Word 读工具 Data、Word 基础写工具细粒度 Diff 均已接入；Word 其余原生命令不再返回空 ToolId 假成功；Excel/PPT JSON 命令返回宿主 before/after、target ref、UsedRange/slide/shape 等最小 Observation。UndoPoint 稳定绑定及 Excel/PPT 更细粒度领域 Diff 仍待增强。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §4.5 / §5.4 / §5.5 |
 | 现有代码 | `Agent/ToolRegistry.ToolResult`、`LoopEngine.FormatObservation`、`ExecutionExplanation`、`ExceptionClassifier`、`AppLogger` |
 | 依赖 | [`context-pack-schema.md`](./context-pack-schema.md) 的 before/after 快照 |
@@ -24,7 +24,7 @@
 ### 1.2 非目标
 
 - 不实现完整 Word 修订（Track Changes）语义合并。  
-- 不做像素级 PPT 视觉 diff（v1 以文本/形状计数为主）。  
+- 不要求建立全量基准图像素 diff；PowerPoint 可使用轻量像素统计和当前 Repair 轮次的临时截图证据。
 - 不规定具体 COM 调用顺序（属 Executor 实现）。  
 
 ---
@@ -338,6 +338,18 @@ undo=up_123
 经 ToolBroker 再校验；非法则记 `JSON_ERROR` 并计一次失败 attempt。
 
 ---
+
+### 8.4 临时视觉证据合同
+
+PowerPoint 等视觉宿主可以在真实渲染验证失败时提供临时视觉证据，但该证据不属于普通 ToolResult JSON：
+
+- 证据由宿主 Observer/Verifier 在安全回滚前采集，宿主 Executor 不得直接调用模型。
+- `ToolResult.VisualEvidence` 是当前 Observe/Repair 轮次的内存字段，必须通过 `JsonIgnore` 等机制排除普通序列化。
+- Data URL/Base64 禁止进入 `Observation`、`Data`、`Artifacts`、History、Memory、RunTrace、日志和 UI。
+- 每轮证据必须限制允许的 MIME、数量、像素尺寸、字节数和 Data URL 长度；临时文件必须在 `Finally` 中删除。
+- `LoopEngine` 负责把文本错误合同与视觉证据组合成多模态消息；`AiGateway` 负责 OpenAI-compatible/Anthropic 格式转换。
+- Provider 或模型不支持图片时，Loop 在同一 Run 内停止重复尝试视觉通道，并降级为原有文本 Repair。
+- 视觉证据采集或发送失败不能阻止宿主安全回滚，也不能把失败结果改写为成功。
 
 ## 9. 与 SuccessCriteria 的关系
 

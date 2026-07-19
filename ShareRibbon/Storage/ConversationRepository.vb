@@ -36,23 +36,7 @@ Public Class ConversationRepository
     End Sub
 
     ''' <summary>
-    ''' 更新消息收藏状态
-    ''' </summary>
-    Public Shared Sub SetCollected(conversationId As Long, isCollected As Boolean)
-        OfficeAiDatabase.EnsureInitialized()
-        Using conn As New SQLiteConnection(OfficeAiDatabase.GetConnectionString())
-            conn.Open()
-            Using cmd As New SQLiteCommand("UPDATE conversation SET is_collected=@c WHERE id=@id", conn)
-                cmd.Parameters.AddWithValue("@c", If(isCollected, 1, 0))
-                cmd.Parameters.AddWithValue("@id", conversationId)
-                cmd.ExecuteNonQuery()
-            End Using
-        End Using
-    End Sub
-
-    ''' <summary>
     ''' 按 responseUuid 更新收藏（需通过 session_id + 最新 assistant 消息定位，简化实现：按 session 最后一条 assistant 更新）
-    ''' 若调用方有 conversation_id 可直接用 SetCollected
     ''' </summary>
     Public Shared Sub SetLastAssistantCollected(sessionId As String, isCollected As Boolean)
         OfficeAiDatabase.EnsureInitialized()

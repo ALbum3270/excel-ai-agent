@@ -25,20 +25,6 @@ Public Class WebViewBridge
             End Function)
     End Function
 
-    Public Async Function ExecuteScriptAndWaitAsync(js As String) As Task
-        Try
-            Await _ensureInitialized()
-            Await UiDispatcher.InvokeAsync(_browser,
-                Async Function()
-                    If _browser.CoreWebView2 Is Nothing Then Return
-                    Await _browser.ExecuteScriptAsync(js)
-                End Function)
-        Catch ex As Exception
-            Debug.WriteLine($"[WebViewBridge.ExecuteScriptAndWaitAsync] Execute script failed: {ex.Message}")
-            Throw
-        End Try
-    End Function
-
     Public Async Function WaitForRendererMapAsync(uuid As String) As Task
         If String.IsNullOrWhiteSpace(uuid) Then Return
 

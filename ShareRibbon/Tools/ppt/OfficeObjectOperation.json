@@ -1,0 +1,17 @@
+{
+  "id": "OfficeObjectOperation",
+  "name": "执行 PowerPoint 对象操作",
+  "description": "执行经过 Catalog、参数绑定和 SafetyGate 校验的声明式 PowerPoint OperationBatch。不得用于任意反射、宏或外部进程调用。",
+  "appType": "ppt",
+  "category": "Office 对象能力",
+  "riskLevel": "medium",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "batch",
+      "type": "object",
+      "required": true,
+      "description": "schemaVersion=1.0 的 OfficeOperationBatch"
+    }
+  ]
+}

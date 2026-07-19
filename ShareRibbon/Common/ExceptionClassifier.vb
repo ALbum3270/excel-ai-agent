@@ -30,6 +30,16 @@ Public NotInheritable Class ExceptionClassifier
     Public Const CodeVbaDisabled As String = "VBA_DISABLED"
     Public Const CodeCancelled As String = "CANCELLED"
     Public Const CodeIo As String = "IO_ERROR"
+    Public Const CodeVerifyFailed As String = "VERIFY_FAILED"
+    Public Const CodeObservationFailed As String = "OBSERVATION_FAILED"
+    Public Const CodePartialApply As String = "PARTIAL_APPLY"
+    Public Const CodeCapabilityNotFound As String = "CAPABILITY_NOT_FOUND"
+    Public Const CodeMemberNotExecutable As String = "MEMBER_NOT_EXECUTABLE"
+    Public Const CodeOperationSchemaInvalid As String = "OPERATION_SCHEMA_INVALID"
+    Public Const CodeObjectRefInvalid As String = "OBJECT_REF_INVALID"
+    Public Const CodeObjectNotFound As String = "OBJECT_NOT_FOUND"
+    Public Const CodeObjectTypeMismatch As String = "OBJECT_TYPE_MISMATCH"
+    Public Const CodeDocMissing As String = "DOC_MISSING"
 
     Public Class ClassifiedError
         Public Property ErrorCode As String = CodeUnknown
@@ -74,10 +84,16 @@ Public NotInheritable Class ExceptionClassifier
             Return result
         End If
 
-        If TypeOf baseEx Is COMException OrElse TypeOf baseEx Is InvalidComObjectException Then
+        Dim isComInterfaceCastFailure = TypeOf baseEx Is InvalidCastException AndAlso
+            IsComInterfaceUnavailableMessage(baseEx.Message)
+        If TypeOf baseEx Is COMException OrElse TypeOf baseEx Is InvalidComObjectException OrElse isComInterfaceCastFailure Then
             result.ErrorCode = CodeCom
-            result.UserMessage = "Office 文档操作失败，请确认文档未锁定且选区有效"
-            result.Recoverable = True
+            result.UserMessage = If(isComInterfaceCastFailure,
+                                    "当前 Office/WPS 宿主不支持所需的 COM 接口，请更新宿主或使用兼容路径",
+                                    "Office 文档操作失败，请确认文档未锁定且选区有效")
+            ' QueryInterface/E_NOINTERFACE is deterministic for the current host.
+            ' Retrying the same tool with AI-generated parameters cannot add the missing interface.
+            result.Recoverable = Not isComInterfaceCastFailure
             Return result
         End If
 
@@ -117,6 +133,13 @@ Public NotInheritable Class ExceptionClassifier
         result.UserMessage = "操作失败，请重试；若反复出现请查看日志"
         result.Recoverable = True
         Return result
+    End Function
+
+    Public Shared Function IsComInterfaceUnavailableMessage(message As String) As Boolean
+        Dim value = If(message, "")
+        Return value.IndexOf("QueryInterface", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+               value.IndexOf("E_NOINTERFACE", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+               value.IndexOf("不支持此接口", StringComparison.OrdinalIgnoreCase) >= 0
     End Function
 
     Public Shared Function ToUserMessage(ex As Exception, Optional fallback As String = Nothing) As String

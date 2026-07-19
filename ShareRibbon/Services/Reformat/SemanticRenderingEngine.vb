@@ -596,43 +596,6 @@ Public Class SemanticRenderingEngine
         End Try
     End Sub
 
-    ''' <summary>
-    ''' 排版后校验 - 检查渲染结果是否匹配预期
-    ''' </summary>
-    Public Shared Function ValidateRenderedDocument(
-        wordParagraphs As List(Of Object),
-        taggedParagraphs As List(Of TaggedParagraph),
-        mapping As SemanticStyleMapping) As List(Of String)
-
-        Dim deviations As New List(Of String)()
-
-        For Each tagged In taggedParagraphs
-            If tagged.ParaIndex < 0 OrElse tagged.ParaIndex >= wordParagraphs.Count Then Continue For
-
-            Dim expectedTag = mapping.FindTag(tagged.TagId)
-            If expectedTag Is Nothing Then Continue For
-
-            Try
-                Dim para = wordParagraphs(tagged.ParaIndex)
-                Dim range = para.Range
-
-                ' 检查字号
-                If expectedTag.Font.FontSize > 0 Then
-                    Dim actualSize As Double = CDbl(range.Font.Size)
-                    If Math.Abs(actualSize - expectedTag.Font.FontSize) > 0.5 Then
-                        deviations.Add($"段落{tagged.ParaIndex}: 字号偏差 期望{expectedTag.Font.FontSize}pt 实际{actualSize}pt")
-                        ' 自动修正
-                        range.Font.Size = CSng(expectedTag.Font.FontSize)
-                    End If
-                End If
-            Catch ex As Exception
-                ' 校验失败不影响主流程
-                Debug.WriteLine($"校验段落{tagged.ParaIndex}失败: {ex.Message}")
-            End Try
-        Next
-
-        Return deviations
-    End Function
 End Class
 
 ''' <summary>
