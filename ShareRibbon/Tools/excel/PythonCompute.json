@@ -1,0 +1,30 @@
+{
+  "id": "PythonCompute",
+  "name": "Python 数据计算",
+  "description": "使用受控 Python 对 JSON 表格数据执行复杂清洗、统计或转换；只返回 JSON，不直接操作 Excel。代码从 input_data 读取输入并必须给 result 赋值",
+  "appType": "excel",
+  "category": "数据操作",
+  "riskLevel": "risky",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "code",
+      "type": "string",
+      "required": true,
+      "description": "Python 代码。输入变量为 input_data，输出必须赋给 result；禁止文件、网络、进程及 Excel COM 操作"
+    },
+    {
+      "name": "input",
+      "type": "object",
+      "required": true,
+      "description": "JSON 输入数据，建议包含 headers 和 rows"
+    },
+    {
+      "name": "timeoutSeconds",
+      "type": "integer",
+      "required": false,
+      "description": "执行超时秒数，默认20，最大60",
+      "defaultValue": 20
+    }
+  ]
+}

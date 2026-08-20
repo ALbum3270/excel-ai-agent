@@ -2,6 +2,7 @@ Imports Excel = Microsoft.Office.Interop.Excel
 Imports ShareRibbon.Agent.Context
 Imports System.Diagnostics
 Imports System.Text
+Imports Newtonsoft.Json.Linq
 
 Namespace Context
     Public Class ExcelContextProvider
@@ -30,6 +31,12 @@ Namespace Context
                 Dim selectedRange As Excel.Range = TryCast(_app.Selection, Excel.Range)
                 Dim primaryRange As Excel.Range = If(selectedRange, usedRange)
 
+                Dim tableRegion = New ExcelTableRegionDetector(_app).Detect()
+                ctx.HostData("tables") = New JArray()
+                If tableRegion IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
+                    DirectCast(ctx.HostData("tables"), JArray).Add(tableRegion.ToJson())
+                End If
+
                 If primaryRange IsNot Nothing Then
                     Dim preview = BuildRangePreview(primaryRange, 8, 8)
                     Dim profile = BuildRangeProfile(primaryRange)
@@ -44,6 +51,9 @@ Namespace Context
                 Dim summary As New StringBuilder()
                 summary.AppendLine($"工作簿: {If(String.IsNullOrWhiteSpace(workbookName), "(未保存或未知)", workbookName)}")
                 If worksheet IsNot Nothing Then summary.AppendLine($"当前工作表: {worksheet.Name}")
+                If tableRegion IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
+                    summary.AppendLine(tableRegion.ToPromptSummary())
+                End If
                 If usedRange IsNot Nothing Then
                     summary.AppendLine($"使用区域: {GetRangeAddress(usedRange)}")
                     summary.AppendLine($"使用区域规模: {usedRange.Rows.Count} 行 x {usedRange.Columns.Count} 列")

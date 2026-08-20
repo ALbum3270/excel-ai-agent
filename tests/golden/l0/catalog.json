@@ -21,6 +21,19 @@
       "expectedHostCalls": 0
     },
     {
+      "id": "S-python-compute-approval",
+      "kind": "tool_execution",
+      "appType": "Excel",
+      "toolId": "PythonCompute",
+      "allowedTools": ["PythonCompute"],
+      "params": {
+        "code": "result = sum(input_data['values'])",
+        "input": {"values": [1, 2, 3]}
+      },
+      "expectedErrorCode": "SAFETY_NEEDS_APPROVAL",
+      "expectedHostCalls": 0
+    },
+    {
       "id": "S-host-isolation",
       "kind": "tool_execution",
       "appType": "Word",
@@ -52,6 +65,26 @@
       "contractType": "context_pack",
       "expectedSchemaVersion": "1.0",
       "expectedBudgetStrategy": "selection_first"
+    },
+    {
+      "id": "C-excel-table-region-context",
+      "kind": "contract",
+      "contractType": "excel_table_region_context"
+    },
+    {
+      "id": "C-python-compute-contract",
+      "kind": "contract",
+      "contractType": "python_compute_contract"
+    },
+    {
+      "id": "C-read-range-contract",
+      "kind": "contract",
+      "contractType": "read_range_contract"
+    },
+    {
+      "id": "C-excel-basic-required-tools",
+      "kind": "contract",
+      "contractType": "excel_basic_required_tools"
     },
     {
       "id": "C-harness-approval-api",

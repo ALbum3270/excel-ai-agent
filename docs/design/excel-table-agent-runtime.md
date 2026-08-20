@@ -2,12 +2,12 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | **v0.2（评审修订）** |
-| 状态 | 目标设计已评审；代码部分实现 |
-| 实现状态 | **部分实现**：Excel 已有上下文、命令 schema、工具 JSON、Skill 工具硬门禁，以及 JSON 命令级 before/after Observation（目标 Range hash/preview、公式错误、UsedRange、图表 delta）；尚无统一 `ExcelActionHarness`、TableRegion 强类型探测和大表分块闭环。 |
+| 版本 | **v0.3（基础版落地）** |
+| 状态 | 基础闭环代码已实现；待 Windows + Excel 真机验收 |
+| 实现状态 | **基础版已实现**：TableRegion 强类型探测已进入 `ContextPack.host.tables`；新增结构化只读 `ReadRange` 和审批型 JSON-to-JSON `PythonCompute`；原生 Excel 命令已有目标 Range、公式错误、UsedRange、工作表与图表 delta Observation。统一 `ExcelActionHarness`、大表自动分块和强隔离 Python 仍待后续。 |
 | 总纲 | [`../ai-native-harness-design.md`](../ai-native-harness-design.md) §6.2 |
 | Skill | `Skills/excel-table-agent/SKILL.md` |
-| 现有 | `ExcelDirectOperationService`、`ExcelContextService`、`ExcelJsonCommandSchema`、Tools/excel（25）、ExcelDna UDF |
+| 现有 | `ExcelDirectOperationService`、`ExcelContextService`、`ExcelJsonCommandSchema`、Tools/excel（27）、ExcelDna UDF |
 | 关联 | ContextPack Excel host、Observe Diff、Safety 大表阈值、Golden U3 |
 
 ---
@@ -239,7 +239,9 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 | Id | 说明 | Tools |
 |---|---|---|
 | excel.detect-table | 表探测 | （内部 Reader） |
+| excel.read | 结构化只读 | ReadRange |
 | excel.profile | 画像 | DataAnalysis |
+| excel.compute | 受控 JSON 计算 | PythonCompute |
 | excel.clean | 清洗 | CleanData, RemoveDuplicates, FindReplace, FilterData |
 | excel.formula | 公式 | ApplyFormula, WriteData |
 | excel.transform | 变换 | TransformData, SortData |
@@ -251,11 +253,13 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 | excel.protect | 保护 | ProtectSheet |
 | excel.vba | 逃逸 | ExecuteVBA |
 
-### 9.2 Tool → Capability（25）
+### 9.2 Tool → Capability（27）
 
 | Tool | Capability |
 |---|---|
 | ApplyFormula | excel.formula |
+| ReadRange | excel.read / profile |
+| PythonCompute | excel.compute |
 | WriteData | excel.formula / report |
 | DataAnalysis | excel.profile |
 | CleanData / RemoveDuplicates / FindReplace | excel.clean |
@@ -327,8 +331,8 @@ RunTrace 记录 `chunkIndex/chunkTotal`。
 
 | ID | 项 | P |
 |---|---|---|
-| E-GAP-1 | ExcelActionHarness + detect-table | P0 |
-| E-GAP-2 | 公式 error 观察指标 | P0 |
+| E-GAP-1 | ExcelActionHarness 快路径（TableRegion Reader 已完成） | P1 |
+| E-GAP-2 | 公式错误地址定位和自动 repair（数量 delta 已完成） | P1 |
 | E-GAP-3 | 大表分块执行器 | P0 |
 | E-GAP-4 | 结果默认写新 Sheet | P0 |
 | E-GAP-5 | 拆巨类 ExcelDirectOperationService | P1 |

@@ -408,6 +408,7 @@
     <Compile Include="Services\Memory\MemoryContracts.vb" />
     <Compile Include="Services\Memory\RuleBasedMemoryExtractor.vb" />
     <Compile Include="Services\Memory\SkillsIndexService.vb" />
+    <Compile Include="Services\Python\PythonComputeService.vb" />
     <Compile Include="Services\SkillScriptExecutor.vb" />
     <Compile Include="Services\SkillsDirectoryService.vb" />
     <Compile Include="Services\SkillsService.vb" />

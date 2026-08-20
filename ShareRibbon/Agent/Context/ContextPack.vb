@@ -1,6 +1,7 @@
 Imports System.Collections.Generic
 Imports System.Text
 Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq
 
 Namespace Agent.Context
 
@@ -16,6 +17,7 @@ Namespace Agent.Context
         Public Property Document As New ContextDocument()
         Public Property Selection As New ContextSelection()
         Public Property [Structure] As New ContextStructure()
+        Public Property Host As New JObject()
         Public Property Budget As New ContextBudget()
         Public Property ReaderErrors As New List(Of ContextReaderError)()
 
@@ -49,14 +51,36 @@ Namespace Agent.Context
                 pack.[Structure].HeadingCount = context.DocStructure.HeadingCount
             End If
 
-            ' selection_first：先保留选区，再给结构和宿主正文分配剩余预算。
+            If context.HostData IsNot Nothing Then
+                pack.Host = DirectCast(context.HostData.DeepClone(), JObject)
+            End If
+
+            ' selection_first：先保留选区，再给宿主结构、通用结构和正文分配剩余预算。
             Dim remaining = pack.Budget.MaxChars
             pack.Selection.Preview = Truncate(If(context.Selection?.Preview, ""), Math.Min(remaining, 6000), pack.Budget.Truncated)
             remaining -= pack.Selection.Preview.Length
+
+            Dim hostJson = If(pack.Host Is Nothing OrElse Not pack.Host.HasValues,
+                              "",
+                              pack.Host.ToString(Formatting.None))
+            If hostJson.Length > remaining Then
+                pack.Budget.Truncated = True
+                pack.Host = New JObject From {
+                    {"truncated", True},
+                    {"reason", "context_budget"}
+                }
+                hostJson = pack.Host.ToString(Formatting.None)
+                If hostJson.Length > remaining Then
+                    pack.Host = New JObject()
+                    hostJson = ""
+                End If
+            End If
+            remaining -= hostJson.Length
+
             pack.[Structure].Summary = Truncate(If(context.DocStructure?.Summary, ""), Math.Min(Math.Max(0, remaining), 3000), pack.Budget.Truncated)
             remaining -= pack.[Structure].Summary.Length
             pack.Document.Preview = Truncate(If(hostContextText, ""), Math.Max(0, remaining), pack.Budget.Truncated)
-            pack.Budget.UsedChars = pack.Selection.Preview.Length + pack.[Structure].Summary.Length + pack.Document.Preview.Length
+            pack.Budget.UsedChars = pack.Selection.Preview.Length + hostJson.Length + pack.[Structure].Summary.Length + pack.Document.Preview.Length
             Return pack
         End Function
 
@@ -72,6 +96,10 @@ Namespace Agent.Context
             If Not String.IsNullOrWhiteSpace(Selection.Preview) Then
                 sb.AppendLine("### Selection")
                 sb.AppendLine(Selection.Preview)
+            End If
+            If Host IsNot Nothing AndAlso Host.HasValues Then
+                sb.AppendLine("### Host context")
+                sb.AppendLine(Host.ToString(Formatting.None))
             End If
             If Not String.IsNullOrWhiteSpace([Structure].Summary) Then
                 sb.AppendLine("### Structure")

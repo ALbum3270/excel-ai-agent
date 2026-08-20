@@ -38,6 +38,105 @@ foreach ($case in $catalog.cases) {
                 throw "Golden case failed: $($case.id)"
             }
         }
+        elseif ($case.contractType -eq "excel_table_region_context") {
+            $officeContext = New-Object ShareRibbon.Agent.Context.OfficeContext
+            $officeContext.AppType = "Excel"
+            $officeContext.Selection = New-Object ShareRibbon.Agent.Context.SelectionInfo
+            $officeContext.Selection.Address = "Sheet1!A1:C4"
+            $officeContext.Selection.ItemCount = 12
+            $officeContext.Selection.DataType = "table"
+            $officeContext.Selection.Preview = "Month`tSales`tRegion"
+            $officeContext.HostData = [Newtonsoft.Json.Linq.JObject]::Parse(
+                '{"tables":[{"sheet":"Sheet1","address":"A1:C4","hasHeader":true,"rowCount":3,"colCount":3,"source":"selection"}]}'
+            )
+
+            $pack = [ShareRibbon.Agent.Context.ContextPack]::FromOfficeContext($officeContext, "", 4000)
+            if ($null -eq $pack.Host -or
+                $null -eq $pack.Host["tables"] -or
+                $pack.Host["tables"].Count -ne 1 -or
+                $pack.Host["tables"][0]["address"].ToString() -ne "A1:C4" -or
+                $pack.ToPromptText() -notmatch "Host context" -or
+                $pack.Budget.UsedChars -gt $pack.Budget.MaxChars) {
+                throw "Golden case failed: $($case.id)"
+            }
+
+            $providerSource = Get-Content -LiteralPath (Join-Path $repoRoot "ExcelAi\Context\ExcelContextProvider.vb") -Raw
+            $detectorSource = Get-Content -LiteralPath (Join-Path $repoRoot "ExcelAi\Context\ExcelTableRegion.vb") -Raw
+            if ($providerSource -notmatch 'ExcelTableRegionDetector' -or
+                $providerSource -notmatch 'HostData\("tables"\)' -or
+                $detectorSource -notmatch 'MaxSampleRows\s+As\s+Integer\s*=\s*200' -or
+                $detectorSource -notmatch '"list_object"' -or
+                $detectorSource -notmatch '"current_region"') {
+                throw "Golden case $($case.id): Excel TableRegion detection is not connected to ContextPack"
+            }
+        }
+        elseif ($case.contractType -eq "python_compute_contract") {
+            $toolPath = Join-Path $repoRoot "ShareRibbon\Tools\excel\PythonCompute.json"
+            if (-not (Test-Path -LiteralPath $toolPath)) {
+                throw "Golden case $($case.id): PythonCompute tool schema is missing"
+            }
+            $toolSchema = Get-Content -LiteralPath $toolPath -Raw | ConvertFrom-Json
+            if ($toolSchema.id -ne "PythonCompute" -or
+                $toolSchema.appType -ne "excel" -or
+                $toolSchema.riskLevel -ne "risky") {
+                throw "Golden case $($case.id): PythonCompute must be an approval-gated Excel tool"
+            }
+
+            $serviceSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Services\Python\PythonComputeService.vb") -Raw
+            $registrySource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Agent\ToolRegistry.vb") -Raw
+            $skillSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Skills\excel-table-agent\SKILL.md") -Raw
+            if ($serviceSource -notmatch 'MaxTimeoutSeconds\s+As\s+Integer\s*=\s*60' -or
+                $serviceSource -notmatch 'OFFICE_AI_PYTHON_PATH' -or
+                $serviceSource -notmatch 'PythonCompute\s+不允许导入模块' -or
+                $serviceSource -notmatch 'ast\.parse' -or
+                $serviceSource -notmatch 'safe_builtins' -or
+                $registrySource -notmatch 'PythonComputeService\.ExecuteAsync' -or
+                $skillSource -notmatch 'allowed-tools:[^\r\n]*PythonCompute') {
+                throw "Golden case $($case.id): PythonCompute safety or routing contract is incomplete"
+            }
+        }
+        elseif ($case.contractType -eq "read_range_contract") {
+            $toolPath = Join-Path $repoRoot "ShareRibbon\Tools\excel\ReadRange.json"
+            if (-not (Test-Path -LiteralPath $toolPath)) {
+                throw "Golden case $($case.id): ReadRange tool schema is missing"
+            }
+            $toolSchema = Get-Content -LiteralPath $toolPath -Raw | ConvertFrom-Json
+            if ($toolSchema.id -ne "ReadRange" -or
+                $toolSchema.appType -ne "excel" -or
+                $toolSchema.riskLevel -ne "safe") {
+                throw "Golden case $($case.id): ReadRange must be a safe Excel read tool"
+            }
+
+            $excelChatSource = Get-Content -LiteralPath (Join-Path $repoRoot "ExcelAi\ChatControl.vb") -Raw
+            $skillSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Skills\excel-table-agent\SKILL.md") -Raw
+            if ($excelChatSource -notmatch 'ReadExcelRangeAsToolResult' -or
+                $excelChatSource -notmatch 'Math\.Min\(20000,\s*maxCells\)' -or
+                $excelChatSource -notmatch '\{"kind",\s*"read"\}' -or
+                $excelChatSource -notmatch 'ExcelMatrixToJson' -or
+                $skillSource -notmatch 'allowed-tools:[^\r\n]*ReadRange' -or
+                $skillSource -notmatch 'First use `ReadRange`') {
+                throw "Golden case $($case.id): ReadRange routing or skill contract is incomplete"
+            }
+        }
+        elseif ($case.contractType -eq "excel_basic_required_tools") {
+            $requiredTools = @("FormatRange", "CreateChart", "CreateSheet")
+            $skillSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Skills\excel-table-agent\SKILL.md") -Raw
+            $schemaSource = Get-Content -LiteralPath (Join-Path $repoRoot "ExcelAi\ExcelJsonCommandSchema.vb") -Raw
+            foreach ($requiredTool in $requiredTools) {
+                $toolPath = Join-Path $repoRoot "ShareRibbon\Tools\excel\$requiredTool.json"
+                if (-not (Test-Path -LiteralPath $toolPath)) {
+                    throw "Golden case $($case.id): required Excel tool is missing: $requiredTool"
+                }
+                $toolSchema = Get-Content -LiteralPath $toolPath -Raw | ConvertFrom-Json
+                if ($toolSchema.id -ne $requiredTool -or $toolSchema.appType -ne "excel") {
+                    throw "Golden case $($case.id): invalid required Excel tool: $requiredTool"
+                }
+                if ($skillSource -notmatch "allowed-tools:[^\r\n]*$requiredTool" -or
+                    $schemaSource -notmatch "`"$requiredTool`"") {
+                    throw "Golden case $($case.id): required Excel tool is not routed by Skill/schema: $requiredTool"
+                }
+            }
+        }
         elseif ($case.contractType -eq "approval_api") {
             $interfaceType = [ShareRibbon.Agent.Harness.IOfficeHarness]
             $approve = $interfaceType.GetMethod("ApproveAsync")
@@ -121,6 +220,11 @@ foreach ($case in $catalog.cases) {
             if ($excelChatSource -notmatch 'CodeObservationFailed' -or
                 $excelChatSource -notmatch 'recoverable:=False') {
                 throw "Golden case $($case.id): observer failures can still repeat an uncertain write"
+            }
+            if ($excelChatSource -notmatch 'sheetCountDelta' -or
+                $excelChatSource -notmatch 'chartCountDelta' -or
+                $excelChatSource -notmatch 'formulaErrorDelta') {
+                throw "Golden case $($case.id): Excel observer is missing basic workbook diff metrics"
             }
         }
         else {

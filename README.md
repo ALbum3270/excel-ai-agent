@@ -139,6 +139,7 @@ AI: 知道在 B 列计算，不需要再问
 
 #### 📖 相关文档
 
+- [Excel Agent 基础版：能力、配置与验收](docs/excel-agent-basic-version.md)
 - [Visual Studio 2026 打开 OfficeAgent.vdproj 失败处理](docs/VS2026-InstallerProjects.md)
 
 ---
@@ -386,4 +387,3 @@ msbuild AiHelper.sln -t:Restore
 [![GitHub forks](https://img.shields.io/github/forks/it235/office-ai-agent?style=social)](https://github.com/it235/office-ai-agent)
 
 </div>
-

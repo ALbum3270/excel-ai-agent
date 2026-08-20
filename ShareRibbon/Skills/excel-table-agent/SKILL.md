@@ -4,7 +4,7 @@ description: Use for Excel tasks that need table understanding, cleanup, calcula
 application: Excel
 default_for_application: true
 tags: excel, spreadsheet, table, formula, chart, pivot, clean, transpose, statistics, data-analysis
-allowed-tools: ApplyFormula, WriteData, FormatRange, CreateChart, CleanData, SortData, FilterData, RemoveDuplicates, ConditionalFormat, MergeCells, AutoFit, FindReplace, CreatePivotTable, TransformData, DataAnalysis, GenerateReport
+allowed-tools: ReadRange, ApplyFormula, WriteData, FormatRange, CreateChart, CreateSheet, RenameSheet, CleanData, SortData, FilterData, RemoveDuplicates, ConditionalFormat, MergeCells, AutoFit, FindReplace, CreatePivotTable, TransformData, DataAnalysis, GenerateReport, PythonCompute
 intent_types: data_analysis, formula, chart, table_format, data_clean, transform
 ---
 
@@ -29,6 +29,7 @@ Use this skill when the user asks Excel to do real spreadsheet work from natural
 5. For write operations, produce a plan with target ranges and expected effects before acting when the task is medium or risky.
 6. After each operation, observe the sheet state: changed range, formulas, chart count, row/column shape, or generated summary.
 7. If execution fails, repair the tool parameters using the observation. Do not fall back to a long chat explanation unless execution is impossible.
+8. Use `PythonCompute` only when native tools cannot express the calculation. First use `ReadRange` for the smallest necessary range, pass its JSON data to Python, then write the approved result with native tools. Python must not access Excel, files, network, or child processes.
 
 ## Tool Preferences
 
@@ -39,6 +40,9 @@ Use this skill when the user asks Excel to do real spreadsheet work from natural
 - Row/column transpose: `TransformData` with `operation=transpose`
 - Cleaning: `CleanData`, `RemoveDuplicates`, `FindReplace`
 - Report output: `GenerateReport`, `WriteData`, `CreateChart`
+- New result sheet: `CreateSheet`, then `WriteData`; use `RenameSheet` only for an explicit rename request
+- Complex calculation: `PythonCompute`, then inspect its JSON result and use `CreateSheet`/`WriteData` to write the approved result
+- Structured input: `ReadRange` before `PythonCompute`; do not reconstruct a large table from the text preview
 
 ## Chart Selection Heuristics
 

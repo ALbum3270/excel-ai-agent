@@ -303,6 +303,7 @@
       <SubType>Component</SubType>
     </Compile>
     <Compile Include="Context\ExcelContextProvider.vb" />
+    <Compile Include="Context\ExcelTableRegion.vb" />
     <Compile Include="Handlers\FormulaHandler.vb" />
     <Compile Include="Spotlight.vb" />
     <Compile Include="ExcelDirectOperationService.vb" />

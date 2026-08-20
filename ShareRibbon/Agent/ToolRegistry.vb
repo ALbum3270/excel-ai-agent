@@ -717,6 +717,44 @@ Namespace Agent
                 Return BuildSafetyFailure(tool, safetyDecision)
             End If
 
+            If String.Equals(toolId, "PythonCompute", StringComparison.OrdinalIgnoreCase) Then
+                Dim computeResult = Await Services.Python.PythonComputeService.ExecuteAsync(params)
+                sw.Stop()
+                If computeResult.Success Then
+                    Dim observation As New JObject From {
+                        {"kind", "compute"},
+                        {"summary", "Python 计算完成，结果已作为 JSON 返回；尚未写入 Excel"},
+                        {"changed", False},
+                        {"targetRefs", New JArray()},
+                        {"warnings", New JArray("PythonCompute 不直接修改工作簿；如需落表，请继续调用 WriteData")}
+                    }
+                    Dim succeeded = ToolResult.Succeed(toolId,
+                                                       "Python 计算完成",
+                                                       data:=computeResult.Data,
+                                                       observation:=observation)
+                    succeeded.ElapsedMs = computeResult.ElapsedMs
+                    Return succeeded
+                End If
+
+                Return ToolResult.Failed(toolId,
+                                         computeResult.ErrorMessage,
+                                         data:=New With {
+                                             .elapsedMs = computeResult.ElapsedMs,
+                                             .exitCode = computeResult.ExitCode,
+                                             .timedOut = computeResult.TimedOut
+                                         },
+                                         errorCode:=computeResult.ErrorCode,
+                                         userMessage:=computeResult.ErrorMessage,
+                                         debugDetail:=computeResult.DebugDetail,
+                                         recoverable:=True,
+                                         observation:=New JObject From {
+                                             {"kind", "compute"},
+                                             {"summary", computeResult.ErrorMessage},
+                                             {"changed", False},
+                                             {"warnings", New JArray(computeResult.ErrorCode)}
+                                         })
+            End If
+
             If toolId.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) Then
                 Dim memoryResult = Await ExecuteMemoryToolAsync(toolId, params)
                 sw.Stop()

@@ -2,6 +2,7 @@
 ' Office 上下文基础类 - 统一封装当前 Office 应用的状态
 
 Imports System.Text
+Imports Newtonsoft.Json.Linq
 
 Namespace Agent.Context
 
@@ -17,6 +18,12 @@ Namespace Agent.Context
 
         ''' <summary>文档结构信息（可选）</summary>
         Public Property DocStructure As DocumentStructure
+
+        ''' <summary>
+        ''' 宿主专属的结构化上下文。共享层只负责传递和预算控制，
+        ''' 具体字段由 Excel/Word/PowerPoint 各自的 ContextProvider 产生。
+        ''' </summary>
+        Public Property HostData As New JObject()
 
         ''' <summary>
         ''' 转换为 Prompt 文本，自动注入到 AI 系统提示词
