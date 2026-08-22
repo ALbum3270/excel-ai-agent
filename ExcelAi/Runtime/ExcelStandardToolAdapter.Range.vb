@@ -37,7 +37,8 @@ Namespace OfficeRuntime
                              {"RowCount", rowCount},
                              {"ColumnCount", columnCount}
                          })
-            Return ExecuteBatch(application, toolId, batch, $"已验证写入 {descriptor.SheetName}!{descriptor.Address}")
+            Dim result = ExecuteBatch(application, toolId, batch, $"已验证写入 {descriptor.SheetName}!{descriptor.Address}")
+            Return AnnotateVerifiedRequestProjection(result, data)
         End Function
 
         Private Shared Function ExecuteApplyFormula(application As Object, params As JObject) As ToolResult
@@ -94,7 +95,93 @@ Namespace OfficeRuntime
                                  {"NonEmptyFormulaCount", descriptor.CellCount}
                              })
             End If
-            Return ExecuteBatch(application, toolId, batch, $"已验证公式写入 {descriptor.SheetName}!{descriptor.Address}")
+            Dim result = ExecuteBatch(application, toolId, batch, $"已验证公式写入 {descriptor.SheetName}!{descriptor.Address}")
+            result = VerifyFormulaPattern(application, descriptor, result, fillDown)
+            Return AnnotateVerifiedRequestProjection(result, New JValue(formula), verifiedPropertyName:="FormulaPattern")
+        End Function
+
+        ''' <summary>
+        ''' Verifies the semantic invariant produced by a scalar formula assignment. Fill-down
+        ''' must preserve one relative R1C1 pattern across the destination; a direct multi-cell
+        ''' assignment must preserve one literal A1 formula. A non-empty count alone is not proof
+        ''' that every cell received the requested formula or the correct relative references.
+        ''' </summary>
+        Private Shared Function VerifyFormulaPattern(application As Object,
+                                                     descriptor As RangeDescriptor,
+                                                     source As ToolResult,
+                                                     fillDown As Boolean) As ToolResult
+            If source Is Nothing OrElse Not source.Success OrElse descriptor Is Nothing Then Return source
+            Dim workbook As Object = Nothing
+            Dim worksheets As Object = Nothing
+            Dim worksheet As Object = Nothing
+            Dim target As Object = Nothing
+            Dim cells As Object = Nothing
+            Dim topLeft As Object = Nothing
+            Try
+                workbook = application.ActiveWorkbook
+                worksheets = workbook.Worksheets
+                worksheet = worksheets.Item(descriptor.SheetName)
+                target = worksheet.Range(descriptor.Address)
+                cells = target.Cells
+                topLeft = cells.Item(1, 1)
+                Dim expectedPattern = If(fillDown,
+                                         Convert.ToString(topLeft.FormulaR1C1, CultureInfo.InvariantCulture),
+                                         Convert.ToString(topLeft.Formula, CultureInfo.InvariantCulture))
+                Dim mismatch As String = ""
+                For rowIndex = 1 To descriptor.RowCount
+                    For columnIndex = 1 To descriptor.ColumnCount
+                        Dim cell As Object = Nothing
+                        Try
+                            cell = cells.Item(rowIndex, columnIndex)
+                            Dim actualPattern = If(fillDown,
+                                                   Convert.ToString(cell.FormulaR1C1, CultureInfo.InvariantCulture),
+                                                   Convert.ToString(cell.Formula, CultureInfo.InvariantCulture))
+                            If Not String.Equals(actualPattern, expectedPattern, StringComparison.Ordinal) Then
+                                mismatch = $"R{rowIndex}C{columnIndex}: {actualPattern}"
+                                Exit For
+                            End If
+                        Finally
+                            ReleaseCom(cell)
+                        End Try
+                    Next
+                    If Not String.IsNullOrWhiteSpace(mismatch) Then Exit For
+                Next
+
+                Dim observation = TryCast(source.Observation, JObject)
+                If observation Is Nothing Then observation = New JObject()
+                Dim verification = TryCast(observation("verification"), JArray)
+                If verification Is Nothing Then
+                    verification = New JArray()
+                    observation("verification") = verification
+                End If
+                Dim passed = String.IsNullOrWhiteSpace(mismatch)
+                verification.Add(New JObject From {
+                    {"id", "formula-pattern"},
+                    {"required", True},
+                    {"targetRef", descriptor.RangeRef},
+                    {"effectType", "formula_state"},
+                    {"property", "FormulaPattern"},
+                    {"status", If(passed, "passed", "failed")},
+                    {"expected", expectedPattern},
+                    {"actual", If(passed, expectedPattern, mismatch)}
+                })
+                source.Observation = observation
+                If passed Then Return source
+                Return MarkCompositeMutationFailure(
+                    SemanticFailure(source.ToolId, source, "Excel formula pattern did not match the requested fill semantics"),
+                    descriptor.RangeRef)
+            Catch ex As Exception
+                Return MarkCompositeMutationFailure(
+                    SemanticFailure(source.ToolId, source, $"Unable to verify the complete formula range: {ex.Message}"),
+                    descriptor.RangeRef)
+            Finally
+                ReleaseCom(topLeft)
+                ReleaseCom(cells)
+                ReleaseCom(target)
+                ReleaseCom(worksheet)
+                ReleaseCom(worksheets)
+                ReleaseCom(workbook)
+            End Try
         End Function
 
         Private Shared Function ExecuteSortData(application As Object, params As JObject) As ToolResult
@@ -237,7 +324,9 @@ Namespace OfficeRuntime
             Dim fixedPoint = CaptureAutoFitDimensions(application, descriptor.RangeRef, fitType)
             Dim verificationBatch = NewBatch()
             AddAutoFitOperations(verificationBatch, descriptor.RangeRef, fitType, fixedPoint)
-            Return ExecuteBatch(application, toolId, verificationBatch, "已验证 AutoFit 达到稳定尺寸")
+            Dim verificationResult = ExecuteBatch(application, toolId, verificationBatch, "已验证 AutoFit 达到稳定尺寸")
+            If Not verificationResult.Success Then Return MarkCompositeMutationFailure(verificationResult, descriptor.RangeRef)
+            Return verificationResult
         End Function
 
         Private Shared Function ExecuteFindReplace(application As Object, params As JObject) As ToolResult

@@ -27,6 +27,7 @@ Public NotInheritable Class ExceptionClassifier
     Public Const CodeHostUnsupported As String = "HOST_UNSUPPORTED"
     Public Const CodeSafetyBlocked As String = "SAFETY_BLOCKED"
     Public Const CodeSafetyNeedsApproval As String = "SAFETY_NEEDS_APPROVAL"
+    Public Const CodeApprovalUnavailable As String = "APPROVAL_UNAVAILABLE"
     Public Const CodeVbaDisabled As String = "VBA_DISABLED"
     Public Const CodeCancelled As String = "CANCELLED"
     Public Const CodeIo As String = "IO_ERROR"
@@ -46,6 +47,9 @@ Public NotInheritable Class ExceptionClassifier
         Public Property UserMessage As String = ""
         Public Property DebugDetail As String = ""
         Public Property Recoverable As Boolean = True
+        Public Property Retryable As Boolean = False
+        Public Property TaskFatal As Boolean = False
+        Public Property SessionFatal As Boolean = False
     End Class
 
     Public Shared Function Classify(ex As Exception) As ClassifiedError

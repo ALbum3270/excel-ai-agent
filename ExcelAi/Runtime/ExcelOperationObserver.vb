@@ -3,6 +3,7 @@ Imports System.Reflection
 Imports System.Runtime.InteropServices
 Imports System.Security.Cryptography
 Imports System.Text
+Imports System.Text.RegularExpressions
 Imports Microsoft.VisualBasic
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
@@ -86,12 +87,15 @@ Namespace OfficeRuntime
             Dim succeededCount = If(operationResults, New JArray()).OfType(Of JObject)().Count(
                 Function(item) String.Equals(item("status")?.ToString(), "succeeded", StringComparison.OrdinalIgnoreCase))
             Dim totalCount = If(operationResults?.Count, 0)
+            Dim effectType = InferMutationEffect(batch)
             Return New JObject From {
                 {"kind", "office_operation_batch"},
                 {"summary", $"Excel 声明式操作完成 {succeededCount}/{totalCount} 项"},
                 {"changed", changed},
                 {"writeExpected", HasMutatingOperations(batch)},
                 {"appType", "Excel"},
+                {"effectType", effectType},
+                {"invalidationRefs", BuildStructuralInvalidationRefs(batch)},
                 {"atomic", If(batch?.Atomic, True)},
                 {"targetRefs", targetArray},
                 {"operations", If(operationResults, New JArray())},
@@ -124,6 +128,7 @@ Namespace OfficeRuntime
                         {"id", $"{operation.Id}:{expectedProperty.Name}"},
                         {"required", True},
                         {"targetRef", verifyRef},
+                        {"effectType", InferOperationEffect(operation, If(operation.Action, "").Trim().ToLowerInvariant())},
                         {"property", expectedProperty.Name},
                         {"status", If(passed, "passed", "failed")},
                         {"expected", expectedProperty.Value.DeepClone()},
@@ -140,10 +145,12 @@ Namespace OfficeRuntime
                                 Nothing,
                                 snapshot(criterion.PropertyName))
                 Dim passed = EvaluateCriterion(actual, criterion)
+                Dim criterionEffect = InferCriterionEffect(batch, operationResults, criterion)
                 verification.Add(New JObject From {
                     {"id", If(criterion.Id, $"criterion-{index + 1}")},
                     {"required", criterion.Required},
                     {"targetRef", criterion.TargetRef},
+                    {"effectType", criterionEffect},
                     {"property", If(criterion.PropertyName, "")},
                     {"operator", If(criterion.Operator, "equals")},
                     {"status", If(passed, "passed", "failed")},
@@ -152,6 +159,32 @@ Namespace OfficeRuntime
                 })
             Next
             Return verification
+        End Function
+
+        Private Shared Function InferCriterionEffect(batch As OfficeOperationBatch,
+                                                      operationResults As JArray,
+                                                      criterion As OperationCriterion) As String
+            If criterion Is Nothing Then Return "property_state"
+            If String.Equals(criterion.PropertyName, "exists", StringComparison.OrdinalIgnoreCase) Then
+                Dim expectedExists As Boolean
+                If criterion.ExpectedValue IsNot Nothing AndAlso
+                   Boolean.TryParse(criterion.ExpectedValue.ToString(), expectedExists) Then
+                    Return If(expectedExists, "object_exists", "object_absent")
+                End If
+            End If
+
+            Dim effects As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            For Each operation In If(batch?.Operations, New List(Of OfficeOperation)())
+                If operation Is Nothing Then Continue For
+                Dim operationResult = operationResults?.OfType(Of JObject)().FirstOrDefault(
+                    Function(item) String.Equals(item("id")?.ToString(), operation.Id, StringComparison.OrdinalIgnoreCase))
+                Dim resultRef = If(operationResult?("resultRef")?.ToString(), "")
+                If Not String.Equals(operation.TargetRef, criterion.TargetRef, StringComparison.OrdinalIgnoreCase) AndAlso
+                   Not String.Equals(resultRef, criterion.TargetRef, StringComparison.OrdinalIgnoreCase) Then Continue For
+                effects.Add(InferOperationEffect(operation, If(operation.Action, "").Trim().ToLowerInvariant()))
+            Next
+            If effects.Count = 1 Then Return effects.First()
+            Return "property_state"
         End Function
 
         Public Shared Function HasRequiredVerificationFailure(verification As JArray) As Boolean
@@ -165,6 +198,102 @@ Namespace OfficeRuntime
                 Function(operation) operation IsNot Nothing AndAlso
                     Not String.Equals(operation.Action, "get", StringComparison.OrdinalIgnoreCase) AndAlso
                     Not String.Equals(operation.Action, "collection_item", StringComparison.OrdinalIgnoreCase))
+        End Function
+
+        ''' <summary>
+        ''' Maps a declarative COM batch to the canonical state family it can prove. Mixed or
+        ''' unknown batches are invalidation-only; callers must split them to obtain positive
+        ''' completion evidence for a specific outcome.
+        ''' </summary>
+        Private Shared Function InferMutationEffect(batch As OfficeOperationBatch) As String
+            Dim effects As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            For Each operation In If(batch?.Operations, New List(Of OfficeOperation)())
+                If operation Is Nothing Then Continue For
+                Dim action = If(operation.Action, "").Trim().ToLowerInvariant()
+                If action = "get" OrElse action = "collection_item" Then Continue For
+                effects.Add(InferOperationEffect(operation, action))
+            Next
+            If effects.Count = 0 Then Return "read_coverage"
+            If effects.Count = 1 Then Return effects.First()
+            Return "unclassified_mutation"
+        End Function
+
+        Private Shared Function InferOperationEffect(operation As OfficeOperation,
+                                                     action As String) As String
+            Dim memberId = If(operation?.MemberId, "").ToLowerInvariant()
+            If action = "set" Then
+                If Regex.IsMatch(memberId, "\.property\.(formula|formular1c1)(?:\(|$)", RegexOptions.IgnoreCase) Then
+                    Return "formula_state"
+                End If
+                If Regex.IsMatch(memberId, "\.property\.(value|value2)(?:\(|$)", RegexOptions.IgnoreCase) Then
+                    Return "data_state"
+                End If
+                Return "property_state"
+            End If
+
+            If action = "create" Then
+                If memberId.Contains("chart") Then Return "artifact"
+                Return "object_exists"
+            End If
+
+            If action = "delete" Then
+                If memberId.Contains("excel.range.") OrElse memberId.Contains("excel.rows.") OrElse
+                   memberId.Contains("excel.columns.") Then Return "data_state"
+                Return "object_absent"
+            End If
+
+            If action = "invoke" Then
+                If memberId.Contains(".method.sort") Then Return "order_state"
+                If memberId.Contains(".method.autofilter") OrElse memberId.Contains(".method.filter") Then Return "filter_state"
+                If memberId.Contains(".method.clear") OrElse memberId.Contains(".method.clearcontents") OrElse
+                   (memberId.Contains("excel.range.") AndAlso memberId.Contains(".method.delete")) Then Return "data_state"
+                If memberId.Contains(".method.delete") Then Return "object_absent"
+                If memberId.Contains("chartobjects.method.add") OrElse memberId.Contains("charts.method.add") Then Return "artifact"
+                If memberId.Contains("worksheets.method.add") OrElse memberId.Contains("sheets.method.add") OrElse
+                   memberId.Contains("worksheet.method.copy") Then Return "object_exists"
+                If memberId.Contains("excel.range.") AndAlso memberId.Contains(".method.copy") Then Return "data_state"
+            End If
+
+            Return "unclassified_mutation"
+        End Function
+
+        ''' <summary>
+        ''' Insert/Delete changes the coordinate identity of every downstream range. A
+        ''' tombstone at the worksheet root is deliberately conservative and prevents old
+        ''' cell/read evidence from being re-used after rows or columns shift.
+        ''' </summary>
+        Private Shared Function BuildStructuralInvalidationRefs(batch As OfficeOperationBatch) As JArray
+            Dim result As New JArray()
+            Dim seen As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            For Each operation In If(batch?.Operations, New List(Of OfficeOperation)())
+                If operation Is Nothing Then Continue For
+                Dim memberId = If(operation.MemberId, "")
+                Dim structural = Regex.IsMatch(
+                    memberId,
+                    "Excel\.(?:Range|Rows|Columns)\.method\.(?:Insert|Delete)(?:\(\)|$)",
+                    RegexOptions.IgnoreCase)
+                If Not structural Then Continue For
+                Dim worksheetRef = GetWorksheetRootReference(operation.TargetRef)
+                If Not String.IsNullOrWhiteSpace(worksheetRef) AndAlso seen.Add(worksheetRef) Then
+                    result.Add(worksheetRef)
+                End If
+            Next
+            Return result
+        End Function
+
+        Private Shared Function GetWorksheetRootReference(targetRef As String) As String
+            Dim source = If(targetRef, "").Trim()
+            Dim canonicalMatch = Regex.Match(
+                source,
+                "^(?<root>Excel:workbooks/[^/]+/worksheets/[^/]+)(?:/|$)",
+                RegexOptions.IgnoreCase)
+            If canonicalMatch.Success Then Return canonicalMatch.Groups("root").Value
+
+            Dim shortMatch = Regex.Match(source, "^(?:Excel:)?(?<sheet>[^!/:]+)!", RegexOptions.IgnoreCase)
+            If shortMatch.Success Then
+                Return $"Excel:workbooks/active/worksheets/{Uri.EscapeDataString(shortMatch.Groups("sheet").Value.Trim("'"c))}"
+            End If
+            Return ""
         End Function
 
         Private Shared Function CollectTargetRefs(batch As OfficeOperationBatch,

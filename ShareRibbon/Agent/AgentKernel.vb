@@ -113,7 +113,14 @@ Namespace Agent
                                                End Sub
 
             _loopEngine.OnRequestApproval = Async Function(msg)
-                                                Dim tcs As New TaskCompletionSource(Of Boolean)()
+                                                ' Fail closed when no approval consumer is connected; otherwise
+                                                ' the Agent would await an uncompletable Task indefinitely.
+                                                If OnRequestApprovalEvent Is Nothing Then
+                                                    Throw New InvalidOperationException(
+                                                        "No approval handler is registered for this AgentKernel.")
+                                                End If
+                                                Dim tcs As New TaskCompletionSource(Of Boolean)(
+                                                    TaskCreationOptions.RunContinuationsAsynchronously)
                                                 RaiseEvent OnRequestApproval(msg, Sub(approved) tcs.TrySetResult(approved))
                                                 Return Await tcs.Task
                                             End Function
@@ -250,16 +257,15 @@ Namespace Agent
                                $"allowedTools={executionContext.AllowedToolsText()} " &
                                $"taskHints={String.Join(",", If(_session.Spec?.RequiredTools, New List(Of String)()))}")
 
-                ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
-                Dim contextText = contextPack.ToPromptText()
+                ' System prompt contains only stable policy/tool facts. Mutable Office state
+                ' is injected from the freshly captured ContextPack on every Agent step.
                 Dim executionTools = _toolRegistry.GetVisibleTools(appType, executionContext)
                 AppLogger.Info("AgentKernel",
                                $"Adaptive ReAct tool view count={executionTools.Count}")
                 Dim systemPrompt = _promptManager.BuildSystemPrompt(
                     appType,
                     executionTools,
-                    _memory,
-                    contextText
+                    _memory
                 )
 
                 ' 执行 ReAct Loop
@@ -283,7 +289,10 @@ Namespace Agent
                 AppLogger.Error("AgentKernel", "ExecuteAsync unhandled exception", ex)
                 Dim classified = ExceptionClassifier.Classify(ex)
                 Dim failed = AgentResult.Failed(If(_session?.Id, Guid.NewGuid().ToString()),
-                                                $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}")
+                                                $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}",
+                                                taskFatal:=classified.TaskFatal,
+                                                sessionFatal:=classified.SessionFatal,
+                                                errorCode:=classified.ErrorCode)
                 RaiseEvent OnCompleted(failed)
                 Return failed
             Finally

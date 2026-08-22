@@ -21,6 +21,11 @@ Namespace Agent
         ''' may mutate external state. Safety policy must not infer this from localized names.
         ''' </summary>
         Public Property AccessMode As String = "write" ' "read" / "compute" / "write"
+        ''' <summary>
+        ''' Canonical observable effects this capability can produce.  These are outcome
+        ''' semantics, not permissions or a prescribed workflow.
+        ''' </summary>
+        Public Property OutcomeEffects As New List(Of String)()
         Public Property AvailabilityStatus As String = "available" ' "available" / "unavailable" / "error"
         Public Property LastError As String = ""
         Public Property IsVbaFallback As Boolean = False
@@ -54,7 +59,7 @@ Namespace Agent
     End Class
 
     ''' <summary>
-    ''' Unified tool execution result used by observe, repair, trace, and explanation.
+    ''' Unified tool execution result used by observe, adaptive decision, trace, and explanation.
     ''' </summary>
     Public Class ToolResult
         Public Property Success As Boolean
@@ -81,8 +86,14 @@ Namespace Agent
         Public Property UserMessage As String = ""
         ''' <summary>调试细节（已脱敏），勿直接展示给用户。</summary>
         Public Property DebugDetail As String = ""
-        ''' <summary>是否适合 Agent 自动 repair / 重试。</summary>
+        ''' <summary>Legacy compatibility flag. It no longer controls retry or task termination.</summary>
         Public Property Recoverable As Boolean = True
+        ''' <summary>Whether the identical tool call may be retried for a transient failure.</summary>
+        Public Property Retryable As Boolean = False
+        ''' <summary>Whether this failure proves the current user task cannot continue.</summary>
+        Public Property TaskFatal As Boolean = False
+        ''' <summary>Whether the whole Agent session/runtime is no longer safe to continue.</summary>
+        Public Property SessionFatal As Boolean = False
 
         Public Shared Function Succeed(toolId As String, Optional message As String = "",
                                        Optional data As Object = Nothing,
@@ -99,7 +110,10 @@ Namespace Agent
                 .UndoPointId = If(undoPointId, ""),
                 .Artifacts = artifacts,
                 .ErrorCode = "",
-                .Recoverable = True
+                .Recoverable = True,
+                .Retryable = False,
+                .TaskFatal = False,
+                .SessionFatal = False
             }
         End Function
 
@@ -110,7 +124,10 @@ Namespace Agent
                                       Optional debugDetail As String = Nothing,
                                       Optional recoverable As Boolean = True,
                                       Optional observation As Object = Nothing,
-                                      Optional artifacts As Object = Nothing) As ToolResult
+                                      Optional artifacts As Object = Nothing,
+                                      Optional taskFatal As Boolean = False,
+                                      Optional sessionFatal As Boolean = False,
+                                      Optional retryable As Boolean = False) As ToolResult
             Dim code = If(String.IsNullOrWhiteSpace(errorCode), ExceptionClassifier.CodeUnknown, errorCode)
             Dim userMsg = If(String.IsNullOrWhiteSpace(userMessage), message, userMessage)
             Dim detail = If(String.IsNullOrWhiteSpace(debugDetail), message, debugDetail)
@@ -125,7 +142,10 @@ Namespace Agent
                 .ErrorCode = code,
                 .UserMessage = userMsg,
                 .DebugDetail = AppLogger.Redact(detail),
-                .Recoverable = recoverable
+                .Recoverable = recoverable,
+                .Retryable = If(taskFatal OrElse sessionFatal, False, retryable),
+                .TaskFatal = taskFatal OrElse sessionFatal,
+                .SessionFatal = sessionFatal
             }
         End Function
 
@@ -138,10 +158,13 @@ Namespace Agent
                           classified.ErrorCode,
                           classified.UserMessage,
                           classified.DebugDetail,
-                          classified.Recoverable)
+                          classified.Recoverable,
+                          taskFatal:=classified.TaskFatal,
+                          sessionFatal:=classified.SessionFatal,
+                          retryable:=classified.Retryable)
         End Function
 
-        ''' <summary>供 Loop observe/repair 使用的紧凑摘要。</summary>
+        ''' <summary>供 Loop observe/next-decision 使用的紧凑摘要。</summary>
         Public Function ToObserveSummary() As String
             If Success Then
                 Dim summary = ExtractObservationSummary()
@@ -150,7 +173,7 @@ Namespace Agent
             End If
             Dim code = If(String.IsNullOrWhiteSpace(ErrorCode), ExceptionClassifier.CodeUnknown, ErrorCode)
             Dim um = If(String.IsNullOrWhiteSpace(UserMessage), Message, UserMessage)
-            Return $"[{code}] recoverable={Recoverable}: {um}"
+            Return $"[{code}] retryable={Retryable} taskFatal={TaskFatal} sessionFatal={SessionFatal}: {um}"
         End Function
 
         Private Function ExtractObservationSummary() As String
@@ -351,6 +374,13 @@ Namespace Agent
                 If String.IsNullOrWhiteSpace(existing.Description) Then existing.Description = tool.Description
                 If String.IsNullOrWhiteSpace(existing.Name) Then existing.Name = tool.Name
                 If existing.Parameters Is Nothing OrElse existing.Parameters.Count = 0 Then existing.Parameters = tool.Parameters
+                If tool.OutcomeEffects IsNot Nothing AndAlso tool.OutcomeEffects.Count > 0 Then
+                    For Each effect In tool.OutcomeEffects
+                        If Not existing.OutcomeEffects.Contains(effect, StringComparer.OrdinalIgnoreCase) Then
+                            existing.OutcomeEffects.Add(effect)
+                        End If
+                    Next
+                End If
                 If String.IsNullOrWhiteSpace(existing.Category) OrElse existing.Category = "基础操作" Then existing.Category = tool.Category
                 If Not String.IsNullOrWhiteSpace(tool.AccessMode) AndAlso
                    (String.IsNullOrWhiteSpace(existing.AccessMode) OrElse

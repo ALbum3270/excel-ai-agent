@@ -55,8 +55,10 @@ Namespace OfficeRuntime
                 .Operator = "gte", .ExpectedValue = New JValue(1), .Required = True
             })
             Dim configured = ExecuteBatch(application, toolId, configureBatch, "已验证图表类型、数据源和基础外观")
-            If Not configured.Success Then Return configured
-            Return ConfigureChartSeries(application, params, chartRef, configured)
+            If Not configured.Success Then Return MarkCompositeMutationFailure(configured, chartObjectRef)
+            Dim finalResult = ConfigureChartSeries(application, params, chartRef, configured)
+            If Not finalResult.Success Then Return MarkCompositeMutationFailure(finalResult, chartObjectRef)
+            Return AnnotateArtifactAnchor(finalResult, position.TargetRef, chartObjectRef)
         End Function
 
         Private Shared Function ConfigureChartSeries(application As Object,
@@ -106,7 +108,11 @@ Namespace OfficeRuntime
             Using resolved = ExcelObjectResolver.Resolve(application, descriptor.RangeRef)
                 Dim left = CDbl(resolved.Value.Left)
                 If String.IsNullOrWhiteSpace(positionSpec) Then left += CDbl(resolved.Value.Width) + 20.0R
-                Return New ChartPosition With {.Left = left, .Top = CDbl(resolved.Value.Top)}
+                Return New ChartPosition With {
+                    .Left = left,
+                    .Top = CDbl(resolved.Value.Top),
+                    .TargetRef = descriptor.RangeRef
+                }
             End Using
         End Function
 
@@ -145,6 +151,7 @@ Namespace OfficeRuntime
         Private Class ChartPosition
             Public Property Left As Double
             Public Property Top As Double
+            Public Property TargetRef As String
         End Class
     End Class
 

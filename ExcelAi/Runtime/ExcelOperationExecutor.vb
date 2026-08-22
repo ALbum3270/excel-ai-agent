@@ -106,7 +106,10 @@ Namespace OfficeRuntime
                                                                            warnings)
                 Dim verification = ExcelOperationObserver.VerifyExpectedEffects(batch, operationResults, afterState)
                 observation("verification") = verification
-                observation("satisfied") = Not ExcelOperationObserver.HasRequiredVerificationFailure(verification)
+                ' An empty verification set means no semantic postcondition was declared. It
+                ' must not be upgraded to satisfied=true merely because no check failed.
+                observation("satisfied") = verification.Count > 0 AndAlso
+                    Not ExcelOperationObserver.HasRequiredVerificationFailure(verification)
                 Dim data As New JObject From {
                     {"schemaVersion", batch.SchemaVersion},
                     {"targetRefs", JArray.FromObject(targetRefs.Distinct(StringComparer.OrdinalIgnoreCase))},

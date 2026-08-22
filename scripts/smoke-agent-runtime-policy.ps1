@@ -101,13 +101,11 @@ if ($null -eq $pythonClassifier -or
     throw "Python computation classification still treats identifier text as an invocation"
 }
 
-# Ordered workflows are contracts as well as sets. A plan containing every tool in the
-# wrong dependency order must be rejected before touching the workbook.
+# A plan is explanatory guidance, not an executable workflow contract. Data dependency
+# order is chosen from runtime observations, so even an implausible predicted order must
+# not become a pre-execution gate.
 $orderedSpec = [ShareRibbon.Agent.AgentTaskSpec]::new()
-foreach ($id in @("ReadRange", "PythonCompute", "WriteData")) {
-    $orderedSpec.MandatoryTools.Add($id)
-    $orderedSpec.MandatoryToolSequence.Add($id)
-}
+$orderedSpec.RequiredCapabilities.Add("PythonCompute")
 $wrongOrderPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
 foreach ($id in @("PythonCompute", "ReadRange", "WriteData")) {
     $wrongOrderPlan.Steps.Add([ShareRibbon.Agent.PlanStep]@{
@@ -115,9 +113,1180 @@ foreach ($id in @("PythonCompute", "ReadRange", "WriteData")) {
         Language = "json"
     })
 }
-if ([string]::IsNullOrWhiteSpace(
+if (-not [string]::IsNullOrWhiteSpace(
     [ShareRibbon.Agent.AgentExecutionContract]::ValidatePlan($orderedSpec, $wrongOrderPlan))) {
-    throw "Mandatory tool sequence accepted an invalid dependency order"
+    throw "Soft plan was incorrectly treated as an executable dependency contract"
+}
+
+# Outcome verification is a typed host-evidence contract.  These helpers build proof
+# ledgers directly so the regression cases cannot accidentally pass through prompt text,
+# model wording, or a catch inside ToolRegistry.
+function New-TestOutcomeRequirement {
+    param(
+        [string]$Id,
+        [string]$TargetRef,
+        [string]$EffectType,
+        [string]$PropertyName = "",
+        [Newtonsoft.Json.Linq.JToken]$ExpectedValue = $null,
+        [string]$DerivedFromCapability = "",
+        [string]$Operator = "equals"
+    )
+
+    $requirement = [ShareRibbon.Agent.OutcomeRequirement]::new()
+    $requirement.Id = $Id
+    $requirement.AppType = "Excel"
+    $requirement.TargetRef = $TargetRef
+    $requirement.EffectType = $EffectType
+    $requirement.PropertyName = $PropertyName
+    $requirement.Operator = $Operator
+    $requirement.ExpectedValue = $ExpectedValue
+    $requirement.DerivedFromCapability = $DerivedFromCapability
+    $requirement.Required = $true
+    return $requirement
+}
+
+function New-TestOutcomeSession {
+    param(
+        [string]$Goal,
+        [object[]]$Requirements
+    )
+
+    $session = [ShareRibbon.Agent.AgentSession]::new($Goal, "Excel", "")
+    $session.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+    $session.Spec.Goal = $Goal
+    $contract = [ShareRibbon.Agent.OutcomeContract]::new()
+    $contract.Frozen = $true
+    foreach ($requirement in $Requirements) {
+        $contract.Requirements.Add($requirement)
+    }
+    $session.Spec.OutcomeContract = $contract
+    return $session
+}
+
+function New-TestOutcomeEvidence {
+    param(
+        [string]$EvidenceId,
+        [string]$IterationEvidenceId,
+        [string]$TargetRef,
+        [string]$EffectType,
+        [string]$PropertyName = "",
+        [Newtonsoft.Json.Linq.JToken]$Expected = $null,
+        [string]$SourceToolId = "TestTool",
+        [string[]]$DependsOn = @(),
+        [bool]$Satisfied = $true,
+        [bool]$InvalidatesPrior = $false,
+        [long]$WorldRevision = 0
+    )
+
+    $record = [ShareRibbon.Agent.OutcomeEvidenceRecord]::new()
+    $record.EvidenceId = $EvidenceId
+    $record.IterationEvidenceId = $IterationEvidenceId
+    $record.TargetRef = $TargetRef
+    $record.EffectType = $EffectType
+    $record.PropertyName = $PropertyName
+    $record.Expected = $Expected
+    if ($null -eq $Expected) {
+        $record.Actual = $null
+    } else {
+        $record.Actual = $Expected.DeepClone()
+    }
+    $record.Satisfied = $Satisfied
+    $record.InvalidatesPrior = $InvalidatesPrior
+    $record.SourceToolId = $SourceToolId
+    $record.WorldRevision = $WorldRevision
+    foreach ($dependency in $DependsOn) {
+        $record.DerivedFromEvidenceIds.Add($dependency)
+    }
+    return $record
+}
+
+function Add-TestOutcomeIteration {
+    param(
+        [ShareRibbon.Agent.AgentSession]$Session,
+        [string]$IterationEvidenceId,
+        [string]$ToolId,
+        [object[]]$EvidenceRecords = @(),
+        [string[]]$DependsOn = @(),
+        [bool]$IterationSucceeded = $true
+    )
+
+    $iteration = [ShareRibbon.Agent.ReActIteration]::new()
+    $iteration.EvidenceId = $IterationEvidenceId
+    $iteration.Action = [ShareRibbon.Agent.ToolCall]::new()
+    $iteration.Action.ToolId = $ToolId
+    $iteration.Explanation = [ShareRibbon.Agent.ExecutionExplanation]::new()
+    $iteration.Explanation.Success = $IterationSucceeded
+    foreach ($dependency in $DependsOn) {
+        $iteration.DependsOnEvidenceIds.Add($dependency)
+    }
+    foreach ($record in $EvidenceRecords) {
+        $iteration.ContractEvidence.Add($record)
+    }
+    $Session.Iterations.Add($iteration)
+}
+
+function Test-OutcomeContract {
+    param(
+        [ShareRibbon.Agent.AgentSession]$Session,
+        [string[]]$EvidenceClaims
+    )
+
+    $claims = [System.Collections.Generic.List[string]]::new()
+    foreach ($claim in $EvidenceClaims) {
+        $claims.Add($claim)
+    }
+    return [ShareRibbon.Agent.AgentGoalVerifier]::Validate($Session, $null, $claims, 0)
+}
+
+$green = [Newtonsoft.Json.Linq.JValue]::CreateString("#90EE90")
+
+# Excel completion fails closed without a frozen outcome contract. A successful local
+# mutation can never become the implicit definition of the user's whole goal.
+$noContractSession = [ShareRibbon.Agent.AgentSession]::new("format sales", "Excel", "")
+$noContractSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$noContractSession.Spec.Goal = "format sales"
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $noContractSession @()))) {
+    throw "An Excel task without a frozen outcome contract was accepted"
+}
+
+# A contract range without a worksheet is not stable evidence. It must not be satisfied
+# by an identically addressed range on whichever sheet happened to execute.
+$unqualifiedRequirement = New-TestOutcomeRequirement `
+    -Id "unqualified-range" `
+    -TargetRef "A1:D25" `
+    -EffectType "read_coverage" `
+    -Operator "covers"
+$wrongSheetSession = New-TestOutcomeSession "read a specific table" @($unqualifiedRequirement)
+$wrongSheetEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:WrongSheet!A1:D25" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+Add-TestOutcomeIteration $wrongSheetSession "obs-1" "ReadRange" @($wrongSheetEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $wrongSheetSession @("obs-1/e1")))) {
+    throw "An unqualified contract range was satisfied by evidence from an arbitrary worksheet"
+}
+
+$formatRequirement = New-TestOutcomeRequirement `
+    -Id "format-sales" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -ExpectedValue $green
+
+# A mutation of only part of a contracted range must not prove the whole requested range.
+$partialRangeSession = New-TestOutcomeSession "format complete sales range" @($formatRequirement)
+$partialEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D5" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange"
+Add-TestOutcomeIteration $partialRangeSession "obs-1" "FormatRange" @($partialEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $partialRangeSession @("obs-1/e1")))) {
+    throw "Partial range evidence was accepted for a whole-range outcome contract"
+}
+
+# Correct target plus the wrong property is still the wrong end state.
+$wrongPropertySession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$wrongPropertyEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fontColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange"
+Add-TestOutcomeIteration $wrongPropertySession "obs-1" "FormatRange" @($wrongPropertyEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $wrongPropertySession @("obs-1/e1")))) {
+    throw "Evidence for the wrong property was accepted by the outcome contract"
+}
+
+# A model may cite only evidence IDs present in the successful typed ledger.
+$fakeEvidenceSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$fullFormatEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange"
+Add-TestOutcomeIteration $fakeEvidenceSession "obs-1" "FormatRange" @($fullFormatEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $fakeEvidenceSession @("obs-404/e1")))) {
+    throw "A fabricated evidence ID was accepted by the outcome contract"
+}
+$completeEvidenceError = Test-OutcomeContract $fakeEvidenceSession @("obs-1/e1")
+if (-not [string]::IsNullOrWhiteSpace($completeEvidenceError)) {
+    throw "A complete matching host-evidence record was rejected: $completeEvidenceError actual=$($fullFormatEvidence.Actual) property=$($fullFormatEvidence.PropertyName) expected=$($formatRequirement.ExpectedValue)"
+}
+
+# Tool request parameters are not host evidence. Even if the request asked for the exact
+# contracted value and the adapter marked the operation satisfied, a conflicting observed
+# actual value must fail the completion gate.
+$actualMismatchSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$actualMismatchEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange"
+$actualMismatchEvidence.Actual = [Newtonsoft.Json.Linq.JValue]::CreateString("#FF0000")
+Add-TestOutcomeIteration $actualMismatchSession "obs-1" "FormatRange" @($actualMismatchEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $actualMismatchSession @("obs-1/e1")))) {
+    throw "Requested parameters were accepted even though host-observed actual state disagreed"
+}
+
+# Historical evidence is not the final state. A later overlapping write to the same property
+# supersedes an earlier match, even when the model cites only the stale evidence ID.
+$staleStateSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$oldGreenEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange" `
+    -WorldRevision 1
+$newRedEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-2/e1" `
+    -IterationEvidenceId "obs-2" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected ([Newtonsoft.Json.Linq.JValue]::CreateString("#FF0000")) `
+    -SourceToolId "FormatRange" `
+    -WorldRevision 2
+Add-TestOutcomeIteration $staleStateSession "obs-1" "FormatRange" @($oldGreenEvidence)
+Add-TestOutcomeIteration $staleStateSession "obs-2" "FormatRange" @($newRedEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $staleStateSession @("obs-1/e1")))) {
+    throw "Stale matching evidence was accepted after a later overlapping state change"
+}
+
+# `changed` is audit metadata, not postcondition proof. A host rejection must stay rejected,
+# while an idempotent no-change operation with an explicit satisfied state is valid.
+$unsatisfiedSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$unsatisfiedEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange" `
+    -Satisfied $false
+Add-TestOutcomeIteration $unsatisfiedSession "obs-1" "FormatRange" @($unsatisfiedEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $unsatisfiedSession @("obs-1/e1")))) {
+    throw "An unsatisfied host observation was accepted as goal completion"
+}
+
+$idempotentSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$idempotentEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange"
+Add-TestOutcomeIteration $idempotentSession "obs-1" "FormatRange" @($idempotentEvidence)
+if (-not [string]::IsNullOrWhiteSpace((Test-OutcomeContract $idempotentSession @("obs-1/e1")))) {
+    throw "An idempotent explicitly satisfied host state was rejected"
+}
+
+$factoryFormatTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$factoryFormatTool.Id = "FactoryFormat"
+$factoryFormatTool.AppType = "Excel"
+$factoryFormatTool.AccessMode = "write"
+$factoryFormatTool.OutcomeEffects.Add("property_state")
+$factoryFormatCall = [ShareRibbon.Agent.ToolCall]::new()
+$factoryFormatCall.ToolId = "FactoryFormat"
+$factoryFormatCall.Parameters = [Newtonsoft.Json.Linq.JObject]::Parse('{"range":"SalesData!D2:D25","fillColor":"#90EE90"}')
+$changedButRejectedResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "FactoryFormat",
+    "host rejected expected state",
+    $null,
+    [Newtonsoft.Json.Linq.JObject]::Parse('{"changed":true,"satisfied":false,"targetRefs":["Excel:SalesData!D2:D25"]}'))
+$changedButRejectedEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $factoryFormatTool,
+    $factoryFormatCall,
+    $changedButRejectedResult,
+    "obs-factory-1",
+    [string[]]@()))
+if ($changedButRejectedEvidence.Count -ne 1 -or $changedButRejectedEvidence[0].Satisfied) {
+    throw "OutcomeEvidenceFactory still treats changed=true as satisfied=true"
+}
+if (-not $changedButRejectedEvidence[0].InvalidatesPrior) {
+    throw "A changed-but-unverified write did not revoke older state evidence"
+}
+$idempotentHostResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "FactoryFormat",
+    "already in expected state",
+    $null,
+    [Newtonsoft.Json.Linq.JObject]::Parse('{"changed":false,"satisfied":true,"targetRefs":["Excel:SalesData!D2:D25"]}'))
+$idempotentHostEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $factoryFormatTool,
+    $factoryFormatCall,
+    $idempotentHostResult,
+    "obs-factory-2",
+    [string[]]@()))
+if ($idempotentHostEvidence.Count -ne 1 -or -not $idempotentHostEvidence[0].Satisfied) {
+    throw "OutcomeEvidenceFactory rejected explicit idempotent host satisfaction"
+}
+
+# A structured host verification may safely link user-facing tool parameters to normalized
+# COM properties. This keeps high-level tools usable without falling back to raw request data.
+$verifiedAliasCall = [ShareRibbon.Agent.ToolCall]::new()
+$verifiedAliasCall.ToolId = "FactoryFormat"
+$verifiedAliasCall.Parameters = [Newtonsoft.Json.Linq.JObject]::Parse(
+    '{"range":"SalesData!D2:D25","backgroundColor":"#90EE90","fontColor":"#90EE90"}')
+$verifiedAliasObservation = [Newtonsoft.Json.Linq.JObject]::Parse(@'
+{
+  "kind":"office_operation_batch",
+  "writeExpected":true,
+  "changed":true,
+  "satisfied":true,
+  "verification":[{
+    "targetRef":"Excel:workbooks/active/worksheets/SalesData/ranges/D2:D25/interior",
+    "property":"Color",
+    "status":"passed",
+    "required":true,
+    "expected":9498256,
+    "actual":9498256,
+    "requestProperty":"backgroundColor",
+    "requestExpected":"#90EE90"
+  }]
+}
+'@)
+$verifiedAliasResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "FactoryFormat",
+    "normalized color verified",
+    $null,
+    $verifiedAliasObservation)
+$verifiedAliasEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $factoryFormatTool,
+    $verifiedAliasCall,
+    $verifiedAliasResult,
+    "obs-alias-1",
+    [string[]]@(),
+    1))
+$aliasRequirement = New-TestOutcomeRequirement `
+    -Id "verified-background" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "backgroundColor" `
+    -ExpectedValue $green
+$aliasSession = New-TestOutcomeSession "format background" @($aliasRequirement)
+Add-TestOutcomeIteration $aliasSession "obs-alias-1" "FactoryFormat" @($verifiedAliasEvidence)
+if (-not $verifiedAliasEvidence[0].RequestVerified -or
+    -not [string]::IsNullOrWhiteSpace((Test-OutcomeContract $aliasSession @("obs-alias-1/e1")))) {
+    throw "A host-verified high-level parameter alias was not accepted as grounded evidence"
+}
+$unrelatedAliasRequirement = New-TestOutcomeRequirement `
+    -Id "unverified-font" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fontColor" `
+    -ExpectedValue $green
+$unrelatedAliasSession = New-TestOutcomeSession "format font" @($unrelatedAliasRequirement)
+Add-TestOutcomeIteration $unrelatedAliasSession "obs-alias-1" "FactoryFormat" @($verifiedAliasEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $unrelatedAliasSession @("obs-alias-1/e1")))) {
+    throw "Verification of one request field implicitly blessed an unrelated tool parameter"
+}
+
+# A host hash can prove that WriteData committed the user-level matrix, but contracts should
+# compare the matrix rather than depend on an observer-internal hash representation.
+$writeFactoryTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$writeFactoryTool.Id = "WriteData"
+$writeFactoryTool.AppType = "Excel"
+$writeFactoryTool.AccessMode = "write"
+$writeMatrix = [Newtonsoft.Json.Linq.JArray]::Parse('[["Region","Average"],["East",1500.0],["North",2000.0]]')
+$writeFactoryCall = [ShareRibbon.Agent.ToolCall]::new()
+$writeFactoryCall.ToolId = "WriteData"
+$writeFactoryCall.Parameters = [Newtonsoft.Json.Linq.JObject]::Parse('{"targetRange":"PythonAverage!A1:B3"}')
+$writeFactoryCall.Parameters["data"] = $writeMatrix.DeepClone()
+$writeProjectionObservation = [Newtonsoft.Json.Linq.JObject]::Parse(
+    '{"kind":"office_operation_batch","writeExpected":true,"changed":true,"satisfied":true}')
+$writeProjectionVerification = [Newtonsoft.Json.Linq.JObject]::Parse(
+    '{"targetRef":"Excel:workbooks/active/worksheets/PythonAverage/ranges/A1:B3","effectType":"data_state","property":"ValueHash","status":"passed","required":true,"expected":"verified-hash","actual":"verified-hash","requestProperty":"data"}')
+$writeProjectionVerification["requestExpected"] = $writeMatrix.DeepClone()
+$writeProjectionObservation["verification"] = [Newtonsoft.Json.Linq.JArray]::new($writeProjectionVerification)
+$writeProjectionResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "WriteData", "matrix hash verified", $null, $writeProjectionObservation)
+$writeProjectionEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $writeFactoryTool,
+    $writeFactoryCall,
+    $writeProjectionResult,
+    "obs-write-projection",
+    [string[]]@(),
+    2,
+    "Book.xlsx"))
+$writeProjectionRequirement = New-TestOutcomeRequirement `
+    -Id "semantic-write" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/PythonAverage/ranges/A1:B3" `
+    -EffectType "data_state" `
+    -PropertyName "data" `
+    -ExpectedValue $writeMatrix
+$writeProjectionSession = New-TestOutcomeSession "write exact matrix" @($writeProjectionRequirement)
+Add-TestOutcomeIteration $writeProjectionSession "obs-write-projection" "WriteData" @($writeProjectionEvidence)
+if (-not $writeProjectionEvidence[0].RequestVerified -or
+    -not [string]::IsNullOrWhiteSpace((Test-OutcomeContract $writeProjectionSession @("obs-write-projection/e1")))) {
+    throw "A host-verified WriteData matrix could not satisfy its semantic data contract"
+}
+
+# The generic Office object bridge may prove only the property state explicitly verified by
+# the host. One successful property mutation must not fan out into object existence/absence,
+# data, order, filter, and artifact evidence.
+$objectBridgeTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$objectBridgeTool.Id = "OfficeObjectOperation"
+$objectBridgeTool.AppType = "Excel"
+$objectBridgeTool.AccessMode = "write"
+$objectBridgeCall = [ShareRibbon.Agent.ToolCall]::new()
+$objectBridgeCall.ToolId = "OfficeObjectOperation"
+$objectBridgeCall.Parameters = [Newtonsoft.Json.Linq.JObject]::Parse('{"batch":{"schemaVersion":"1.0"}}')
+$objectBridgeObservation = [Newtonsoft.Json.Linq.JObject]::Parse(@'
+{
+  "kind":"office_operation_batch",
+  "writeExpected":true,
+  "changed":true,
+  "satisfied":true,
+  "targetRefs":["Excel:workbooks/active/worksheets/Sheet1"],
+  "verification":[{
+    "targetRef":"Excel:workbooks/active/worksheets/Sheet1",
+    "effectType":"property_state",
+    "property":"Name",
+    "status":"passed",
+    "required":true,
+    "expected":"Sheet1",
+    "actual":"Sheet1"
+  }]
+}
+'@)
+$objectBridgeResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "OfficeObjectOperation",
+    "verified one property",
+    $null,
+    $objectBridgeObservation)
+$objectBridgeEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $objectBridgeTool,
+    $objectBridgeCall,
+    $objectBridgeResult,
+    "obs-object-1",
+    [string[]]@()))
+if ($objectBridgeEvidence.Count -ne 1 -or
+    $objectBridgeEvidence[0].EffectType -ne "property_state" -or
+    $objectBridgeEvidence[0].PropertyName -ne "Name" -or
+    $objectBridgeEvidence[0].Actual["Name"].ToString() -ne "Sheet1") {
+    throw "OfficeObjectOperation fabricated effects beyond its verified property state"
+}
+
+# A required verification array is authoritative per target. Global satisfied/after fields
+# must not turn a failed target verification into positive completion evidence.
+$contradictoryObservation = [Newtonsoft.Json.Linq.JObject]::Parse(@'
+{
+  "kind":"office_operation_batch",
+  "changed":true,
+  "satisfied":true,
+  "after":{"Name":"Wanted"},
+  "verification":[{
+    "targetRef":"Excel:workbooks/active/worksheets/Sheet1",
+    "property":"Name",
+    "status":"failed",
+    "required":true,
+    "expected":"Wanted",
+    "actual":"Wrong"
+  }]
+}
+'@)
+$contradictoryResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "OfficeObjectOperation",
+    "global flag conflicts with required verification",
+    $null,
+    $contradictoryObservation)
+$contradictoryEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $objectBridgeTool,
+    $objectBridgeCall,
+    $contradictoryResult,
+    "obs-object-2",
+    [string[]]@(),
+    2))
+if ($contradictoryEvidence.Count -ne 1 -or
+    $contradictoryEvidence[0].Satisfied -or
+    -not $contradictoryEvidence[0].InvalidatesPrior -or
+    $contradictoryEvidence[0].Actual["Name"].ToString() -ne "Wrong") {
+    throw "A failed required verification was overridden by global satisfied/after state"
+}
+
+# Verification tuples are atomic. A mixed batch that deletes Chart1 and reads Chart2.Name
+# must never manufacture object_absent evidence for Chart2 from batch-level target/effect sets.
+$mixedObjectObservation = [Newtonsoft.Json.Linq.JObject]::Parse(@'
+{
+  "kind":"office_operation_batch",
+  "writeExpected":true,
+  "changed":true,
+  "satisfied":true,
+  "verification":[
+    {"targetRef":"Excel:workbooks/active/worksheets/SalesData/charts/Chart1","effectType":"object_absent","property":"Exists","status":"passed","required":true,"expected":false,"actual":false},
+    {"targetRef":"Excel:workbooks/active/worksheets/SalesData/charts/Chart2","effectType":"read_coverage","property":"Name","status":"passed","required":true,"expected":"Chart2","actual":"Chart2"}
+  ]
+}
+'@)
+$mixedObjectResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "OfficeObjectOperation", "mixed batch verified", $null, $mixedObjectObservation)
+$mixedObjectEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $objectBridgeTool,
+    $objectBridgeCall,
+    $mixedObjectResult,
+    "obs-object-mixed",
+    [string[]]@(),
+    3,
+    "Book.xlsx"))
+$chart2AbsentRequirement = New-TestOutcomeRequirement `
+    -Id "chart-2-absent" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/charts/Chart2" `
+    -EffectType "object_absent" `
+    -Operator "exists"
+$mixedObjectSession = New-TestOutcomeSession "delete Chart2" @($chart2AbsentRequirement)
+Add-TestOutcomeIteration $mixedObjectSession "obs-object-mixed" "OfficeObjectOperation" @($mixedObjectEvidence)
+$mixedObjectClaims = @($mixedObjectEvidence | ForEach-Object { $_.EvidenceId })
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $mixedObjectSession $mixedObjectClaims))) {
+    throw "A mixed-target verification array manufactured Chart2 deletion evidence"
+}
+
+# A passed artifact anchor cannot override a failed required verification in the same host
+# observation, even if an inconsistent producer reports Result.Success=true.
+$chartFactoryTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$chartFactoryTool.Id = "CreateChart"
+$chartFactoryTool.AppType = "Excel"
+$chartFactoryTool.AccessMode = "write"
+$chartFactoryCall = [ShareRibbon.Agent.ToolCall]::new()
+$chartFactoryCall.ToolId = "CreateChart"
+$chartFactoryCall.Parameters = [Newtonsoft.Json.Linq.JObject]::Parse('{"position":"SalesData!D1","type":"line"}')
+$failedChartObservation = [Newtonsoft.Json.Linq.JObject]::Parse(@'
+{
+  "kind":"office_operation_batch",
+  "writeExpected":true,
+  "changed":true,
+  "satisfied":false,
+  "verification":[
+    {"targetRef":"Excel:workbooks/active/worksheets/SalesData/chartObjects/Chart1/chart","effectType":"artifact","property":"ChartType","status":"failed","required":true,"expected":4,"actual":51}
+  ],
+  "artifactAnchors":[
+    {"targetRef":"Excel:workbooks/active/worksheets/SalesData/ranges/D1","artifactRef":"Excel:workbooks/active/worksheets/SalesData/chartObjects/Chart1","status":"passed"}
+  ]
+}
+'@)
+$failedChartResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "CreateChart", "inconsistent chart result", $null, $failedChartObservation)
+$failedChartEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $chartFactoryTool,
+    $chartFactoryCall,
+    $failedChartResult,
+    "obs-chart-required-failed",
+    [string[]]@(),
+    4,
+    "Book.xlsx"))
+if ($failedChartEvidence | Where-Object { $_.Satisfied -and $_.TargetRef -match '/ranges/D1$' }) {
+    throw "A failed required chart verification was bypassed by a positive artifact anchor"
+}
+
+# Explicit invalidation/artifact records are world changes even when an adapter has no
+# generic changed/after field. Otherwise their revision can tie with stale evidence.
+$invalidationOnlyTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$invalidationOnlyTool.Id = "InvalidateOnly"
+$invalidationOnlyTool.AccessMode = "write"
+$invalidationOnlyResult = [ShareRibbon.Agent.ToolResult]::Succeed(
+    "InvalidateOnly",
+    "structural invalidation",
+    $null,
+    [Newtonsoft.Json.Linq.JObject]::Parse('{"changed":false,"invalidationRefs":["Excel:SalesData"]}'))
+if (-not [ShareRibbon.Agent.OutcomeEvidenceFactory]::ObservationAdvancesWorld(
+    $invalidationOnlyTool,
+    $invalidationOnlyResult)) {
+    throw "Explicit invalidation refs did not advance the evidence world revision"
+}
+
+# Object identity uses canonical path segments. Sheet1 must never be confused with Sheet10.
+$sheet1Requirement = New-TestOutcomeRequirement `
+    -Id "sheet-created" `
+    -TargetRef "Excel:Sheet1" `
+    -EffectType "object_exists"
+$sheetBoundarySession = New-TestOutcomeSession "create Sheet1" @($sheet1Requirement)
+$sheet10Evidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:Sheet10" `
+    -EffectType "object_exists" `
+    -SourceToolId "CreateSheet"
+Add-TestOutcomeIteration $sheetBoundarySession "obs-1" "CreateSheet" @($sheet10Evidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $sheetBoundarySession @("obs-1/e1")))) {
+    throw "Sheet1 outcome contract incorrectly matched Sheet10 evidence"
+}
+
+$cellSuffixEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-2/e1" `
+    -IterationEvidenceId "obs-2" `
+    -TargetRef "Excel:OtherSheet!EET1" `
+    -EffectType "object_exists" `
+    -SourceToolId "CreateSheet"
+$objectSuffixSession = New-TestOutcomeSession "create Sheet1" @($sheet1Requirement)
+Add-TestOutcomeIteration $objectSuffixSession "obs-2" "CreateSheet" @($cellSuffixEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $objectSuffixSession @("obs-2/e1")))) {
+    throw "Worksheet object Sheet1 was misparsed as the cell suffix EET1"
+}
+
+# Child Office objects retain exact identity. A chart on the right worksheet is not proof
+# that another chart on that worksheet exists.
+$chart2Requirement = New-TestOutcomeRequirement `
+    -Id "chart-2-exists" `
+    -TargetRef "Excel:workbooks/active/worksheets/SalesData/charts/Chart2" `
+    -EffectType "artifact"
+$chartIdentitySession = New-TestOutcomeSession "create Chart2" @($chart2Requirement)
+$chart1Evidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-chart/e1" `
+    -IterationEvidenceId "obs-chart" `
+    -TargetRef "Excel:workbooks/active/worksheets/SalesData/charts/Chart1" `
+    -EffectType "artifact" `
+    -SourceToolId "CreateChart"
+Add-TestOutcomeIteration $chartIdentitySession "obs-chart" "CreateChart" @($chart1Evidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $chartIdentitySession @("obs-chart/e1")))) {
+    throw "Distinct child objects on the same worksheet were collapsed to worksheet identity"
+}
+
+# Standard Excel:workbooks/... refs must retain workbook identity. The Excel: prefix is part
+# of the URI scheme, not a reason to fall back to whichever workbook is currently active.
+$bookBRequirement = New-TestOutcomeRequirement `
+    -Id "book-b-sheet" `
+    -TargetRef "Excel:workbooks/BookB.xlsx/worksheets/SalesData" `
+    -EffectType "object_exists" `
+    -Operator "exists"
+$crossWorkbookSession = New-TestOutcomeSession "create sheet in BookB" @($bookBRequirement)
+$bookAEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-book-a/e1" `
+    -IterationEvidenceId "obs-book-a" `
+    -TargetRef "Excel:workbooks/BookA.xlsx/worksheets/SalesData" `
+    -EffectType "object_exists" `
+    -SourceToolId "CreateSheet"
+Add-TestOutcomeIteration $crossWorkbookSession "obs-book-a" "CreateSheet" @($bookAEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $crossWorkbookSession @("obs-book-a/e1")))) {
+    throw "Object evidence crossed explicit workbook boundaries"
+}
+
+# Binding applies to canonical active-workbook URIs as well as short Sheet!Range refs.
+$boundAliasEvidence = @([ShareRibbon.Agent.OutcomeEvidenceFactory]::Create(
+    $factoryFormatTool,
+    $verifiedAliasCall,
+    $verifiedAliasResult,
+    "obs-bound-workbook",
+    [string[]]@(),
+    5,
+    "Book A.xlsx"))
+if ($boundAliasEvidence.Count -eq 0 -or
+    $boundAliasEvidence[0].TargetRef -notmatch 'Excel:workbooks/Book%20A\.xlsx/') {
+    throw "Canonical active-workbook evidence was not frozen to the observed workbook"
+}
+
+# Ordinary user data, worksheet names, and titles use exact string semantics. Formatting
+# enums/colors remain deliberately case-insensitive.
+$exactNameRequirement = New-TestOutcomeRequirement `
+    -Id "exact-name" `
+    -TargetRef "Excel:SalesData" `
+    -EffectType "property_state" `
+    -PropertyName "Name" `
+    -ExpectedValue ([Newtonsoft.Json.Linq.JValue]::CreateString("A B"))
+$exactNameSession = New-TestOutcomeSession "set exact name" @($exactNameRequirement)
+$collapsedNameEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-name/e1" `
+    -IterationEvidenceId "obs-name" `
+    -TargetRef "Excel:SalesData" `
+    -EffectType "property_state" `
+    -PropertyName "Name" `
+    -Expected ([Newtonsoft.Json.Linq.JValue]::CreateString("AB")) `
+    -SourceToolId "RenameSheet"
+Add-TestOutcomeIteration $exactNameSession "obs-name" "RenameSheet" @($collapsedNameEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $exactNameSession @("obs-name/e1")))) {
+    throw "Whitespace-distinct ordinary strings were treated as equal"
+}
+
+$caseNameRequirement = New-TestOutcomeRequirement `
+    -Id "case-name" `
+    -TargetRef "Excel:SalesData" `
+    -EffectType "property_state" `
+    -PropertyName "Name" `
+    -ExpectedValue ([Newtonsoft.Json.Linq.JValue]::CreateString("ABC"))
+$caseNameSession = New-TestOutcomeSession "set case-sensitive name" @($caseNameRequirement)
+$lowerNameEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-name-case/e1" `
+    -IterationEvidenceId "obs-name-case" `
+    -TargetRef "Excel:SalesData" `
+    -EffectType "property_state" `
+    -PropertyName "Name" `
+    -Expected ([Newtonsoft.Json.Linq.JValue]::CreateString("abc")) `
+    -SourceToolId "RenameSheet"
+Add-TestOutcomeIteration $caseNameSession "obs-name-case" "RenameSheet" @($lowerNameEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $caseNameSession @("obs-name-case/e1")))) {
+    throw "Case-distinct ordinary strings were treated as equal"
+}
+
+$semanticColorRequirement = New-TestOutcomeRequirement `
+    -Id "semantic-color" `
+    -TargetRef "Excel:SalesData!D2" `
+    -EffectType "property_state" `
+    -PropertyName "Color" `
+    -ExpectedValue ([Newtonsoft.Json.Linq.JValue]::CreateString("#90EE90"))
+$semanticColorSession = New-TestOutcomeSession "set semantic color" @($semanticColorRequirement)
+$lowerColorEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-color/e1" `
+    -IterationEvidenceId "obs-color" `
+    -TargetRef "Excel:SalesData!D2" `
+    -EffectType "property_state" `
+    -PropertyName "Color" `
+    -Expected ([Newtonsoft.Json.Linq.JValue]::CreateString("#90ee90")) `
+    -SourceToolId "FormatRange"
+Add-TestOutcomeIteration $semanticColorSession "obs-color" "FormatRange" @($lowerColorEvidence)
+if (-not [string]::IsNullOrWhiteSpace((Test-OutcomeContract $semanticColorSession @("obs-color/e1")))) {
+    throw "Known semantic formatting values lost controlled normalization"
+}
+
+# A stable chart-position anchor is no longer current after the related generated object is
+# mutated. Require a fresh host anchor observation instead of accepting stale creation proof.
+$anchoredChartRequirement = New-TestOutcomeRequirement `
+    -Id "chart-at-d1" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/ranges/D1" `
+    -EffectType "artifact" `
+    -Operator "exists"
+$movedChartSession = New-TestOutcomeSession "create chart at D1" @($anchoredChartRequirement)
+$anchoredChartEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-anchor/e1" `
+    -IterationEvidenceId "obs-anchor" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/ranges/D1" `
+    -EffectType "artifact" `
+    -SourceToolId "CreateChart" `
+    -WorldRevision 1
+$anchoredChartEvidence.RelatedTargetRefs.Add("Excel:workbooks/Book.xlsx/worksheets/SalesData/chartObjects/Chart1")
+$movedChartEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-move/e1" `
+    -IterationEvidenceId "obs-move" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/chartObjects/Chart1" `
+    -EffectType "property_state" `
+    -PropertyName "Left" `
+    -Expected ([Newtonsoft.Json.Linq.JToken]::FromObject([double]200.0)) `
+    -SourceToolId "OfficeObjectOperation" `
+    -InvalidatesPrior $true `
+    -WorldRevision 2
+Add-TestOutcomeIteration $movedChartSession "obs-anchor" "CreateChart" @($anchoredChartEvidence)
+Add-TestOutcomeIteration $movedChartSession "obs-move" "OfficeObjectOperation" @($movedChartEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $movedChartSession @("obs-anchor/e1")))) {
+    throw "A related chart mutation left stale position-anchor evidence valid"
+}
+
+# criterionIds are structural coverage, not permission to collapse independent outcomes.
+# One object-existence assertion cannot simultaneously prove both creation and data writing.
+$criterionRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+foreach ($id in @("CreateSheet", "WriteData", "FormatRange")) {
+    $descriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+    $descriptor.Id = $id
+    $descriptor.Name = $id
+    $descriptor.AppType = "excel"
+    $descriptor.AccessMode = "write"
+    $criterionRegistry.RegisterTool($descriptor)
+}
+$criterionLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $criterionRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    [ShareRibbon.Agent.PromptManager]::new((Join-Path $repoRoot "ShareRibbon\Prompts")))
+$criterionSession = [ShareRibbon.Agent.AgentSession]::new("create and write", "Excel", "")
+$criterionSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$criterionSession.Spec.Goal = "create and write"
+$criterionSession.Spec.SuccessCriteria.Add("Target sheet exists")
+$criterionSession.Spec.SuccessCriteria.Add("Requested values are written")
+$weakRequirement = New-TestOutcomeRequirement `
+    -Id "only-create" `
+    -TargetRef "Excel:PythonAverage" `
+    -EffectType "object_exists"
+$weakRequirement.CriterionIds.Add("criterion-1")
+$weakRequirement.CriterionIds.Add("criterion-2")
+$weakPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$weakPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$weakPlan.OutcomeContract.Requirements.Add($weakRequirement)
+$freezeMethod = [ShareRibbon.Agent.LoopEngine].GetMethod(
+    "FreezeInitialOutcomeContract",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$freezeError = [string]$freezeMethod.Invoke($criterionLoop, @($criterionSession, $weakPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($freezeError) -or $weakPlan.OutcomeContract.Frozen) {
+    throw "Multiple independent success criteria were collapsed into one weak outcome requirement"
+}
+
+$duplicateCriterionSession = [ShareRibbon.Agent.AgentSession]::new("create and write", "Excel", "")
+$duplicateCriterionSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$duplicateCriterionSession.Spec.Goal = "create and write"
+$duplicateCriterionSession.Spec.SuccessCriteria.Add("Target sheet exists")
+$duplicateCriterionSession.Spec.SuccessCriteria.Add("Requested values are written")
+$duplicateRequirement1 = New-TestOutcomeRequirement `
+    -Id "duplicate-1" `
+    -TargetRef "Excel:PythonAverage" `
+    -EffectType "object_exists"
+$duplicateRequirement1.CriterionIds.Add("criterion-1")
+$duplicateRequirement2 = New-TestOutcomeRequirement `
+    -Id "duplicate-2" `
+    -TargetRef "Excel:workbooks/active/worksheets/PythonAverage" `
+    -EffectType "object_exists"
+$duplicateRequirement2.CriterionIds.Add("criterion-2")
+$duplicatePlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$duplicatePlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$duplicatePlan.OutcomeContract.Requirements.Add($duplicateRequirement1)
+$duplicatePlan.OutcomeContract.Requirements.Add($duplicateRequirement2)
+$duplicateFreezeError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($duplicateCriterionSession, $duplicatePlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($duplicateFreezeError) -or $duplicatePlan.OutcomeContract.Frozen) {
+    throw "Duplicated host assertions were used to fake coverage of independent criteria"
+}
+
+# State effects cannot weaken a concrete postcondition into mere existence, and contains
+# cannot use an empty value that every observation would satisfy.
+$weakExistsSession = [ShareRibbon.Agent.AgentSession]::new("write concrete data", "Excel", "")
+$weakExistsSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$weakExistsSession.Spec.Goal = "write concrete data"
+$weakExistsPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$weakExistsPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$weakExistsPlan.OutcomeContract.Requirements.Add((New-TestOutcomeRequirement `
+    -Id "weak-data-exists" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -Operator "exists"))
+$weakExistsError = [string]$freezeMethod.Invoke($criterionLoop, @($weakExistsSession, $weakExistsPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($weakExistsError) -or $weakExistsPlan.OutcomeContract.Frozen) {
+    throw "A concrete data_state contract was weakened to operator=exists"
+}
+
+$vacuousContainsSession = [ShareRibbon.Agent.AgentSession]::new("write concrete data", "Excel", "")
+$vacuousContainsSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$vacuousContainsSession.Spec.Goal = "write concrete data"
+$vacuousContainsPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$vacuousContainsPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$vacuousContainsPlan.OutcomeContract.Requirements.Add((New-TestOutcomeRequirement `
+    -Id "empty-contains" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -ExpectedValue ([Newtonsoft.Json.Linq.JObject]::new()) `
+    -Operator "contains"))
+$vacuousContainsError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($vacuousContainsSession, $vacuousContainsPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($vacuousContainsError) -or $vacuousContainsPlan.OutcomeContract.Frozen) {
+    throw "A vacuous contains={} contract was accepted"
+}
+
+# derivedFromCapability is trusted lineage metadata only after resolving to a registered
+# compute descriptor. A mutating tool name cannot waive the expected data postcondition.
+$fakeDerivedSession = [ShareRibbon.Agent.AgentSession]::new("write computed data", "Excel", "")
+$fakeDerivedSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$fakeDerivedSession.Spec.Goal = "write computed data"
+$fakeDerivedPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$fakeDerivedPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$fakeDerivedPlan.OutcomeContract.Requirements.Add((New-TestOutcomeRequirement `
+    -Id "fake-compute-source" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -DerivedFromCapability "CreateSheet"))
+$fakeDerivedError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($fakeDerivedSession, $fakeDerivedPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($fakeDerivedError) -or $fakeDerivedPlan.OutcomeContract.Frozen) {
+    throw "A non-compute tool was accepted as derivedFromCapability"
+}
+
+# Different predicate spellings cannot let one host assertion slot satisfy two independent
+# success criteria. The planner must split the target/property into distinct observable facts.
+$operatorReuseSession = [ShareRibbon.Agent.AgentSession]::new("two independent color outcomes", "Excel", "")
+$operatorReuseSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$operatorReuseSession.Spec.Goal = "two independent color outcomes"
+$operatorReuseSession.Spec.SuccessCriteria.Add("first color criterion")
+$operatorReuseSession.Spec.SuccessCriteria.Add("second color criterion")
+$operatorReuseExpected = [Newtonsoft.Json.Linq.JObject]::Parse('{"value":"red"}')
+$operatorEqualsRequirement = New-TestOutcomeRequirement `
+    -Id "operator-equals" `
+    -TargetRef "Excel:SalesData!A1" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -ExpectedValue $operatorReuseExpected `
+    -Operator "equals"
+$operatorEqualsRequirement.CriterionIds.Add("criterion-1")
+$operatorContainsRequirement = New-TestOutcomeRequirement `
+    -Id "operator-contains" `
+    -TargetRef "Excel:SalesData!A1" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -ExpectedValue $operatorReuseExpected.DeepClone() `
+    -Operator "contains"
+$operatorContainsRequirement.CriterionIds.Add("criterion-2")
+$operatorReusePlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$operatorReusePlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$operatorReusePlan.OutcomeContract.Requirements.Add($operatorEqualsRequirement)
+$operatorReusePlan.OutcomeContract.Requirements.Add($operatorContainsRequirement)
+$operatorReuseError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($operatorReuseSession, $operatorReusePlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($operatorReuseError) -or $operatorReusePlan.OutcomeContract.Frozen) {
+    throw "equals/contains reused one host assertion slot for two independent criteria"
+}
+
+# A failed/partial later write is not completion proof, but its observed mutation revokes
+# stale matching state. Failed iterations must remain in the invalidation timeline.
+$failedMutationSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$preFailureGreen = New-TestOutcomeEvidence `
+    -EvidenceId "obs-before/e1" `
+    -IterationEvidenceId "obs-before" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange" `
+    -WorldRevision 1
+$failedRedObservation = New-TestOutcomeEvidence `
+    -EvidenceId "obs-failed/e1" `
+    -IterationEvidenceId "obs-failed" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected ([Newtonsoft.Json.Linq.JValue]::CreateString("#FF0000")) `
+    -SourceToolId "FormatRange" `
+    -Satisfied $false `
+    -InvalidatesPrior $true `
+    -WorldRevision 2
+Add-TestOutcomeIteration $failedMutationSession "obs-before" "FormatRange" @($preFailureGreen)
+Add-TestOutcomeIteration $failedMutationSession "obs-failed" "FormatRange" @($failedRedObservation) @() $false
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $failedMutationSession @("obs-before/e1")))) {
+    throw "Stale evidence survived a later failed write that changed the observed state"
+}
+
+$unknownPropertySession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$unknownPropertyGreen = New-TestOutcomeEvidence `
+    -EvidenceId "obs-known/e1" `
+    -IterationEvidenceId "obs-known" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange" `
+    -WorldRevision 1
+$unknownPropertyTombstone = New-TestOutcomeEvidence `
+    -EvidenceId "obs-unknown/e1" `
+    -IterationEvidenceId "obs-unknown" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -SourceToolId "FormatRange" `
+    -Satisfied $false `
+    -InvalidatesPrior $true `
+    -WorldRevision 2
+Add-TestOutcomeIteration $unknownPropertySession "obs-known" "FormatRange" @($unknownPropertyGreen)
+Add-TestOutcomeIteration $unknownPropertySession "obs-unknown" "FormatRange" @($unknownPropertyTombstone) @() $false
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $unknownPropertySession @("obs-known/e1")))) {
+    throw "An unknown-property mutation tombstone did not conservatively revoke old property proof"
+}
+
+$artifactRequirement = New-TestOutcomeRequirement `
+    -Id "chart-exists" `
+    -TargetRef "Excel:workbooks/active/worksheets/SalesData/charts/Chart1" `
+    -EffectType "artifact"
+$unknownArtifactSession = New-TestOutcomeSession "create Chart1" @($artifactRequirement)
+$oldChartEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-chart-old/e1" `
+    -IterationEvidenceId "obs-chart-old" `
+    -TargetRef "Excel:workbooks/active/worksheets/SalesData/charts/Chart1" `
+    -EffectType "artifact" `
+    -SourceToolId "CreateChart" `
+    -WorldRevision 1
+$unknownArtifactTombstone = New-TestOutcomeEvidence `
+    -EvidenceId "obs-chart-failed/e1" `
+    -IterationEvidenceId "obs-chart-failed" `
+    -TargetRef "*" `
+    -EffectType "artifact" `
+    -SourceToolId "CreateChart" `
+    -Satisfied $false `
+    -InvalidatesPrior $true `
+    -WorldRevision 2
+Add-TestOutcomeIteration $unknownArtifactSession "obs-chart-old" "CreateChart" @($oldChartEvidence)
+Add-TestOutcomeIteration $unknownArtifactSession "obs-chart-failed" "CreateChart" @($unknownArtifactTombstone) @() $false
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $unknownArtifactSession @("obs-chart-old/e1")))) {
+    throw "A wildcard mutation tombstone did not revoke stale artifact proof"
+}
+
+# Worksheet lifecycle changes invalidate all child/range evidence from the previous object.
+$deletedSheetSession = New-TestOutcomeSession "format fill color" @($formatRequirement)
+$beforeDeleteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-format/e1" `
+    -IterationEvidenceId "obs-format" `
+    -TargetRef "Excel:SalesData!D2:D25" `
+    -EffectType "property_state" `
+    -PropertyName "fillColor" `
+    -Expected $green `
+    -SourceToolId "FormatRange" `
+    -WorldRevision 1
+$deleteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-delete/e1" `
+    -IterationEvidenceId "obs-delete" `
+    -TargetRef "Excel:SalesData" `
+    -EffectType "object_absent" `
+    -SourceToolId "DeleteSheet" `
+    -WorldRevision 2
+Add-TestOutcomeIteration $deletedSheetSession "obs-format" "FormatRange" @($beforeDeleteEvidence)
+Add-TestOutcomeIteration $deletedSheetSession "obs-delete" "DeleteSheet" @($deleteEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $deletedSheetSession @("obs-format/e1")))) {
+    throw "Range evidence survived deletion of its containing worksheet"
+}
+
+# Row/column structural changes invalidate every older range assertion on that worksheet.
+# Canonical Excel:workbooks/... object refs must overlap ranges only within the same workbook.
+$structuralReadRequirement = New-TestOutcomeRequirement `
+    -Id "structural-read" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/ranges/D2:D25" `
+    -EffectType "read_coverage" `
+    -Operator "covers"
+$structuralReadSession = New-TestOutcomeSession "read stable source" @($structuralReadRequirement)
+$beforeStructureEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-structure-read/e1" `
+    -IterationEvidenceId "obs-structure-read" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData/ranges/D2:D25" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange" `
+    -WorldRevision 1
+$worksheetStructureTombstone = New-TestOutcomeEvidence `
+    -EvidenceId "obs-structure-change/e1" `
+    -IterationEvidenceId "obs-structure-change" `
+    -TargetRef "Excel:workbooks/Book.xlsx/worksheets/SalesData" `
+    -EffectType "unclassified_mutation" `
+    -SourceToolId "DeleteRowCol" `
+    -Satisfied $false `
+    -InvalidatesPrior $true `
+    -WorldRevision 2
+Add-TestOutcomeIteration $structuralReadSession "obs-structure-read" "ReadRange" @($beforeStructureEvidence)
+Add-TestOutcomeIteration $structuralReadSession "obs-structure-change" "DeleteRowCol" @($worksheetStructureTombstone) @() $false
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $structuralReadSession @("obs-structure-read/e1")))) {
+    throw "A worksheet structural mutation did not invalidate old range-read evidence"
+}
+
+# Multiple adjacent observations may jointly cover a requested range, but every contributing
+# evidence ID must be cited by the model's completion decision.
+$readUnionRequirement = New-TestOutcomeRequirement `
+    -Id "full-read" `
+    -TargetRef "Excel:SalesData!A1:D25" `
+    -EffectType "read_coverage" `
+    -Operator "covers"
+$readUnionSession = New-TestOutcomeSession "read full table" @($readUnionRequirement)
+$readTop = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!A1:D10" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+$readBottom = New-TestOutcomeEvidence `
+    -EvidenceId "obs-2/e1" `
+    -IterationEvidenceId "obs-2" `
+    -TargetRef "Excel:SalesData!A11:D25" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+Add-TestOutcomeIteration $readUnionSession "obs-1" "ReadRange" @($readTop)
+Add-TestOutcomeIteration $readUnionSession "obs-2" "ReadRange" @($readBottom)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $readUnionSession @("obs-1/e1")))) {
+    throw "Partial citation was accepted for multi-evidence range coverage"
+}
+if (-not [string]::IsNullOrWhiteSpace(
+    (Test-OutcomeContract $readUnionSession @("obs-1/e1", "obs-2/e1")))) {
+    throw "Adjacent read evidence was not accepted as complete range coverage"
+}
+
+# Composite goals are conjunctive.  Creating the destination alone cannot prove that the
+# requested result was also written into it.
+$sheetRequirement = New-TestOutcomeRequirement `
+    -Id "destination-exists" `
+    -TargetRef "Excel:PythonAverage" `
+    -EffectType "object_exists"
+$writeRequirement = New-TestOutcomeRequirement `
+    -Id "result-written" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state"
+$partialGoalSession = New-TestOutcomeSession `
+    "create destination and write result" `
+    @($sheetRequirement, $writeRequirement)
+$sheetEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:PythonAverage" `
+    -EffectType "object_exists" `
+    -SourceToolId "CreateSheet"
+Add-TestOutcomeIteration $partialGoalSession "obs-1" "CreateSheet" @($sheetEvidence)
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $partialGoalSession @("obs-1/e1")))) {
+    throw "A partially completed composite goal was accepted"
+}
+
+# Provenance is a complete ReadRange -> PythonCompute -> WriteData chain, not merely the
+# independent existence of one Python action somewhere in the successful history.
+$readRequirement = New-TestOutcomeRequirement `
+    -Id "source-read" `
+    -TargetRef "Excel:SalesData!A1:B5" `
+    -EffectType "read_coverage"
+$pythonWriteRequirement = New-TestOutcomeRequirement `
+    -Id "python-result-written" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -DerivedFromCapability "PythonCompute"
+
+$pythonLineageSession = New-TestOutcomeSession `
+    "read, compute with Python, and write" `
+    @($readRequirement, $pythonWriteRequirement)
+$pythonLineageSession.Spec.OutcomeContract.ValidatedComputeCapabilities.Add("PythonCompute")
+$readEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-1/e1" `
+    -IterationEvidenceId "obs-1" `
+    -TargetRef "Excel:SalesData!A1:B5" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+Add-TestOutcomeIteration $pythonLineageSession "obs-1" "ReadRange" @($readEvidence)
+Add-TestOutcomeIteration $pythonLineageSession "obs-2" "PythonCompute" @() @("obs-1")
+$pythonWriteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-3/e1" `
+    -IterationEvidenceId "obs-3" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -SourceToolId "WriteData" `
+    -DependsOn @("obs-2")
+Add-TestOutcomeIteration $pythonLineageSession "obs-3" "WriteData" @($pythonWriteEvidence) @("obs-2")
+if (-not [string]::IsNullOrWhiteSpace(
+    (Test-OutcomeContract $pythonLineageSession @("obs-1/e1", "obs-3/e1")))) {
+    throw "A complete ReadRange -> PythonCompute -> WriteData evidence chain was rejected"
+}
+
+$disconnectedPythonSession = New-TestOutcomeSession `
+    "read, compute with Python, and write" `
+    @($readRequirement, $pythonWriteRequirement)
+$disconnectedPythonSession.Spec.OutcomeContract.ValidatedComputeCapabilities.Add("PythonCompute")
+Add-TestOutcomeIteration $disconnectedPythonSession "obs-1" "PythonCompute"
+$lateReadEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-2/e1" `
+    -IterationEvidenceId "obs-2" `
+    -TargetRef "Excel:SalesData!A1:B5" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+Add-TestOutcomeIteration $disconnectedPythonSession "obs-2" "ReadRange" @($lateReadEvidence)
+$disconnectedWriteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-3/e1" `
+    -IterationEvidenceId "obs-3" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -SourceToolId "WriteData" `
+    -DependsOn @("obs-1")
+Add-TestOutcomeIteration $disconnectedPythonSession "obs-3" "WriteData" @($disconnectedWriteEvidence) @("obs-1")
+if ([string]::IsNullOrWhiteSpace(
+    (Test-OutcomeContract $disconnectedPythonSession @("obs-2/e1", "obs-3/e1")))) {
+    throw "PythonCompute -> independent ReadRange -> WriteData was accepted as complete source lineage"
 }
 
 $session = [ShareRibbon.Agent.AgentSession]::new("compute", "Excel", "")
@@ -173,6 +1342,7 @@ $testTool.Name = "Test action"
 $testTool.AppType = "excel"
 $testTool.RiskLevel = "safe"
 $testTool.AccessMode = "write"
+$testTool.OutcomeEffects.Add("artifact")
 $registry.RegisterTool($testTool)
 $script:adaptiveExecutions = 0
 $registry.ExecuteCodeWithToolResult = {
@@ -191,6 +1361,31 @@ $registry.ExecuteCodeWithToolResult = {
 
 $promptManager = [ShareRibbon.Agent.PromptManager]::new((Join-Path $repoRoot "ShareRibbon\Prompts"))
 
+# Keep narrative history bounded for latency, but never truncate evidence IDs required to
+# complete a long compound task.
+$longLedgerRequirement = New-TestOutcomeRequirement `
+    -Id "old-evidence" `
+    -TargetRef "Excel:LongTask!A1" `
+    -EffectType "data_state"
+$longLedgerSession = New-TestOutcomeSession "long task" @($longLedgerRequirement)
+for ($ledgerIndex = 1; $ledgerIndex -le 8; $ledgerIndex += 1) {
+    $ledgerEvidence = New-TestOutcomeEvidence `
+        -EvidenceId "obs-$ledgerIndex/e1" `
+        -IterationEvidenceId "obs-$ledgerIndex" `
+        -TargetRef "Excel:LongTask!A$ledgerIndex" `
+        -EffectType "data_state" `
+        -SourceToolId "WriteData"
+    Add-TestOutcomeIteration $longLedgerSession "obs-$ledgerIndex" "WriteData" @($ledgerEvidence)
+}
+$ledgerPrompt = $promptManager.BuildReactPrompt(
+    $longLedgerSession,
+    [ShareRibbon.Agent.PlanStep]@{ StepNumber = 1; Description = "continue" },
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    "")
+if (-not $ledgerPrompt.Contains("obs-1/e1") -or -not $ledgerPrompt.Contains("obs-8/e1")) {
+    throw "ReAct prompt truncates evidence needed by long compound tasks"
+}
+
 # A tool command is encoded as JSON, but embedded source code remains source code. The
 # final system prompt must never prohibit JSON-escaped newlines while PythonCompute
 # requires compound statements to be multiline.
@@ -204,22 +1399,22 @@ if ($prohibitsEscapedNewlines -or -not $allowsEscapedNewlines) {
     throw "Excel prompt still gives contradictory newline rules for embedded Python source: prohibits=$prohibitsEscapedNewlines allows=$allowsEscapedNewlines"
 }
 
-# A mandatory task contract is self-contained. The planner should not receive an entire
-# broad Skill handbook when the semantic runtime has already selected the exact tools.
-$contractSession = [ShareRibbon.Agent.AgentSession]::new("create a worksheet", "Excel", "")
+# A user-required capability policy is self-contained. The planner should not receive an
+# entire broad Skill handbook when semantic classification already identified the method.
+$contractSession = [ShareRibbon.Agent.AgentSession]::new("calculate with Python", "Excel", "")
 $contractSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
-$contractSession.Spec.Goal = "create a worksheet"
-$contractSession.Spec.RequiredTools.Add("CreateSheet")
-$contractSession.Spec.MandatoryTools.Add("CreateSheet")
+$contractSession.Spec.Goal = "calculate with Python"
+$contractSession.Spec.RequiredTools.Add("PythonCompute")
+$contractSession.Spec.RequiredCapabilities.Add("PythonCompute")
 $contractSkill = [ShareRibbon.Agent.AgentSkill]::new()
 $contractSkill.Name = "Broad Excel skill"
 $contractSkill.Description = "general spreadsheet operations"
-$contractSkill.RequiredTools.Add("CreateSheet")
+$contractSkill.RequiredTools.Add("PythonCompute")
 $contractSkill.PromptTemplate = "SKILL-HANDBOOK-MARKER-" + ("x" * 7000)
 $contractPrompt = $promptManager.BuildPlanningPrompt($contractSession, "", $contractSkill)
 if ($contractPrompt.Contains("SKILL-HANDBOOK-MARKER") -or
-    -not $contractPrompt.Contains("CreateSheet")) {
-    throw "Planner prompt does not use the compact mandatory-tool contract"
+    -not $contractPrompt.Contains("PythonCompute")) {
+    throw "Planner prompt does not use the compact required-capability policy"
 }
 
 $memory = [ShareRibbon.Agent.AgentMemory]::new()
@@ -242,6 +1437,7 @@ public static class AgentRuntimeContextProbe
     public static readonly Func<ContextPack> CaptureDelegate = Capture;
     public static int PythonModelCalls { get; private set; }
     public static int PythonHostExecutions { get; private set; }
+    public static bool PythonWritePayloadValid { get; private set; }
     public static readonly Func<string, string, List<HistoryMessage>, Task<string>> PythonModelDelegate = PythonModel;
     public static readonly Func<string, string, bool, ToolResult> PythonHostDelegate = PythonHost;
 
@@ -250,6 +1446,7 @@ public static class AgentRuntimeContextProbe
         Captures = 0;
         PythonModelCalls = 0;
         PythonHostExecutions = 0;
+        PythonWritePayloadValid = false;
     }
 
     public static ContextPack Capture()
@@ -267,7 +1464,7 @@ public static class AgentRuntimeContextProbe
         switch (PythonModelCalls)
         {
             case 1:
-                return Task.FromResult("{\"understanding\":\"python workflow\",\"steps\":[{\"step\":1,\"description\":\"read full data\",\"toolHint\":\"ReadRange\"},{\"step\":2,\"description\":\"compute averages\",\"toolHint\":\"PythonCompute\"},{\"step\":3,\"description\":\"create destination\",\"toolHint\":\"CreateSheet\"},{\"step\":4,\"description\":\"write result\",\"toolHint\":\"WriteData\"}],\"summary\":\"written\",\"capabilityGap\":\"\"}");
+                return Task.FromResult("{\"understanding\":\"python workflow\",\"steps\":[{\"step\":1,\"description\":\"read full data\",\"toolHint\":\"ReadRange\"},{\"step\":2,\"description\":\"compute averages\",\"toolHint\":\"PythonCompute\"},{\"step\":3,\"description\":\"create destination\",\"toolHint\":\"CreateSheet\"},{\"step\":4,\"description\":\"write result\",\"toolHint\":\"WriteData\"}],\"summary\":\"written\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"source-read\",\"targetRef\":\"Excel:SalesData!A1:B5\",\"effectType\":\"read_coverage\",\"required\":true},{\"id\":\"destination-created\",\"targetRef\":\"Excel:PythonAverage\",\"effectType\":\"object_exists\",\"required\":true},{\"id\":\"python-result-written\",\"targetRef\":\"Excel:PythonAverage!A1:B3\",\"effectType\":\"data_state\",\"derivedFromCapability\":\"PythonCompute\",\"required\":true}]}}");
             case 2:
                 return Task.FromResult("{\"decision\":\"act\",\"thought\":\"read first\",\"action\":{\"tool\":\"ReadRange\",\"params\":{\"range\":\"SalesData!A1:B5\"}}}");
             case 3:
@@ -277,7 +1474,7 @@ public static class AgentRuntimeContextProbe
             case 5:
                 return Task.FromResult("{\"decision\":\"act\",\"thought\":\"write computed rows\",\"action\":{\"tool\":\"WriteData\",\"params\":{\"targetRange\":\"PythonAverage!A1\",\"data\":[[\"wrong\",-1]]}}}");
             default:
-                return Task.FromResult("{\"decision\":\"complete\",\"thought\":\"all four verified observations exist\",\"message\":\"done\"}");
+                return Task.FromResult("{\"decision\":\"complete\",\"thought\":\"all four verified observations exist\",\"message\":\"done\",\"evidence\":[\"obs-1/e1\",\"obs-3/e1\",\"obs-4/e1\"]}");
         }
     }
 
@@ -300,8 +1497,7 @@ public static class AgentRuntimeContextProbe
         if (command == "WriteData")
         {
             var written = parameters["data"].ToString(Newtonsoft.Json.Formatting.None);
-            if (!written.Contains("1500.0") || !written.Contains("2000.0"))
-                throw new InvalidOperationException("WriteData did not receive PythonCompute output: " + written);
+            PythonWritePayloadValid = written.Contains("1500.0") && written.Contains("2000.0");
             var observation = JObject.Parse("{\"kind\":\"write\",\"summary\":\"python-output-written\",\"changed\":true,\"satisfied\":true,\"targetRefs\":[\"Excel:PythonAverage!A1:B3\"]}");
             return ToolResult.Succeed("WriteData", "python-output-written", null, observation);
         }
@@ -324,7 +1520,7 @@ $loop.SendAIRequest = {
     $script:modelCalls += 1
     if ($script:modelCalls -eq 1) {
         return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"understanding":"test","steps":[{"step":1,"description":"first","toolHint":"TestAction"},{"step":2,"description":"second","toolHint":"TestAction"}],"summary":"done","capabilityGap":""}')
+            '{"understanding":"test","steps":[{"step":1,"description":"first","toolHint":"TestAction"},{"step":2,"description":"second","toolHint":"TestAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"test-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}')
     }
     if (-not $prompt.Contains("[adaptive-react]")) {
         throw "Adaptive ReAct prompt marker is missing"
@@ -341,7 +1537,7 @@ $loop.SendAIRequest = {
             throw "Completion decision did not receive the final tool observation"
         }
         return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"decision":"complete","thought":"verified by observations","message":"done"}')
+            '{"decision":"complete","thought":"verified by observations","message":"done","evidence":["obs-1/e1","obs-2/e1"]}')
     }
     return [System.Threading.Tasks.Task[string]]::FromResult(
         '{"decision":"act","thought":"choose from current facts","action":{"tool":"TestAction","params":{}}}')
@@ -371,6 +1567,7 @@ $acceptTool.Name = "Required action"
 $acceptTool.AppType = "excel"
 $acceptTool.RiskLevel = "safe"
 $acceptTool.AccessMode = "write"
+$acceptTool.OutcomeEffects.Add("artifact")
 $acceptRegistry.RegisterTool($acceptTool)
 $supportTool = [ShareRibbon.Agent.ToolDescriptor]::new()
 $supportTool.Id = "SupportAction"
@@ -378,6 +1575,7 @@ $supportTool.Name = "Support action"
 $supportTool.AppType = "excel"
 $supportTool.RiskLevel = "safe"
 $supportTool.AccessMode = "write"
+$supportTool.OutcomeEffects.Add("artifact")
 $acceptRegistry.RegisterTool($supportTool)
 $script:acceptExecutions = 0
 $acceptRegistry.ExecuteCodeWithToolResult = {
@@ -399,11 +1597,11 @@ $acceptLoop.SendAIRequest = {
     $script:acceptModelCalls += 1
     switch ($script:acceptModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"acceptance","steps":[{"step":1,"description":"perform required action","toolHint":"RequiredAction"}],"summary":"done","capabilityGap":""}') }
+                '{"understanding":"acceptance","steps":[{"step":1,"description":"perform required action","toolHint":"RequiredAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"accepted-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"complete","thought":"too early","message":"done"}') }
         3 {
-            if (-not $prompt.Contains("Completion was rejected by deterministic acceptance")) {
+            if (-not $prompt.Contains("Completion was rejected by deterministic goal verification")) {
                 throw "Premature completion rejection was not fed back into ReAct"
             }
             return [System.Threading.Tasks.Task[string]]::FromResult(
@@ -412,20 +1610,20 @@ $acceptLoop.SendAIRequest = {
         4 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"complete","thought":"support action is insufficient","message":"done"}') }
         5 {
-            if (-not $prompt.Contains("Completion was rejected by deterministic acceptance")) {
+            if (-not $prompt.Contains("Completion was rejected by deterministic goal verification")) {
                 throw "An unrelated successful tool incorrectly completed the plan milestone"
             }
             return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"close contract gap","action":{"tool":"RequiredAction","params":{}}}')
         }
         default { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"decision":"complete","thought":"accepted evidence exists","message":"done"}') }
+                '{"decision":"complete","thought":"accepted evidence exists","message":"done","evidence":["obs-1/e1","obs-2/e1"]}') }
     }
 }
 $acceptSession = [ShareRibbon.Agent.AgentSession]::new("accept", "Excel", "")
 $acceptSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
 $acceptSession.Spec.Goal = "accept"
-$acceptSession.Spec.MandatoryTools.Add("RequiredAction")
+$acceptSession.Spec.RequiredCapabilities.Add("RequiredAction")
 $acceptSkill = [ShareRibbon.Agent.AgentSkill]::new()
 $acceptSkill.RequiredTools.Add("RequiredAction")
 $acceptSkill.RequiredTools.Add("SupportAction")
@@ -443,6 +1641,7 @@ $replanTool.Name = "Replan action"
 $replanTool.AppType = "excel"
 $replanTool.RiskLevel = "safe"
 $replanTool.AccessMode = "write"
+$replanTool.OutcomeEffects.Add("artifact")
 $replanRegistry.RegisterTool($replanTool)
 $script:replanExecutions = 0
 $replanRegistry.ExecuteCodeWithToolResult = {
@@ -454,32 +1653,59 @@ $replanRegistry.ExecuteCodeWithToolResult = {
     $observation["summary"] = [Newtonsoft.Json.Linq.JValue]::CreateString($summary)
     return [ShareRibbon.Agent.ToolResult]::Succeed("ReplanAction", $summary, $null, $observation)
 }
+$replanMemory = [ShareRibbon.Agent.AgentMemory]::new()
+$initialReplanContext = [ShareRibbon.Agent.Context.ContextPack]::new()
+$initialReplanContext.AppType = "Excel"
+$initialReplanContext.Document.Preview = "replan-context-0"
+$replanMemory.SetWorking("lastContextPack", $initialReplanContext)
 $replanLoop = [ShareRibbon.Agent.LoopEngine]::new(
     $replanRegistry,
-    [ShareRibbon.Agent.AgentMemory]::new(),
+    $replanMemory,
     $promptManager)
 $script:replanModelCalls = 0
+$script:replanCaptures = 0
+$script:replanDecisionSawObservation = $false
+$script:replacementPlanningPrompt = $null
+$script:replacementSawObservation = $false
+$script:replacementSawCurrentWorld = $false
+$replanLoop.CaptureContextPack = [System.Func[ShareRibbon.Agent.Context.ContextPack]] {
+    $script:replanCaptures += 1
+    $pack = [ShareRibbon.Agent.Context.ContextPack]::new()
+    $pack.AppType = "Excel"
+    $pack.Document.Preview = "replan-context-$script:replanCaptures"
+    return $pack
+}
 $replanLoop.SendAIRequest = {
     param($prompt, $system, $history)
     $script:replanModelCalls += 1
     switch ($script:replanModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"initial","steps":[{"step":1,"description":"initial action","toolHint":"ReplanAction"}],"summary":"initial","capabilityGap":""}') }
+                '{"understanding":"initial","steps":[{"step":1,"description":"initial action","toolHint":"ReplanAction"}],"summary":"initial","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"replan-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"first action","action":{"tool":"ReplanAction","params":{}}}') }
         3 {
-            if (-not $prompt.Contains("replan-observation-1")) {
-                throw "Successful observation was not available to the replan decision"
-            }
+            $script:replanDecisionSawObservation = $prompt.Contains("replan-observation-1")
             return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"replan","thought":"new facts require a revised skeleton","message":"revise"}')
         }
-        4 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"replanned","steps":[{"step":1,"description":"replanned action","toolHint":"ReplanAction"}],"summary":"replanned","capabilityGap":""}') }
+        4 {
+            $script:replacementPlanningPrompt = $prompt
+            $firstObservation = $prompt.IndexOf("replan-observation-1")
+            $worldHeader = $prompt.IndexOf("World Snapshot")
+            $worldValue = $prompt.IndexOf("replan-context-2")
+            $lastObservation = $prompt.LastIndexOf("replan-observation-1")
+            $script:replacementSawObservation = $firstObservation -ge 0 -and
+                $worldHeader -gt $firstObservation
+            $script:replacementSawCurrentWorld = $worldHeader -ge 0 -and
+                $worldValue -gt $worldHeader -and
+                $lastObservation -gt $worldValue
+            return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"replanned","steps":[{"step":1,"description":"replanned action","toolHint":"ReplanAction"}],"summary":"replanned","capabilityGap":""}')
+        }
         5 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"act from replacement skeleton","action":{"tool":"ReplanAction","params":{}}}') }
         default { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"decision":"complete","thought":"all observations accepted","message":"done"}') }
+                '{"decision":"complete","thought":"all observations accepted","message":"done","evidence":["obs-1/e1","obs-2/e1"]}') }
     }
 }
 $replanSession = [ShareRibbon.Agent.AgentSession]::new("replan", "Excel", "")
@@ -490,6 +1716,165 @@ $replanSkill.RequiredTools.Add("ReplanAction")
 $replanResult = $replanLoop.RunAsync($replanSession, "system", $replanSkill).GetAwaiter().GetResult()
 if (-not $replanResult.Success -or $script:replanExecutions -ne 2 -or $script:replanModelCalls -ne 6) {
     throw "Success-triggered replan did not execute adaptively: calls=$script:replanModelCalls executions=$script:replanExecutions result=$($replanResult.Message)"
+}
+if ($null -eq $script:replacementPlanningPrompt) {
+    throw "Replacement planning prompt was not captured"
+}
+if (-not $script:replanDecisionSawObservation -or
+    -not $script:replacementSawObservation -or
+    -not $script:replacementSawCurrentWorld) {
+    throw "Replacement planning lost its triggering observation or current world snapshot: decision=$script:replanDecisionSawObservation planningObservation=$script:replacementSawObservation world=$script:replacementSawCurrentWorld"
+}
+
+# A retryable tool failure is still an ordinary observation for the one adaptive loop.
+# There is no hidden repair request; the next standard ReAct decision may select a
+# different implementation, and the soft plan hint cannot block outcome completion.
+$failureRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+foreach ($toolId in @("FailingAction", "AlternativeAction")) {
+    $descriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+    $descriptor.Id = $toolId
+    $descriptor.Name = $toolId
+    $descriptor.AppType = "excel"
+    $descriptor.RiskLevel = "safe"
+    $descriptor.AccessMode = "write"
+    $descriptor.OutcomeEffects.Add("artifact")
+    $failureRegistry.RegisterTool($descriptor)
+}
+$script:failureExecutions = 0
+$failureRegistry.ExecuteCodeWithToolResult = {
+    param($code, $language, $preview)
+    $script:failureExecutions += 1
+    $command = [Newtonsoft.Json.Linq.JObject]::Parse($code)
+    if ($command["command"].ToString() -eq "FailingAction") {
+        $failedObservation = [Newtonsoft.Json.Linq.JObject]::Parse(
+            '{"kind":"write","summary":"first implementation unavailable","changed":false,"satisfied":false}')
+        $retryableFailure = [ShareRibbon.Agent.ToolResult]::Failed(
+            "FailingAction",
+            "first implementation unavailable",
+            $null,
+            "NO_RETRY_CALL",
+            "first implementation unavailable",
+            "deterministic failure",
+            $true,
+            $failedObservation,
+            $null)
+        $retryableFailure.Retryable = $true
+        return $retryableFailure
+    }
+
+    $successObservation = [Newtonsoft.Json.Linq.JObject]::Parse(
+        '{"kind":"write","summary":"goal satisfied by alternative","changed":true,"satisfied":true,"targetRefs":["Excel:test"]}')
+    return [ShareRibbon.Agent.ToolResult]::Succeed(
+        "AlternativeAction",
+        "goal satisfied by alternative",
+        $null,
+        $successObservation,
+        "",
+        $null)
+}
+$failureLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $failureRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$script:failureModelCalls = 0
+$script:failureWasObserved = $false
+$failureLoop.SendAIRequest = {
+    param($prompt, $system, $history)
+    $script:failureModelCalls += 1
+    switch ($script:failureModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"adaptive failure","steps":[{"step":1,"description":"satisfy goal","toolHint":"FailingAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"try primary implementation","action":{"tool":"FailingAction","params":{}}}') }
+        3 {
+            $script:failureWasObserved = $prompt.Contains("NO_RETRY_CALL") -and $prompt.Contains("[adaptive-react]")
+            return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"use a different implementation","action":{"tool":"AlternativeAction","params":{}}}')
+        }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"the world state now satisfies the goal","message":"done","evidence":["obs-2/e1"]}') }
+    }
+}
+$failureSession = [ShareRibbon.Agent.AgentSession]::new("adaptive failure", "Excel", "")
+$failureSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$failureSession.Spec.Goal = "satisfy the requested world state"
+$failureSkill = [ShareRibbon.Agent.AgentSkill]::new()
+$failureSkill.RequiredTools.Add("FailingAction")
+$failureSkill.RequiredTools.Add("AlternativeAction")
+$failureResult = $failureLoop.RunAsync($failureSession, "system", $failureSkill).GetAwaiter().GetResult()
+if (-not $failureResult.Success -or
+    $script:failureExecutions -ne 2 -or
+    $script:failureModelCalls -ne 4 -or
+    -not $script:failureWasObserved) {
+    throw "Tool failure did not return to the single adaptive loop: calls=$script:failureModelCalls executions=$script:failureExecutions result=$($failureResult.Message)"
+}
+
+# Transient failures may repeat an identical call only for a non-mutating tool contract.
+# Retryability is inferred from both the stable error code and the descriptor access mode.
+$safeRetryRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+$safeRetryDescriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+$safeRetryDescriptor.Id = "SafeRetryRead"
+$safeRetryDescriptor.Name = "Safe retry read"
+$safeRetryDescriptor.AppType = "excel"
+$safeRetryDescriptor.RiskLevel = "safe"
+$safeRetryDescriptor.AccessMode = "read"
+$safeRetryRegistry.RegisterTool($safeRetryDescriptor)
+$script:safeRetryExecutions = 0
+$safeRetryRegistry.ExecuteCodeWithToolResult = {
+    param($code, $language, $preview)
+    $script:safeRetryExecutions += 1
+    if ($script:safeRetryExecutions -eq 1) {
+        $failedObservation = [Newtonsoft.Json.Linq.JObject]::Parse(
+            '{"kind":"read","summary":"transient read failure","changed":false,"satisfied":false}')
+        return [ShareRibbon.Agent.ToolResult]::Failed(
+            "SafeRetryRead",
+            "transient read failure",
+            $null,
+            "NETWORK_ERROR",
+            "transient read failure",
+            "network unavailable",
+            $true,
+            $failedObservation)
+    }
+    $successObservation = [Newtonsoft.Json.Linq.JObject]::Parse(
+        '{"kind":"read","summary":"safe read complete","changed":false,"satisfied":true,"targetRefs":["Excel:SafeRead!A1"]}')
+    return [ShareRibbon.Agent.ToolResult]::Succeed(
+        "SafeRetryRead",
+        "safe read complete",
+        @("value"),
+        $successObservation)
+}
+$safeRetryLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $safeRetryRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$script:safeRetryModelCalls = 0
+$safeRetryLoop.SendAIRequest = {
+    param($prompt, $system, $history)
+    $script:safeRetryModelCalls += 1
+    switch ($script:safeRetryModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"safe retry","steps":[{"step":1,"description":"read","toolHint":"SafeRetryRead"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"read-complete","targetRef":"Excel:SafeRead!A1","effectType":"read_coverage","required":true}]}}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"read","action":{"tool":"SafeRetryRead","params":{"options":{"b":2,"a":1}}}}') }
+        3 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"retry transient read","action":{"tool":"SafeRetryRead","params":{"options":{"a":1,"b":2}}}}') }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"read observation satisfies goal","message":"done","evidence":["obs-2/e1"]}') }
+    }
+}
+$safeRetrySession = [ShareRibbon.Agent.AgentSession]::new("safe retry", "Excel", "")
+$safeRetrySession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$safeRetrySession.Spec.Goal = "read with bounded transient retry"
+$safeRetrySession.Spec.MutationPolicy = "read_only"
+$safeRetrySkill = [ShareRibbon.Agent.AgentSkill]::new()
+$safeRetrySkill.RequiredTools.Add("SafeRetryRead")
+$safeRetryResult = $safeRetryLoop.RunAsync($safeRetrySession, "system", $safeRetrySkill).GetAwaiter().GetResult()
+if (-not $safeRetryResult.Success -or
+    $script:safeRetryExecutions -ne 2 -or
+    $safeRetrySession.Iterations.Count -lt 2 -or
+    -not $safeRetrySession.Iterations[0].Observation.Contains("retryable=True")) {
+    throw "Safe transient retry policy failed: executions=$script:safeRetryExecutions result=$($safeRetryResult.Message)"
 }
 
 # Exercise the complete read -> compute -> create -> write workflow through the adaptive
@@ -517,34 +1902,43 @@ $pythonLoopSession.Spec.Goal = "python workflow"
 $pythonLoopSkill = [ShareRibbon.Agent.AgentSkill]::new()
 foreach ($toolId in @("ReadRange", "PythonCompute", "CreateSheet", "WriteData")) {
     $pythonLoopSession.Spec.RequiredTools.Add($toolId)
-    $pythonLoopSession.Spec.MandatoryTools.Add($toolId)
-    $pythonLoopSession.Spec.MandatoryToolSequence.Add($toolId)
     $pythonLoopSkill.RequiredTools.Add($toolId)
 }
+$pythonLoopSession.Spec.RequiredCapabilities.Add("PythonCompute")
 $pythonLoopResult = $pythonLoop.RunAsync($pythonLoopSession, "system", $pythonLoopSkill).GetAwaiter().GetResult()
 if (-not $pythonLoopResult.Success -or $pythonLoopSession.CurrentIteration -ne 4 -or
     [AgentRuntimeContextProbe]::PythonHostExecutions -ne 3 -or
-    [AgentRuntimeContextProbe]::PythonModelCalls -ne 6) {
+    [AgentRuntimeContextProbe]::PythonModelCalls -ne 6 -or
+    -not [AgentRuntimeContextProbe]::PythonWritePayloadValid) {
     throw "Adaptive Python workflow failed: calls=$([AgentRuntimeContextProbe]::PythonModelCalls) actions=$($pythonLoopSession.CurrentIteration) hostExecutions=$([AgentRuntimeContextProbe]::PythonHostExecutions) result=$($pythonLoopResult.Message)"
 }
 
-# Incomplete plans get one bounded correction response and must never execute. This is
-# a set-level task contract: no wording- or golden-case-specific branch is involved.
+# A soft plan may suggest one implementation while the adaptive loop chooses another.
+# Plan status/toolHint must not gate the action or the outcome-based completion decision.
 $coverageRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
-foreach ($id in @("TestAction", "RequiredAction")) {
+foreach ($id in @("PlannedAction", "AlternativeAction")) {
     $descriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
     $descriptor.Id = $id
     $descriptor.Name = $id
     $descriptor.AppType = "excel"
     $descriptor.RiskLevel = "safe"
     $descriptor.AccessMode = "write"
+    $descriptor.OutcomeEffects.Add("artifact")
     $coverageRegistry.RegisterTool($descriptor)
 }
-$script:coverageExecutions = 0
+$script:plannedExecutions = 0
+$script:alternativeExecutions = 0
 $coverageRegistry.ExecuteCodeWithToolResult = {
     param($code, $language, $preview)
-    $script:coverageExecutions += 1
-    return [ShareRibbon.Agent.ToolResult]::Succeed("TestAction", "unexpected")
+    $command = ([Newtonsoft.Json.Linq.JObject]::Parse($code))["command"].ToString()
+    if ($command -eq "PlannedAction") {
+        $script:plannedExecutions += 1
+    } else {
+        $script:alternativeExecutions += 1
+    }
+    $observation = [Newtonsoft.Json.Linq.JObject]::Parse(
+        '{"kind":"write","summary":"goal satisfied by runtime alternative","changed":true,"satisfied":true,"targetRefs":["Excel:alternative"]}')
+    return [ShareRibbon.Agent.ToolResult]::Succeed($command, "runtime alternative observed", $null, $observation)
 }
 $coverageLoop = [ShareRibbon.Agent.LoopEngine]::new(
     $coverageRegistry,
@@ -554,35 +1948,43 @@ $script:coverageModelCalls = 0
 $coverageLoop.SendAIRequest = {
     param($prompt, $system, $history)
     $script:coverageModelCalls += 1
-    return [System.Threading.Tasks.Task[string]]::FromResult(
-        '{"understanding":"incomplete","steps":[{"step":1,"description":"wrong","code":"{\"command\":\"TestAction\",\"params\":{}}","language":"json"}],"summary":"wrong","capabilityGap":""}')
+    switch ($script:coverageModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"soft plan","steps":[{"step":1,"description":"satisfy goal","toolHint":"PlannedAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:alternative","effectType":"artifact","operator":"exists","required":true}]}}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"current facts favor the alternative","action":{"tool":"AlternativeAction","params":{}}}') }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"host observation proves the goal","message":"done","evidence":["obs-1/e1"]}') }
+    }
 }
-$coverageSession = [ShareRibbon.Agent.AgentSession]::new("contract", "Excel", "")
+$coverageSession = [ShareRibbon.Agent.AgentSession]::new("soft plan", "Excel", "")
 $coverageSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
-$coverageSession.Spec.Goal = "contract"
-$coverageSession.Spec.RequiredTools.Add("TestAction")
-$coverageSession.Spec.RequiredTools.Add("RequiredAction")
-$coverageSession.Spec.MandatoryTools.Add("RequiredAction")
+$coverageSession.Spec.Goal = "satisfy requested world state"
 $coverageSkill = [ShareRibbon.Agent.AgentSkill]::new()
-$coverageSkill.RequiredTools.Add("TestAction")
-$coverageSkill.RequiredTools.Add("RequiredAction")
+$coverageSkill.RequiredTools.Add("PlannedAction")
+$coverageSkill.RequiredTools.Add("AlternativeAction")
 $coverageResult = $coverageLoop.RunAsync($coverageSession, "system", $coverageSkill).GetAwaiter().GetResult()
-if ($coverageResult.Success -or $script:coverageExecutions -ne 0 -or $script:coverageModelCalls -ne 2) {
-    throw "Incomplete mandatory-tool plan was executed or not bounded: calls=$script:coverageModelCalls executions=$script:coverageExecutions"
+if (-not $coverageResult.Success -or
+    $script:plannedExecutions -ne 0 -or
+    $script:alternativeExecutions -ne 1 -or
+    $script:coverageModelCalls -ne 3) {
+    throw "Soft plan still controlled execution/completion: calls=$script:coverageModelCalls planned=$script:plannedExecutions alternative=$script:alternativeExecutions result=$($coverageResult.Message)"
 }
 
-# Repair may change parameters for a mandatory engine, but may not silently replace it
-# with a different tool and then claim the task succeeded.
+# A mutating call must not be blindly repeated even if a faulty producer marks it retryable.
+# Canonical signatures must also treat reordered object keys as the same parameter value.
 $repairRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
-foreach ($id in @("MandatoryAction", "FallbackAction")) {
+foreach ($id in @("NonRetryableAction", "FallbackAction")) {
     $descriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
     $descriptor.Id = $id
     $descriptor.Name = $id
     $descriptor.AppType = "excel"
     $descriptor.RiskLevel = "safe"
     $descriptor.AccessMode = "write"
+    $descriptor.OutcomeEffects.Add("artifact")
     $repairRegistry.RegisterTool($descriptor)
 }
+$script:nonRetryableExecutions = 0
 $script:fallbackExecutions = 0
 $repairRegistry.ExecuteCodeWithToolResult = {
     param($code, $language, $preview)
@@ -590,16 +1992,20 @@ $repairRegistry.ExecuteCodeWithToolResult = {
     $command = $commandObject["command"].ToString()
     if ($command -eq "FallbackAction") {
         $script:fallbackExecutions += 1
-        return [ShareRibbon.Agent.ToolResult]::Succeed("FallbackAction", "unexpected")
+        $observation = [Newtonsoft.Json.Linq.JObject]::Parse(
+            '{"kind":"write","summary":"fallback satisfied goal","changed":true,"satisfied":true,"targetRefs":["Excel:fallback"]}')
+        return [ShareRibbon.Agent.ToolResult]::Succeed("FallbackAction", "fallback satisfied goal", $null, $observation)
     }
-    $failure = [ShareRibbon.Agent.ToolResult]::new()
-    $failure.Success = $false
-    $failure.ToolId = "MandatoryAction"
-    $failure.Message = "repair parameters"
-    $failure.UserMessage = "repair parameters"
-    $failure.DebugDetail = "repair parameters"
-    $failure.ErrorCode = "TEST_RECOVERABLE"
-    $failure.Recoverable = $true
+    $script:nonRetryableExecutions += 1
+    $failure = [ShareRibbon.Agent.ToolResult]::Failed(
+        "NonRetryableAction",
+        "do not repeat the same call",
+        $null,
+        "TEST_NON_RETRYABLE",
+        "do not repeat the same call",
+        "deterministic failure",
+        $false)
+    $failure.Retryable = $true
     return $failure
 }
 $repairLoop = [ShareRibbon.Agent.LoopEngine]::new(
@@ -610,29 +2016,268 @@ $script:repairModelCalls = 0
 $repairLoop.SendAIRequest = {
     param($prompt, $system, $history)
     $script:repairModelCalls += 1
-    if ($script:repairModelCalls -eq 1) {
-        return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"understanding":"repair","steps":[{"step":1,"description":"run","code":"{\"command\":\"MandatoryAction\",\"params\":{}}","language":"json"}],"summary":"done","capabilityGap":""}')
+    switch ($script:repairModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"adaptive fallback","steps":[{"step":1,"description":"satisfy goal","toolHint":"NonRetryableAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fallback-complete","targetRef":"Excel:fallback","effectType":"artifact","operator":"exists","required":true}]}}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"try first implementation","action":{"tool":"NonRetryableAction","params":{"value":1,"options":{"b":2,"a":1}}}}') }
+        3 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"attempted duplicate should be guarded","action":{"tool":"NonRetryableAction","params":{"options":{"a":1,"b":2},"value":1}}}') }
+        4 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"choose fallback","action":{"tool":"FallbackAction","params":{}}}') }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"fallback observation proves goal","message":"done","evidence":["obs-3/e1"]}') }
     }
-    if ($script:repairModelCalls -eq 2) {
-        return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"thought":"run mandatory action","action":{"tool":"MandatoryAction","params":{}}}')
-    }
-    return [System.Threading.Tasks.Task[string]]::FromResult(
-        '{"toolId":"FallbackAction","parameters":{}}')
 }
-$repairSession = [ShareRibbon.Agent.AgentSession]::new("repair", "Excel", "")
+$repairSession = [ShareRibbon.Agent.AgentSession]::new("adaptive fallback", "Excel", "")
 $repairSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
-$repairSession.Spec.Goal = "repair"
-$repairSession.Spec.RequiredTools.Add("MandatoryAction")
+$repairSession.Spec.Goal = "satisfy goal without duplicate side effects"
+$repairSession.Spec.RequiredTools.Add("NonRetryableAction")
 $repairSession.Spec.RequiredTools.Add("FallbackAction")
-$repairSession.Spec.MandatoryTools.Add("MandatoryAction")
 $repairSkill = [ShareRibbon.Agent.AgentSkill]::new()
-$repairSkill.RequiredTools.Add("MandatoryAction")
+$repairSkill.RequiredTools.Add("NonRetryableAction")
 $repairSkill.RequiredTools.Add("FallbackAction")
 $repairResult = $repairLoop.RunAsync($repairSession, "system", $repairSkill).GetAwaiter().GetResult()
-if ($repairResult.Success -or $script:fallbackExecutions -ne 0 -or $script:repairModelCalls -ne 3) {
-    throw "Mandatory tool was substituted during repair: calls=$script:repairModelCalls fallbackExecutions=$script:fallbackExecutions"
+if (-not $repairResult.Success -or
+    $script:nonRetryableExecutions -ne 1 -or
+    $script:fallbackExecutions -ne 1 -or
+    $script:repairModelCalls -ne 5) {
+    throw "Non-retryable duplicate guard/adaptive fallback failed: calls=$script:repairModelCalls primary=$script:nonRetryableExecutions fallback=$script:fallbackExecutions result=$($repairResult.Message)"
+}
+
+# Only explicit task/session fatal results terminate the loop. They are separate from the
+# legacy Recoverable flag and from Retryable (which concerns only an identical call).
+$fatalRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+$fatalDescriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+$fatalDescriptor.Id = "FatalAction"
+$fatalDescriptor.Name = "Fatal action"
+$fatalDescriptor.AppType = "excel"
+$fatalDescriptor.RiskLevel = "safe"
+$fatalDescriptor.AccessMode = "write"
+$fatalDescriptor.OutcomeEffects.Add("artifact")
+$fatalRegistry.RegisterTool($fatalDescriptor)
+$script:fatalExecutions = 0
+$fatalRegistry.ExecuteCodeWithToolResult = {
+    param($code, $language, $preview)
+    $script:fatalExecutions += 1
+    $fatal = [ShareRibbon.Agent.ToolResult]::new()
+    $fatal.Success = $false
+    $fatal.ToolId = "FatalAction"
+    $fatal.Message = "runtime cannot continue"
+    $fatal.UserMessage = "runtime cannot continue"
+    $fatal.ErrorCode = "TEST_TASK_FATAL"
+    $fatal.TaskFatal = $true
+    $fatal.SessionFatal = $true
+    $fatal.Retryable = $false
+    return $fatal
+}
+$fatalLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $fatalRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$script:fatalModelCalls = 0
+$fatalLoop.SendAIRequest = {
+    param($prompt, $system, $history)
+    $script:fatalModelCalls += 1
+    if ($script:fatalModelCalls -eq 1) {
+        return [System.Threading.Tasks.Task[string]]::FromResult(
+            '{"understanding":"fatal","steps":[{"step":1,"description":"run","toolHint":"FatalAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fatal-action","targetRef":"Excel:fatal","effectType":"artifact","operator":"exists","required":true}]}}')
+    }
+    return [System.Threading.Tasks.Task[string]]::FromResult(
+        '{"decision":"act","thought":"run","action":{"tool":"FatalAction","params":{}}}')
+}
+$fatalSession = [ShareRibbon.Agent.AgentSession]::new("fatal", "Excel", "")
+$fatalSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$fatalSession.Spec.Goal = "fatal"
+$fatalSkill = [ShareRibbon.Agent.AgentSkill]::new()
+$fatalSkill.RequiredTools.Add("FatalAction")
+$fatalResult = $fatalLoop.RunAsync($fatalSession, "system", $fatalSkill).GetAwaiter().GetResult()
+if ($fatalResult.Success -or
+    $script:fatalExecutions -ne 1 -or
+    $script:fatalModelCalls -ne 2 -or
+    -not $fatalResult.TaskFatal -or
+    -not $fatalResult.SessionFatal -or
+    $fatalResult.ErrorCode -ne "TEST_TASK_FATAL" -or
+    -not $fatalResult.Message.Contains("taskFatal=True")) {
+    throw "Explicit task-fatal result did not terminate exactly once: calls=$script:fatalModelCalls executions=$script:fatalExecutions result=$($fatalResult.Message)"
+}
+
+$sessionFatal = [ShareRibbon.Agent.ToolResult]::Failed(
+    "SessionFatal",
+    "session fatal",
+    $null,
+    "TEST_SESSION_FATAL",
+    "session fatal",
+    "session fatal",
+    $true,
+    $null,
+    $null,
+    $false,
+    $true,
+    $true)
+if (-not $sessionFatal.SessionFatal -or -not $sessionFatal.TaskFatal -or $sessionFatal.Retryable) {
+    throw "Session-fatal result does not imply task-fatal/non-retryable semantics"
+}
+
+# AgentKernel must fail closed instead of waiting forever when no approval consumer exists.
+$unhandledApprovalKernel = [ShareRibbon.Agent.AgentKernel]::new()
+$unhandledApprovalKernel.Initialize()
+$loopField = [ShareRibbon.Agent.AgentKernel].GetField(
+    "_loopEngine",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$unhandledApprovalLoop = [ShareRibbon.Agent.LoopEngine]$loopField.GetValue($unhandledApprovalKernel)
+$unhandledApprovalTask = $unhandledApprovalLoop.OnRequestApproval.Invoke("approval required")
+$unhandledApprovalWinner = [System.Threading.Tasks.Task]::WhenAny(
+    $unhandledApprovalTask,
+    [System.Threading.Tasks.Task]::Delay(2000)).GetAwaiter().GetResult()
+if ($unhandledApprovalWinner -ne $unhandledApprovalTask -or -not $unhandledApprovalTask.IsFaulted -or
+    -not $unhandledApprovalTask.Exception.ToString().Contains("No approval handler is registered")) {
+    throw "Approval without a subscriber did not fail closed"
+}
+
+# The Harness approval handshake is reusable. Two destructive actions in one Agent run must
+# surface two separate AwaitingApproval results; rejecting an approval must preserve task-fatal
+# semantics through AgentResult and HarnessRunResult.
+if (-not ("ApprovalRuntimeProbe" -as [type])) {
+    $newtonsoftAssemblyPath = Join-Path (Split-Path $assemblyPath) "Newtonsoft.Json.dll"
+    Add-Type -ReferencedAssemblies $assemblyPath,$newtonsoftAssemblyPath -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using ShareRibbon;
+using ShareRibbon.Agent;
+
+public static class ApprovalRuntimeProbe
+{
+    public static string Scenario { get; private set; }
+    public static int ModelCalls { get; private set; }
+    public static int HostExecutions { get; private set; }
+    public static readonly Func<string, string, List<HistoryMessage>, Task<string>> ModelDelegate = Model;
+    public static readonly Func<string, string, bool, ToolResult> HostDelegate = Host;
+
+    public static void Reset(string scenario)
+    {
+        Scenario = scenario;
+        ModelCalls = 0;
+        HostExecutions = 0;
+    }
+
+    private static Task<string> Model(string prompt, string system, List<HistoryMessage> history)
+    {
+        ModelCalls++;
+        if (Scenario == "two")
+        {
+            switch (ModelCalls)
+            {
+                case 1:
+                    return Task.FromResult("{\"understanding\":\"two approvals\",\"steps\":[{\"step\":1,\"description\":\"first\",\"toolHint\":\"ApprovalWrite\"},{\"step\":2,\"description\":\"second\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"approved-write-1\",\"targetRef\":\"Excel:approval/1\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true},{\"id\":\"approved-write-2\",\"targetRef\":\"Excel:approval/2\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true}]}}");
+                case 2:
+                    return Task.FromResult("{\"decision\":\"act\",\"thought\":\"first\",\"action\":{\"tool\":\"ApprovalWrite\",\"params\":{\"ordinal\":1}}}");
+                case 3:
+                    return Task.FromResult("{\"decision\":\"act\",\"thought\":\"second\",\"action\":{\"tool\":\"ApprovalWrite\",\"params\":{\"ordinal\":2}}}");
+                default:
+                    return Task.FromResult("{\"decision\":\"complete\",\"thought\":\"both writes observed\",\"message\":\"done\",\"evidence\":[\"obs-1/e1\",\"obs-2/e1\"]}");
+            }
+        }
+
+        if (ModelCalls == 1)
+            return Task.FromResult("{\"understanding\":\"reject approval\",\"steps\":[{\"step\":1,\"description\":\"write\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"rejected-write\",\"targetRef\":\"Excel:approval/3\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true}]}}");
+        return Task.FromResult("{\"decision\":\"act\",\"thought\":\"request write\",\"action\":{\"tool\":\"ApprovalWrite\",\"params\":{\"ordinal\":3}}}");
+    }
+
+    private static ToolResult Host(string code, string language, bool preview)
+    {
+        HostExecutions++;
+        var command = JObject.Parse(code);
+        var ordinal = command["params"].Value<int>("ordinal");
+        var observation = JObject.Parse("{\"kind\":\"write\",\"summary\":\"approval action complete\",\"changed\":true,\"satisfied\":true,\"targetRefs\":[\"Excel:approval/" + ordinal + "\"]}");
+        return ToolResult.Succeed("ApprovalWrite", "approval action " + ordinal + " complete", null, observation);
+    }
+}
+'@
+}
+
+$approvalKernel = [ShareRibbon.Agent.AgentKernel]::new()
+$approvalKernel.Initialize()
+$approvalRegistry = [ShareRibbon.Agent.ToolRegistry]$loopField.DeclaringType.GetField(
+    "_toolRegistry",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic).GetValue($approvalKernel)
+$approvalDescriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+$approvalDescriptor.Id = "ApprovalWrite"
+$approvalDescriptor.Name = "Approval write"
+$approvalDescriptor.AppType = "excel"
+$approvalDescriptor.RiskLevel = "risky"
+$approvalDescriptor.AccessMode = "write"
+$approvalDescriptor.OutcomeEffects.Add("artifact")
+$approvalRegistry.RegisterTool($approvalDescriptor)
+$approvalKernel.ExecuteCodeWithToolResult = [ApprovalRuntimeProbe]::HostDelegate
+$approvalSkill = [ShareRibbon.SkillFileDefinition]::new()
+$approvalSkill.Name = "Approval smoke"
+$approvalSkill.Description = "Approval state-machine regression"
+$approvalSkill.Application = "Excel"
+$approvalSkill.AllowedTools = [System.Collections.Generic.List[string]]::new()
+$approvalSkill.AllowedTools.Add("ApprovalWrite")
+$approvalSkills = [System.Collections.Generic.List[ShareRibbon.SkillFileDefinition]]::new()
+$approvalSkills.Add($approvalSkill)
+$approvalHarness = [ShareRibbon.Agent.Harness.OfficeHarness]::new($approvalKernel)
+[ApprovalRuntimeProbe]::Reset("two")
+$approvalKernel.SendAIRequest = [ApprovalRuntimeProbe]::ModelDelegate
+$approvalSpec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$approvalSpec.Goal = "perform two approved writes"
+$approvalSpec.RequiredTools.Add("ApprovalWrite")
+$approvalTurn = [ShareRibbon.Agent.Harness.UserTurn]::new()
+$approvalTurn.AppType = "Excel"
+$approvalTurn.Text = "perform two approved writes"
+$approvalTurn.TaskSpec = $approvalSpec
+$approvalTurn.SelectedSkills = $approvalSkills
+$approvalFirst = $approvalHarness.RunAsync(
+    $approvalTurn,
+    [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+if ($approvalFirst.Status -ne [ShareRibbon.Agent.Harness.HarnessRunStatus]::AwaitingApproval) {
+    throw "First approval request was not surfaced by the Harness"
+}
+$approvalSecond = $approvalHarness.ApproveAsync(
+    $approvalFirst.RunId,
+    $true,
+    [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+if ($approvalSecond.Status -ne [ShareRibbon.Agent.Harness.HarnessRunStatus]::AwaitingApproval) {
+    throw "Second approval request was lost after resuming the first"
+}
+$approvalComplete = $approvalHarness.ApproveAsync(
+    $approvalFirst.RunId,
+    $true,
+    [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+if ($approvalComplete.Status -ne [ShareRibbon.Agent.Harness.HarnessRunStatus]::Succeeded -or
+    [ApprovalRuntimeProbe]::HostExecutions -ne 2 -or
+    $approvalComplete.TaskFatal -or
+    $approvalComplete.SessionFatal) {
+    throw "Reusable approval handshake failed: status=$($approvalComplete.Status) hostExecutions=$([ApprovalRuntimeProbe]::HostExecutions)"
+}
+
+[ApprovalRuntimeProbe]::Reset("reject")
+$rejectSpec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$rejectSpec.Goal = "request a write and reject it"
+$rejectSpec.RequiredTools.Add("ApprovalWrite")
+$rejectTurn = [ShareRibbon.Agent.Harness.UserTurn]::new()
+$rejectTurn.AppType = "Excel"
+$rejectTurn.Text = "request a write and reject it"
+$rejectTurn.TaskSpec = $rejectSpec
+$rejectTurn.SelectedSkills = $approvalSkills
+$rejectFirst = $approvalHarness.RunAsync(
+    $rejectTurn,
+    [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+$rejectResult = $approvalHarness.ApproveAsync(
+    $rejectFirst.RunId,
+    $false,
+    [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+if ($rejectFirst.Status -ne [ShareRibbon.Agent.Harness.HarnessRunStatus]::AwaitingApproval -or
+    $rejectResult.Status -ne [ShareRibbon.Agent.Harness.HarnessRunStatus]::Failed -or
+    -not $rejectResult.TaskFatal -or
+    $rejectResult.SessionFatal -or
+    $rejectResult.ErrorCode -ne "SAFETY_BLOCKED" -or
+    [ApprovalRuntimeProbe]::HostExecutions -ne 0) {
+    throw "Approval rejection did not propagate task-fatal semantics"
 }
 
 # Sandboxed JSON-only Python computation is a controlled compute operation and should
@@ -661,7 +2306,7 @@ if (-not $jsonPythonResult.Success -or $jsonPythonResult.Data.ToString() -ne "7"
 
 # If generated source is syntactically invalid, Python can exit before consuming stdin.
 # The broken input pipe is secondary; callers must receive the Python SyntaxError so the
-# repair loop can correct the code instead of diagnosing a fake filesystem problem.
+# adaptive loop can correct the code instead of diagnosing a fake filesystem problem.
 $invalidPythonParams = [Newtonsoft.Json.Linq.JObject]::Parse(
     '{"code":"result = []; for row in input_data: result.append(row)","input":[1,2,3]}')
 $invalidPythonResult = [ShareRibbon.Services.Python.PythonComputeService]::ExecuteAsync(

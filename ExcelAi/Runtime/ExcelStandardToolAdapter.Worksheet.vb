@@ -35,7 +35,10 @@ Namespace OfficeRuntime
             AddOperation(renameBatch, "name-sheet", createdRef, "set", "Worksheet", "Name", "property",
                          New JObject From {{"value", name}}, New JObject From {{"Name", name}})
             Dim renameResult = ExecuteBatch(application, toolId, renameBatch, $"已验证创建工作表 {name}")
-            If Not renameResult.Success Then CleanupCreatedSheet(application, createdRef)
+            If Not renameResult.Success Then
+                CleanupCreatedSheet(application, createdRef)
+                Return MarkCompositeMutationFailure(renameResult, createdRef)
+            End If
             Return renameResult
         End Function
 
@@ -94,7 +97,9 @@ Namespace OfficeRuntime
                 .Id = "copied-values", .TargetRef = finalRef, .PropertyName = "UsedValueHash",
                 .Operator = "equals", .ExpectedValue = New JValue(sourceHash), .Required = True
             })
-            Return ExecuteBatch(application, toolId, renameBatch, $"已验证复制工作表 {sourceName} → {newName}")
+            Dim renameResult = ExecuteBatch(application, toolId, renameBatch, $"已验证复制工作表 {sourceName} → {newName}")
+            If Not renameResult.Success Then Return MarkCompositeMutationFailure(renameResult, copiedRef)
+            Return renameResult
         End Function
 
         Private Shared Function ExecuteInsertDeleteRowColumn(application As Object,

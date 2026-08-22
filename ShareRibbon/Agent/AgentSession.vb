@@ -40,9 +40,27 @@ Namespace Agent
     ''' </summary>
     Public Class ReActIteration
         Public Property Index As Integer
+        ''' <summary>
+        ''' Stable reference exposed to the model and used by the completion gate.  A model
+        ''' must cite these references instead of presenting an ungrounded success claim.
+        ''' </summary>
+        Public Property EvidenceId As String
         Public Property Thought As String
         Public Property Action As ToolCall
+        Public Property AccessMode As String
+        ''' <summary>
+        ''' Evidence records whose data was actually bound into this action by the runtime.
+        ''' This is data provenance, not a predicted workflow dependency.
+        ''' </summary>
+        Public Property DependsOnEvidenceIds As New List(Of String)()
         Public Property Observation As String
+        ''' <summary>
+        ''' Canonical, untruncated host observation used by deterministic outcome verification.
+        ''' Large tool data remains outside this ledger and is carried by AgentToolDataflow.
+        ''' </summary>
+        Public Property OutcomeEvidence As JObject
+        Public Property OutcomeArtifacts As JToken
+        Public Property ContractEvidence As New List(Of OutcomeEvidenceRecord)()
         Public Property Explanation As ExecutionExplanation
         Public Property Timestamp As DateTime = DateTime.Now
     End Class
@@ -56,6 +74,12 @@ Namespace Agent
         Public Property Summary As String
         Public Property Complexity As String = "medium"
         Public Property CapabilityGap As String = ""
+        ''' <summary>
+        ''' Outcome assertions compiled from the user goal during the initial planning turn.
+        ''' The loop never executes these as steps; it freezes them on AgentTaskSpec and uses
+        ''' them only to match host evidence at completion.
+        ''' </summary>
+        Public Property OutcomeContract As OutcomeContract
     End Class
 
     ''' <summary>
@@ -65,9 +89,8 @@ Namespace Agent
         Public Property StepNumber As Integer
         Public Property Description As String
         ''' <summary>
-        ''' Capability milestone for a high-level step. Supporting actions may run first, but
-        ''' the step advances only after this tool succeeds; runtime parameters are always
-        ''' chosen after Observe. A different implementation requires an explicit replan.
+        ''' Optional capability hint for explaining a high-level step in the UI. It never
+        ''' authorizes tools, gates progress, or determines task completion.
         ''' </summary>
         Public Property ToolHint As String
         ''' <summary>
@@ -120,6 +143,12 @@ Namespace Agent
         Public Property SessionId As String
         Public Property IterationsCompleted As Integer
         Public Property FinalOutput As String
+        ''' <summary>Stable error code for callers that must distinguish terminal causes.</summary>
+        Public Property ErrorCode As String = ""
+        ''' <summary>Whether the current user task must stop.</summary>
+        Public Property TaskFatal As Boolean = False
+        ''' <summary>Whether the caller must discard/reset the current Agent session/runtime.</summary>
+        Public Property SessionFatal As Boolean = False
 
         Public Shared Function SuccessResult(sessionId As String,
                                               Optional message As String = "",
@@ -128,15 +157,25 @@ Namespace Agent
                 .Success = True,
                 .SessionId = sessionId,
                 .Message = message,
-                .FinalOutput = finalOutput
+                .FinalOutput = finalOutput,
+                .ErrorCode = "",
+                .TaskFatal = False,
+                .SessionFatal = False
             }
         End Function
 
-        Public Shared Function Failed(sessionId As String, message As String) As AgentResult
+        Public Shared Function Failed(sessionId As String,
+                                      message As String,
+                                      Optional taskFatal As Boolean = False,
+                                      Optional sessionFatal As Boolean = False,
+                                      Optional errorCode As String = "") As AgentResult
             Return New AgentResult With {
                 .Success = False,
                 .SessionId = sessionId,
-                .Message = message
+                .Message = message,
+                .ErrorCode = If(errorCode, ""),
+                .TaskFatal = taskFatal OrElse sessionFatal,
+                .SessionFatal = sessionFatal
             }
         End Function
     End Class
@@ -178,13 +217,19 @@ Namespace Agent
         Public Property SuccessCriteria As New List(Of String)()
         Public Property RequiredTools As New List(Of String)()
         ''' <summary>
-        ''' Tools whose successful execution is part of the task contract. RequiredTools is
-        ''' only a planning hint; MandatoryTools is verified before and after execution.
+        ''' User-visible capability constraints whose use is itself part of the requested
+        ''' outcome (for example an explicit request to calculate with Python). Unlike
+        ''' RequiredTools, these are policy constraints, not a prescribed workflow.
+        ''' </summary>
+        Public Property RequiredCapabilities As New List(Of String)()
+        ''' <summary>
+        ''' Legacy persisted name for RequiredCapabilities. New code must not use this list
+        ''' to prescribe plan steps or execution order.
         ''' </summary>
         Public Property MandatoryTools As New List(Of String)()
         ''' <summary>
-        ''' Ordered subset of MandatoryTools for workflows whose data dependencies require
-        ''' a specific successful execution sequence.
+        ''' Legacy persisted workflow metadata. Adaptive ReAct intentionally ignores this
+        ''' sequence; data dependencies are expressed by tool inputs and observations.
         ''' </summary>
         Public Property MandatoryToolSequence As New List(Of String)()
         Public Property RiskLevel As String = "safe"
@@ -196,12 +241,101 @@ Namespace Agent
         Public Property MutationPolicy As String = "allow"
         Public Property ExpectedOutputs As New List(Of String)()
         Public Property ExpectedSlideCount As Integer = 0
+        Public Property OutcomeContract As OutcomeContract
 
         Public ReadOnly Property IsSimple As Boolean
             Get
                 Return String.Equals(Complexity, "simple", StringComparison.OrdinalIgnoreCase)
             End Get
         End Property
+    End Class
+
+    ''' <summary>
+    ''' Structured, execution-independent definition of the observable end state.  This is
+    ''' deliberately separate from PlanStep and RequiredCapabilities: outcome, strategy and
+    ''' policy must not collapse into the same concept.
+    ''' </summary>
+    Public Class OutcomeContract
+        Public Property SchemaVersion As String = "1.0"
+        Public Property Requirements As New List(Of OutcomeRequirement)()
+        ''' <summary>
+        ''' Concrete workbook identity captured when active/short Excel references are frozen.
+        ''' Evidence is bound at observation time, so switching ActiveWorkbook cannot
+        ''' reinterpret old proof as belonging to another file.
+        ''' </summary>
+        Public Property BoundWorkbook As String = ""
+        ''' <summary>
+        ''' Compute capabilities resolved against the trusted ToolRegistry while the contract
+        ''' is frozen. Ignored during JSON binding so a model cannot self-authorize a non-compute
+        ''' producer by emitting a similarly named field.
+        ''' </summary>
+        <Newtonsoft.Json.JsonIgnore>
+        Public Property ValidatedComputeCapabilities As New List(Of String)()
+        Public Property Frozen As Boolean = False
+    End Class
+
+    Public Class OutcomeRequirement
+        Public Property Id As String
+        Public Property AppType As String
+        Public Property TargetRef As String
+        Public Property EffectType As String
+        Public Property PropertyName As String
+        Public Property [Operator] As String = "equals"
+        Public Property ExpectedValue As JToken
+        Public Property DerivedFromCapability As String
+        ''' <summary>
+        ''' Stable IDs of AgentTaskSpec.SuccessCriteria that this host-observable requirement
+        ''' helps prove. The frozen contract must cover every success criterion at least once.
+        ''' </summary>
+        Public Property CriterionIds As New List(Of String)()
+        Public Property Required As Boolean = True
+        Public Property Description As String
+    End Class
+
+    ''' <summary>
+    ''' Canonical proof produced from a successful tool result.  Expected describes the
+    ''' requested postcondition; Actual and Satisfied come from the host observation.
+    ''' </summary>
+    Public Class OutcomeEvidenceRecord
+        Public Property EvidenceId As String
+        Public Property IterationEvidenceId As String
+        Public Property TargetRef As String
+        Public Property EffectType As String
+        Public Property PropertyName As String
+        Public Property Expected As JToken
+        Public Property Actual As JToken
+        Public Property Satisfied As Boolean
+        ''' <summary>
+        ''' This record is a later host observation that invalidates overlapping older
+        ''' evidence. It may accompany positive proof, or be invalidation-only after a
+        ''' partially applied/failed write.
+        ''' </summary>
+        Public Property InvalidatesPrior As Boolean
+        ''' <summary>
+        ''' True only when a structured host verifier linked the tool request to the observed
+        ''' postcondition. This permits user-facing parameter aliases without treating an
+        ''' unverified request as evidence.
+        ''' </summary>
+        Public Property RequestVerified As Boolean
+        ''' <summary>
+        ''' Only the high-level request fields explicitly linked to passed host verification.
+        ''' Never contains the complete tool request merely because some other property passed.
+        ''' </summary>
+        Public Property VerifiedRequest As JToken
+        Public Property SourceToolId As String
+        Public Property DataHash As String
+        ''' <summary>
+        ''' Monotonic revision of the observed Office world after this action. Later
+        ''' overlapping state evidence supersedes older assertions.
+        ''' </summary>
+        Public Property WorldRevision As Long
+        ''' <summary>
+        ''' Canonical aliases for the same host object (for example a stable chart anchor and
+        ''' Excel's generated ChartObject ref).  They participate only in invalidation, never
+        ''' in satisfying a contract target.
+        ''' </summary>
+        Public Property RelatedTargetRefs As New List(Of String)()
+        Public Property DerivedFromEvidenceIds As New List(Of String)()
     End Class
 
 End Namespace

@@ -127,6 +127,80 @@ Namespace OfficeRuntime
             Return result
         End Function
 
+        ''' <summary>
+        ''' Carries call-level mutation knowledge across multi-batch adapters.  A later
+        ''' sub-batch error must not erase the fact that an earlier sub-batch changed Excel.
+        ''' Precise invalidation refs avoid a blind retry while remaining less destructive
+        ''' than a workbook-wide tombstone.
+        ''' </summary>
+        Private Shared Function MarkCompositeMutationFailure(result As ToolResult,
+                                                             ParamArray invalidatedTargetRefs As String()) As ToolResult
+            If result Is Nothing OrElse result.Success Then Return result
+            Dim observation = TryCast(result.Observation, JObject)
+            If observation Is Nothing Then observation = New JObject()
+            observation("mayHaveMutated") = True
+            Dim refs = TryCast(observation("invalidatedTargetRefs"), JArray)
+            If refs Is Nothing Then
+                refs = New JArray()
+                observation("invalidatedTargetRefs") = refs
+            End If
+            For Each targetRef In If(invalidatedTargetRefs, Array.Empty(Of String)())
+                If String.IsNullOrWhiteSpace(targetRef) OrElse
+                   refs.Any(Function(item) String.Equals(item?.ToString(), targetRef, StringComparison.OrdinalIgnoreCase)) Then Continue For
+                refs.Add(targetRef)
+            Next
+            result.Observation = observation
+            Return result
+        End Function
+
+        ''' <summary>
+        ''' Adds a stable, host-verified anchor for artifacts whose generated COM names are
+        ''' unknowable when the outcome contract is frozen (charts and pivot tables).
+        ''' </summary>
+        Private Shared Function AnnotateArtifactAnchor(result As ToolResult,
+                                                       anchorRef As String,
+                                                       artifactRef As String) As ToolResult
+            If result Is Nothing OrElse Not result.Success OrElse
+               String.IsNullOrWhiteSpace(anchorRef) OrElse String.IsNullOrWhiteSpace(artifactRef) Then Return result
+            Dim observation = TryCast(result.Observation, JObject)
+            If observation Is Nothing Then observation = New JObject()
+            Dim anchors = TryCast(observation("artifactAnchors"), JArray)
+            If anchors Is Nothing Then
+                anchors = New JArray()
+                observation("artifactAnchors") = anchors
+            End If
+            anchors.Add(New JObject From {
+                {"targetRef", anchorRef},
+                {"artifactRef", artifactRef},
+                {"status", "passed"}
+            })
+            result.Observation = observation
+            Return result
+        End Function
+
+        ''' <summary>
+        ''' Projects a user-level value only after the host verifier passed its deterministic
+        ''' hash/formula checks.  This lets outcome contracts compare semantic data/formulas
+        ''' without requiring the planner to predict observer-internal hashes.
+        ''' </summary>
+        Private Shared Function AnnotateVerifiedRequestProjection(result As ToolResult,
+                                                                  requestExpected As JToken,
+                                                                  Optional requestProperty As String = "",
+                                                                  Optional verifiedPropertyName As String = "") As ToolResult
+            If result Is Nothing OrElse Not result.Success OrElse requestExpected Is Nothing Then Return result
+            Dim observation = TryCast(result.Observation, JObject)
+            Dim verification = TryCast(observation?("verification"), JArray)
+            If verification Is Nothing Then Return result
+            For Each item In verification.OfType(Of JObject)()
+                If Not String.Equals(item("status")?.ToString(), "passed", StringComparison.OrdinalIgnoreCase) Then Continue For
+                If Not String.IsNullOrWhiteSpace(verifiedPropertyName) AndAlso
+                   Not String.Equals(item("property")?.ToString(), verifiedPropertyName, StringComparison.OrdinalIgnoreCase) Then Continue For
+                item("requestProperty") = If(requestProperty, "")
+                item("requestExpected") = requestExpected.DeepClone()
+            Next
+            Return result
+        End Function
+
         Private Shared Function ResolveRange(application As Object,
                                              rangeSpec As String,
                                              Optional resizeRows As Integer = 0,

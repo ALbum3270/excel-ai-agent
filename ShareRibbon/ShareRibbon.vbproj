@@ -271,10 +271,15 @@
     <Compile Include="Agent\AgentKernel.vb" />
     <Compile Include="Agent\AiNativeRuntime.vb" />
     <Compile Include="Agent\AgentExecutionContract.vb" />
+    <Compile Include="Agent\AgentGoalVerifier.vb" />
+    <Compile Include="Agent\AgentGoalVerifier.Canonicalization.vb" />
+    <Compile Include="Agent\OutcomeEffectCatalog.vb" />
+    <Compile Include="Agent\OutcomeEvidenceFactory.vb" />
     <Compile Include="Agent\AgentPlanningScope.vb" />
     <Compile Include="Agent\ExecutionPathPolicy.vb" />
     <Compile Include="Agent\LoopEngine.Planning.vb" />
     <Compile Include="Agent\LoopEngine.Decisions.vb" />
+    <Compile Include="Agent\LoopEngine.OutcomeContract.vb" />
     <Compile Include="Agent\LoopEngine.PlanActions.vb" />
     <Compile Include="Agent\AgentToolDataflow.vb" />
     <Compile Include="Agent\LoopEngine.vb" />

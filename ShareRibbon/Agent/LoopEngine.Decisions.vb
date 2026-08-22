@@ -1,3 +1,4 @@
+Imports System.Collections.Generic
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json.Linq
 
@@ -29,6 +30,7 @@ Namespace Agent
             Public Property Thought As String = ""
             Public Property Action As ToolCall
             Public Property Message As String = ""
+            Public Property Evidence As New List(Of String)()
         End Class
 
         Private Function ParseReactDecision(response As String) As ReactDecision
@@ -57,32 +59,29 @@ Namespace Agent
                 End If
                 If kind = "act" AndAlso action Is Nothing Then Return Nothing
 
+                Dim evidence As New List(Of String)()
+                Dim evidenceArray = TryCast(obj("evidence"), JArray)
+                If evidenceArray IsNot Nothing Then
+                    For Each item In evidenceArray
+                        Dim value = If(item?.ToString(), "").Trim()
+                        If Not String.IsNullOrWhiteSpace(value) Then evidence.Add(value)
+                    Next
+                Else
+                    Dim value = If(obj("evidence")?.ToString(), "").Trim()
+                    If Not String.IsNullOrWhiteSpace(value) Then evidence.Add(value)
+                End If
+
                 Return New ReactDecision With {
                     .Kind = kind,
                     .Thought = If(obj("thought")?.ToString(), If(obj("analysis")?.ToString(), "")),
                     .Action = action,
-                    .Message = If(obj("message")?.ToString(), If(obj("reason")?.ToString(), If(obj("finalAnswer")?.ToString(), "")))
+                    .Message = If(obj("message")?.ToString(), If(obj("reason")?.ToString(), If(obj("finalAnswer")?.ToString(), ""))),
+                    .Evidence = evidence
                 }
             Catch ex As Exception
                 AppLogger.Warn("LoopEngine", $"Unable to parse ReAct decision: {ex.Message}")
                 Return Nothing
             End Try
-        End Function
-
-        Private Function ValidateMilestoneTools(plan As ExecutionPlan) As String
-            For Each stepItem In plan.Steps
-                Dim milestoneTool = If(stepItem.ToolHint, "").Trim()
-                If String.IsNullOrWhiteSpace(milestoneTool) Then
-                    milestoneTool = If(ParsePlannedToolCall(stepItem.Code)?.ToolId, "").Trim()
-                End If
-                If String.IsNullOrWhiteSpace(milestoneTool) Then
-                    Return $"规划步骤 {stepItem.StepNumber} 缺少可验证的 toolHint；高层骨架中每个里程碑必须对应一个已注册工具。"
-                End If
-                If _toolRegistry.GetTool(milestoneTool) Is Nothing Then
-                    Return $"规划步骤 {stepItem.StepNumber} 引用了未注册的 toolHint：{milestoneTool}。"
-                End If
-            Next
-            Return ""
         End Function
 
     End Class

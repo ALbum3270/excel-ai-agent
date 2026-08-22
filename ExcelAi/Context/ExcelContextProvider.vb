@@ -23,6 +23,7 @@ Namespace Context
                     If _app.ActiveWorkbook IsNot Nothing Then workbookName = _app.ActiveWorkbook.Name
                 Catch
                 End Try
+                ctx.HostData("workbook") = workbookName
 
                 Dim worksheet As Excel.Worksheet = TryCast(_app.ActiveSheet, Excel.Worksheet)
                 Dim usedRange As Excel.Range = Nothing

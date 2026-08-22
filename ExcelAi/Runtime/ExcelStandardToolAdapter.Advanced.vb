@@ -133,6 +133,12 @@ Namespace OfficeRuntime
                     FirstText(params, "condition"),
                     FirstText(params, "color"),
                     afterRules)
+                Dim verifiedRequest As New JObject From {{"rule", rule}}
+                If String.Equals(rule, "highlight", StringComparison.OrdinalIgnoreCase) Then
+                    If params("condition") IsNot Nothing Then verifiedRequest("condition") = params("condition").DeepClone()
+                    If params("color") IsNot Nothing Then verifiedRequest("color") = params("color").DeepClone()
+                End If
+                verification("requestExpected") = verifiedRequest
                 Dim before As New JObject From {
                     {"formatConditionCount", beforeRules.Count},
                     {"formatConditions", beforeRules}
@@ -332,7 +338,11 @@ Namespace OfficeRuntime
                                                          })
                         If chartResult Is Nothing OrElse Not chartResult.Success Then
                             If chartResult IsNot Nothing Then chartResult.ToolId = toolId
-                            Return chartResult
+                            If chartResult Is Nothing Then Return chartResult
+                            Return MarkCompositeMutationFailure(
+                                chartResult,
+                                BuildWorksheetRef(targetName),
+                                BuildAdvancedRangeRef(targetName, CStr(dataRange.Address(False, False))))
                         End If
                     End If
 
@@ -349,17 +359,19 @@ Namespace OfficeRuntime
                                     (Not If(params("includeChart")?.Value(Of Boolean)(), False) OrElse GetChartCount(targetSheet) > 0)
                     Dim worksheetRef = BuildWorksheetRef(targetName)
                     Dim outputRef = BuildAdvancedRangeRef(targetName, CStr(dataRange.Address(False, False)))
-                    Return BuildAdvancedMutationResult(toolId,
-                                                       $"已验证报表工作表 {targetName}",
-                                                       New String() {worksheetRef, outputRef},
-                                                       before,
-                                                       after,
-                                                       satisfied,
-                                                       New JObject From {
-                                                           {"targetSheet", targetName},
-                                                           {"outputRange", outputRef}
-                                                       },
-                                                       artifacts:=chartResult?.Artifacts)
+                    Dim reportResult = BuildAdvancedMutationResult(toolId,
+                                                                   $"已验证报表工作表 {targetName}",
+                                                                   New String() {worksheetRef, outputRef},
+                                                                   before,
+                                                                   after,
+                                                                   satisfied,
+                                                                   New JObject From {
+                                                                       {"targetSheet", targetName},
+                                                                       {"outputRange", outputRef}
+                                                                   },
+                                                                   artifacts:=chartResult?.Artifacts)
+                    reportResult = AnnotateArtifactAnchor(reportResult, worksheetRef, worksheetRef)
+                    Return AnnotateArtifactAnchor(reportResult, outputRef, worksheetRef)
                 Finally
                     ReleaseCom(borders)
                     ReleaseCom(titleRange)
@@ -444,17 +456,18 @@ Namespace OfficeRuntime
                                         String.Equals(topLeftAddress,
                                                       target.Descriptor.Address.Split(":"c)(0),
                                                       StringComparison.OrdinalIgnoreCase)
-                        Return BuildAdvancedMutationResult(toolId,
-                                                           $"已验证数据透视表 {tableName}",
-                                                           New String() {pivotRef},
-                                                           before,
-                                                           after,
-                                                           satisfied,
-                                                           New JObject From {
-                                                               {"pivotTable", pivotRef},
-                                                               {"targetSheet", target.Descriptor.SheetName}
-                                                           },
-                                                           artifacts:=New JObject From {{"pivotTable", pivotRef}})
+                        Dim pivotResult = BuildAdvancedMutationResult(toolId,
+                                                                      $"已验证数据透视表 {tableName}",
+                                                                      New String() {pivotRef},
+                                                                      before,
+                                                                      after,
+                                                                      satisfied,
+                                                                      New JObject From {
+                                                                          {"pivotTable", pivotRef},
+                                                                          {"targetSheet", target.Descriptor.SheetName}
+                                                                      },
+                                                                      artifacts:=New JObject From {{"pivotTable", pivotRef}})
+                        Return AnnotateArtifactAnchor(pivotResult, target.Descriptor.RangeRef, pivotRef)
                     Finally
                         ReleaseCom(tableRange)
                         ReleaseCom(pivotTable)

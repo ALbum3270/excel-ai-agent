@@ -1,4 +1,5 @@
 Imports Microsoft.Office.Interop.Excel
+Imports System.Linq
 Imports Newtonsoft.Json.Linq
 Imports ShareRibbon
 Imports ShareRibbon.Agent
@@ -67,6 +68,7 @@ Namespace OfficeRuntime
                 result.ToolId = toolId
                 Dim observation = TryCast(result.Observation, JObject)
                 If observation IsNot Nothing Then
+                    AnnotateVerifiedRequestFields(TryCast(observation("verification"), JArray), params)
                     observation("adapter") = toolId
                     observation("requestedRange") = resolvedSpec.SheetName & "!" & resolvedSpec.Address
                     observation("summary") = If(result.Success,
@@ -82,6 +84,35 @@ Namespace OfficeRuntime
                 Return ToolResult.FromException(toolId, ex)
             End Try
         End Function
+
+        Private Shared Sub AnnotateVerifiedRequestFields(verification As JArray,
+                                                          params As JObject)
+            If verification Is Nothing OrElse params Is Nothing Then Return
+            For Each item In verification.OfType(Of JObject)()
+                Dim targetRef = If(item("targetRef")?.ToString(), "").Trim().ToLowerInvariant()
+                Dim propertyName = If(item("property")?.ToString(), "").Trim()
+                Dim requestProperty As String = ""
+                Select Case propertyName.ToLowerInvariant()
+                    Case "numberformat" : requestProperty = "numberFormat"
+                    Case "horizontalalignment" : requestProperty = "horizontalAlignment"
+                    Case "verticalalignment" : requestProperty = "verticalAlignment"
+                    Case "wraptext" : requestProperty = "wrapText"
+                    Case "bold" : requestProperty = "bold"
+                    Case "italic" : requestProperty = "italic"
+                    Case "size" : requestProperty = "fontSize"
+                    Case "color"
+                        If targetRef.EndsWith("/font", StringComparison.OrdinalIgnoreCase) Then
+                            requestProperty = "fontColor"
+                        ElseIf targetRef.EndsWith("/interior", StringComparison.OrdinalIgnoreCase) Then
+                            requestProperty = "backgroundColor"
+                        End If
+                    Case "linestyle" : requestProperty = "borders"
+                End Select
+                If String.IsNullOrWhiteSpace(requestProperty) OrElse params(requestProperty) Is Nothing Then Continue For
+                item("requestProperty") = requestProperty
+                item("requestExpected") = params(requestProperty).DeepClone()
+            Next
+        End Sub
 
         Private Shared Sub AddPropertyOperation(batch As OfficeOperationBatch,
                                                 targetRef As String,

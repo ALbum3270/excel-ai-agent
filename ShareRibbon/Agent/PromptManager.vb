@@ -36,15 +36,14 @@ Namespace Agent
         ''' 构建系统提示词（6 层架构）
         ''' Layer 1: System Base
         ''' Layer 2: App Context
-        ''' Layer 3: Office Context (NEW - 上下文自动感知)
-        ''' Layer 4: Tool Schema
-        ''' Layer 5: User Prompt Profile
-        ''' Layer 6: Memory Context
+        ''' Layer 3: Tool Schema
+        ''' Layer 4: User Prompt Profile
+        ''' Layer 5: Memory Context
+        ''' Mutable Office state is deliberately supplied by each Agent step.
         ''' </summary>
         Public Function BuildSystemPrompt(appType As String,
                                           tools As List(Of ToolDescriptor),
-                                          Optional memory As AgentMemory = Nothing,
-                                          Optional officeContextText As String = Nothing) As String
+                                          Optional memory As AgentMemory = Nothing) As String
             Dim sb As New StringBuilder()
             Dim promptProfile = PromptProfileService.Load(appType)
 
@@ -72,7 +71,7 @@ Namespace Agent
             sb.AppendLine("- Excel 纯新建、添加或插入一个命名工作表时，必须使用 `CreateSheet`；只有用户明确要求生成报表内容、摘要或图表时才使用 `GenerateReport`。")
             sb.AppendLine("- 工作表名称（例如【汇总】【报表】）只是名称，不代表用户要求生成报表内容；不得仅凭名称扩大任务范围。")
             sb.AppendLine("- 已注册的高层工具能够表达任务时必须直接使用该工具；`OfficeObjectOperation` 仅用于高层工具未覆盖的长尾对象操作，并且必须在同一任务中先成功调用 `DiscoverOfficeCapability`，不得把 CopySheet 等工具调用包装进其 batch。")
-            sb.AppendLine("- 用户显式指定使用 `Python`/`PythonCompute` 时不得替换为 `DataAnalysis`、公式、透视表或其他计算引擎；必须按 `ReadRange → PythonCompute → WriteData` 执行。PythonCompute 是无文件、无网络、无子进程的受控 JSON 计算，默认无需审批。")
+            sb.AppendLine("- 用户显式指定使用 `Python`/`PythonCompute` 时不得替换为 `DataAnalysis`、公式、透视表或其他计算引擎；读取、创建和写入动作根据每轮最新观察决定。PythonCompute 是无文件、无网络、无子进程的受控 JSON 计算，默认无需审批。")
             sb.AppendLine("- 多步工具的数据依赖必须引用运行时结果，禁止把上下文预览或臆造样本复制为真实输入。规划 PythonCompute.input 时使用 {""$from"":""ReadRange""}，规划 WriteData.data 时使用 {""$from"":""PythonCompute""}；执行器会绑定完整结果。")
             sb.AppendLine("- PythonCompute.code 必须是有效的多行 Python 源码；for/if/try/with 等复合语句必须换行并正确缩进，在 JSON 字符串中用 \n 表示换行，禁止把复合语句用分号拼成一行。")
             sb.AppendLine("- 多轮追问若只修正输出工作表或目标位置，必须保留上一任务的数据源、计算方法、分组字段和聚合方式；不得把当前活动表或刚生成的输出表改作数据源。")
@@ -99,18 +98,12 @@ Namespace Agent
                 End If
             End If
 
-            ' Layer 3: Office Context
-            If Not String.IsNullOrWhiteSpace(officeContextText) Then
-                sb.AppendLine()
-                sb.AppendLine("【当前 Office 上下文】")
-                sb.AppendLine(officeContextText)
-            End If
-
-            ' Layer 4: Tool Schema
+            ' Layer 3: Tool Schema
             sb.AppendLine()
             sb.AppendLine("【已注册工具 - 只能从这里选择】")
             For Each tool In tools.OrderBy(Function(t) t.Category).ThenBy(Function(t) t.Id)
-                sb.AppendLine($"{tool.Id}: {tool.Name} - {tool.Description}")
+                Dim effects = OutcomeEffectCatalog.GetEffects(tool)
+                sb.AppendLine($"{tool.Id}: {tool.Name} - {tool.Description}；可验证结果={String.Join(",", effects)}")
                 For Each p In tool.Parameters
                     Dim req = If(p.Required, "必需", "可选")
                     sb.AppendLine($"  - {p.Name} ({p.Type}, {req}): {p.Description}")
@@ -172,7 +165,8 @@ Namespace Agent
         ''' </summary>
         Public Function BuildPlanningPrompt(session As AgentSession,
                                              systemPrompt As String,
-                                             Optional skill As AgentSkill = Nothing) As String
+                                             Optional skill As AgentSkill = Nothing,
+                                             Optional memory As AgentMemory = Nothing) As String
             Dim sb As New StringBuilder()
             Dim planningPrompt = GetPrompt("planning-strategy")
 
@@ -194,6 +188,30 @@ Namespace Agent
             sb.AppendLine("【用户请求】")
             sb.AppendLine(session.UserRequest)
 
+            If memory IsNot Nothing Then
+                Dim latestObservation = memory.GetWorkingString("lastObservation")
+                If Not String.IsNullOrWhiteSpace(latestObservation) Then
+                    sb.AppendLine()
+                    sb.AppendLine("【触发本次规划的最新观察】")
+                    sb.AppendLine(latestObservation)
+                End If
+
+                Dim contextPack = TryCast(memory.GetWorking("lastContextPack"), Context.ContextPack)
+                If contextPack IsNot Nothing Then
+                    sb.AppendLine()
+                    sb.AppendLine("【当前 World Snapshot】")
+                    sb.AppendLine(contextPack.ToPromptText())
+                End If
+            End If
+
+            If session?.Iterations IsNot Nothing AndAlso session.Iterations.Count > 0 Then
+                sb.AppendLine()
+                sb.AppendLine("【已执行动作与观察】")
+                For Each item In session.Iterations.Skip(Math.Max(0, session.Iterations.Count - 6))
+                    sb.AppendLine($"- {If(item.Action?.ToolId, "unknown")}: {If(item.Observation, "")}")
+                Next
+            End If
+
             If session.Spec IsNot Nothing Then
                 sb.AppendLine()
                 sb.AppendLine("【开放式任务规格（权威）】")
@@ -205,7 +223,10 @@ Namespace Agent
                     sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
                 End If
                 If session.Spec.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
-                    sb.AppendLine("成功标准: " & String.Join("; ", session.Spec.SuccessCriteria))
+                    sb.AppendLine("成功标准（outcomeContract 必须用 criterionIds 全量映射）:")
+                    For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
+                        sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
+                    Next
                 End If
                 If session.Spec.ExpectedOutputs IsNot Nothing AndAlso session.Spec.ExpectedOutputs.Count > 0 Then
                     sb.AppendLine("必须实际产出并验证: " & String.Join(", ", session.Spec.ExpectedOutputs))
@@ -229,13 +250,10 @@ Namespace Agent
                 If taskTools IsNot Nothing AndAlso taskTools.Count > 0 Then
                     sb.AppendLine($"【本任务建议工具】{String.Join(", ", taskTools)}")
                 End If
-                Dim hasMandatoryContract = session.Spec?.MandatoryTools IsNot Nothing AndAlso
-                    session.Spec.MandatoryTools.Count > 0
-                If hasMandatoryContract Then
-                    sb.AppendLine($"【任务工具合同】必须成功调用: {String.Join(", ", session.Spec.MandatoryTools)}")
-                    If session.Spec.MandatoryToolSequence IsNot Nothing AndAlso session.Spec.MandatoryToolSequence.Count > 1 Then
-                        sb.AppendLine($"【依赖顺序】{String.Join(" → ", session.Spec.MandatoryToolSequence)}")
-                    End If
+                Dim hasCapabilityPolicy = session.Spec?.RequiredCapabilities IsNot Nothing AndAlso
+                    session.Spec.RequiredCapabilities.Count > 0
+                If hasCapabilityPolicy Then
+                    sb.AppendLine($"【用户要求的能力策略】必须真实使用: {String.Join(", ", session.Spec.RequiredCapabilities)}")
                     sb.AppendLine("工具是否存在以已注册工具清单为准；不得根据旧经验声称缺少清单中已列出的工具。")
                 ElseIf Not String.IsNullOrWhiteSpace(skill.PromptTemplate) Then
                     sb.AppendLine()
@@ -245,7 +263,7 @@ Namespace Agent
             End If
 
             sb.AppendLine()
-            sb.AppendLine("请分析用户需求，制定高层任务骨架。步骤 toolHint 是该里程碑的主要工具能力，不包含未来参数，也不是将被直接执行的脚本。")
+            sb.AppendLine("请分析用户需求，制定供用户理解的高层任务骨架。步骤 toolHint 只是当前事实下的建议能力，不包含未来参数，不会控制执行进度，也不是将被直接执行的脚本。")
             sb.AppendLine("不要在规划阶段猜测依赖未来工具结果的数据；例如 ReadRange 尚未执行时，不得在后续步骤中编造完整 input/data。")
             If skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing AndAlso skill.RequiredTools.Count > 0 Then
                 sb.AppendLine("若匹配技能提供了建议工具，并且能完成任务，优先在步骤 toolHint 中使用这些工具。")
@@ -253,6 +271,9 @@ Namespace Agent
             sb.AppendLine("每个步骤必须能被已注册工具覆盖。toolHint 必须原样照抄【已注册工具】中的 ID；不要在规划阶段生成未来工具参数。")
             sb.AppendLine("兼容意图标签不是能力边界。应以开放式任务规格、命中的 Skill 和当前工具组合完成用户目标；若确实缺少原子能力，明确报告 capability gap，不得编造工具或宣称完成。")
             sb.AppendLine("计划必须覆盖所有成功标准。要求图片时，高层步骤只需用 toolHint 声明真实图片能力；可访问的 imagePath 应在执行轮根据当时事实决定。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
+            sb.AppendLine("首次规划还必须把最终目标编译成 outcomeContract。它描述最终可观察状态，不描述步骤或工具顺序。每条 requirement 的 effectType 必须取自【已注册工具】列出的可验证结果；targetRef 必须使用 ContextPack 中稳定的工作簿/工作表/完整范围引用，不能只写一个相交的单元格。每条 requirement 最多映射一个 criterionId；复合目标必须拆成多条独立的宿主断言，禁止把多个成功标准挂到一个弱断言上。")
+            sb.AppendLine("operator=equals 表示完整精确相等；contains 表示对象字段子集或有序数组子序列；covers 只用于 read_coverage 的范围覆盖；exists 只验证对象/产物存在。object_exists/object_absent 只能表达对象生命周期，property 留空且 expectedValue 为 null；对象属性必须单独使用 property_state。若 expectedValue 只是工具参数的一部分，必须用 contains；property_state 必须同时填写 property 和该属性的 expectedValue。")
+            sb.AppendLine("如果最终数据必须来自某个用户明确要求的计算能力（例如 PythonCompute），在最终 data_state requirement 的 derivedFromCapability 中写该能力，并另外声明该计算输入完整范围的 read_coverage requirement。不得用 changed=true 代替目标状态，也不得把无关读取、计算、建表或任意一次写入当成整个任务完成。")
             sb.AppendLine("如果任务是生成可编辑文书模板，缺少具体字段时不要停在澄清问题；先用占位符生成模板草稿。")
             sb.AppendLine("返回 JSON 格式：")
             sb.AppendLine("```json")
@@ -265,6 +286,12 @@ Namespace Agent
             sb.AppendLine("      ""toolHint"": ""已注册工具ID""")
             sb.AppendLine("    }")
             sb.AppendLine("  ],")
+            sb.AppendLine("  ""outcomeContract"": {")
+            sb.AppendLine("    ""schemaVersion"": ""1.0"",")
+            sb.AppendLine("    ""requirements"": [")
+            sb.AppendLine("      { ""id"": ""goal-1"", ""appType"": ""Excel"", ""targetRef"": ""稳定对象或完整范围引用"", ""effectType"": ""从已注册工具的可验证结果中原样选择"", ""property"": ""可选属性"", ""operator"": ""equals|contains|covers|exists"", ""expectedValue"": {}, ""derivedFromCapability"": ""可选"", ""criterionIds"": [""criterion-1""], ""required"": true, ""description"": ""对应哪条最终成功标准"" }")
+            sb.AppendLine("    ]")
+            sb.AppendLine("  },")
             sb.AppendLine("  ""summary"": ""预期结果"",")
             sb.AppendLine("  ""capabilityGap"": ""无法执行时说明缺少的工具、数据或权限；可执行时为空""")
             sb.AppendLine("}")
@@ -297,10 +324,20 @@ Namespace Agent
                     sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
                 End If
                 If session.Spec?.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
-                    sb.AppendLine("成功标准: " & String.Join("; ", session.Spec.SuccessCriteria))
+                    sb.AppendLine("成功标准:")
+                    For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
+                        sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
+                    Next
                 End If
-                If session.Spec?.MandatoryTools IsNot Nothing AndAlso session.Spec.MandatoryTools.Count > 0 Then
-                    sb.AppendLine("必须真实成功调用的工具: " & String.Join(", ", session.Spec.MandatoryTools))
+                If session.Spec?.RequiredCapabilities IsNot Nothing AndAlso session.Spec.RequiredCapabilities.Count > 0 Then
+                    sb.AppendLine("用户明确要求的能力: " & String.Join(", ", session.Spec.RequiredCapabilities))
+                End If
+                If session.Spec?.OutcomeContract?.Requirements IsNot Nothing AndAlso
+                   session.Spec.OutcomeContract.Requirements.Count > 0 Then
+                    sb.AppendLine("冻结的结果合同:")
+                    For Each requirement In session.Spec.OutcomeContract.Requirements
+                        sb.AppendLine($"- {requirement.Id}: effect={requirement.EffectType}; target={requirement.TargetRef}; property={requirement.PropertyName}; operator={requirement.Operator}; derivedFrom={requirement.DerivedFromCapability}; criteria=[{String.Join(",", If(requirement.CriterionIds, New List(Of String)()))}]; expected={If(requirement.ExpectedValue?.ToString(Formatting.None), "null")}")
+                    Next
                 End If
                 sb.AppendLine()
 
@@ -313,8 +350,8 @@ Namespace Agent
                 End If
             End If
 
-            sb.AppendLine("【当前步骤】")
-            sb.AppendLine($"步骤 {planStep.StepNumber}: {planStep.Description}")
+            sb.AppendLine("【当前计划提示（非执行门）】")
+            sb.AppendLine($"步骤 {planStep.StepNumber}: {planStep.Description}; 建议能力: {If(planStep.ToolHint, "未指定")}")
             sb.AppendLine()
 
             If Not String.IsNullOrWhiteSpace(previousObservation) Then
@@ -331,11 +368,22 @@ Namespace Agent
             End If
 
             If session?.Iterations IsNot Nothing AndAlso session.Iterations.Count > 0 Then
-                sb.AppendLine("【已执行动作】")
+                sb.AppendLine("【最近执行动作】")
                 For Each item In session.Iterations.Skip(Math.Max(0, session.Iterations.Count - 6))
                     Dim toolId = If(item.Action?.ToolId, "unknown")
                     Dim outcome = If(item.Explanation IsNot Nothing AndAlso item.Explanation.Success, "成功", "失败")
-                    sb.AppendLine($"- {toolId}: {outcome}")
+                    sb.AppendLine($"- {If(item.EvidenceId, "unidentified")} {toolId}: {outcome}")
+                Next
+                sb.AppendLine()
+
+                ' Completion may require evidence produced more than six actions ago. Keep the
+                ' prose history bounded, but always expose the complete compact evidence ledger.
+                sb.AppendLine("【完整证据账本（complete.evidence 只能引用这里的 ID）】")
+                For Each item In session.Iterations
+                    For Each record In If(item.ContractEvidence, New List(Of OutcomeEvidenceRecord)())
+                        Dim lineage = String.Join(",", If(record.DerivedFromEvidenceIds, New List(Of String)()))
+                        sb.AppendLine($"- {record.EvidenceId}: revision={record.WorldRevision}; effect={record.EffectType}; target={record.TargetRef}; property={record.PropertyName}; satisfied={record.Satisfied}; invalidatesPrior={record.InvalidatesPrior}; requestVerified={record.RequestVerified}; source={record.SourceToolId}; expected={CompactToken(record.Expected, 512)}; actual={CompactToken(record.Actual, 512)}; verifiedRequest={CompactToken(record.VerifiedRequest, 512)}; lineage=[{lineage}]")
+                    Next
                 Next
                 sb.AppendLine()
             End If
@@ -349,15 +397,16 @@ Namespace Agent
 
             sb.AppendLine("请根据最终目标、当前步骤和最新观察决定当前状态。不要照抄规划阶段的参数，也不要猜测尚未产生的工具结果。")
             sb.AppendLine("decision=act 时只能选择系统提示词中的已注册工具，工具 ID 必须原样照抄，禁止自创 snake_case/驼峰别名。")
-            sb.AppendLine("当前里程碑允许先调用支持工具，但只有当前步骤的 toolHint 工具真实成功后才会推进里程碑；若需改用其他主要能力，先返回 replan。")
-            sb.AppendLine("只有在目标和成功标准已经由真实 Observation 满足时才能 decision=complete；系统仍会进行确定性验收。")
+            sb.AppendLine("toolHint 仅供参考；可以直接选择更合适的已注册工具，无需为了换实现而 replan。只有高层目标本身变化时才使用 replan。")
+            sb.AppendLine("只有冻结 outcomeContract 的全部 requirement 都已有匹配且 satisfied=true 的宿主证据时才能 decision=complete。evidence 只引用上方真实 evidenceId（例如 obs-3/e1），不得写自然语言事实或伪造 ID；系统会逐条确定性验收。")
             sb.AppendLine("需要改变高层骨架时使用 replan；确认无法安全完成时使用 fail，并给出明确原因。")
             sb.AppendLine("```json")
             sb.AppendLine("{")
             sb.AppendLine("  ""decision"": ""act|complete|replan|fail"",")
             sb.AppendLine("  ""thought"": ""基于当前事实的判断"",")
             sb.AppendLine("  ""action"": { ""tool"": ""工具ID"", ""params"": { ... } },")
-            sb.AppendLine("  ""message"": ""完成、重规划或失败时的说明""")
+            sb.AppendLine("  ""message"": ""完成、重规划或失败时的说明"",")
+            sb.AppendLine("  ""evidence"": [""obs-3/e1""]")
             sb.AppendLine("}")
             sb.AppendLine("```")
 
@@ -411,6 +460,13 @@ Namespace Agent
                 Return _promptCache(name)
             End If
             Return Nothing
+        End Function
+
+        Private Shared Function CompactToken(value As JToken, maxLength As Integer) As String
+            If value Is Nothing Then Return "null"
+            Dim text = value.ToString(Formatting.None)
+            If text.Length <= maxLength Then Return text
+            Return text.Substring(0, maxLength) & "...(truncated)"
         End Function
 
     End Class

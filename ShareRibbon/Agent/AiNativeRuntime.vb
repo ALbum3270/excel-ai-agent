@@ -238,10 +238,10 @@ Namespace Agent
             End If
 
             If isReadOnlyDataAnswer Then
-                spec.SuccessCriteria.Add("读取完成回答所必需的精确数据，并只在聊天中返回结果")
-                spec.SuccessCriteria.Add("答案中的数值必须能由工具返回的数据逐项验证，禁止估算")
+                spec.SuccessCriteria.Add("完整读取回答所需的工作簿范围；禁止估算或使用截断预览外推")
+                spec.Constraints.Add("只在聊天中返回结果；答案中的数值必须能由工具返回的数据逐项验证")
             ElseIf isExplicitPythonCompute Then
-                spec.Constraints.Add("用户显式指定 Python；必须使用 ReadRange → PythonCompute → WriteData，不得替换为 DataAnalysis、公式、透视表或 GenerateReport")
+                spec.Constraints.Add("用户显式指定 Python；计算引擎必须是 PythonCompute，不得替换为 DataAnalysis、公式、透视表或 GenerateReport；读取和写入动作根据最新观察自适应选择")
                 spec.Constraints.Add("PythonCompute 只接收 ReadRange 返回的 JSON，不直接操作 Excel、文件、网络或子进程；受控计算默认无需审批")
                 If isDestinationCorrection Then
                     spec.Constraints.Add("本轮只修正输出工作表/位置；必须保留上一任务的数据源、分组字段、聚合方式和 Python 计算方法，不得把当前输出表改为数据源")
@@ -269,12 +269,12 @@ Namespace Agent
                 If spec.ExpectedSlideCount > 0 Then AddExpectedOutput(spec, "slides")
             End If
 
-            spec.SuccessCriteria.Add("输出结果与当前 Office 上下文相关")
-            spec.SuccessCriteria.Add("执行过程可解释，并记录使用的上下文、工具和记忆")
+            spec.Constraints.Add("输出结果必须与当前 Office 上下文相关")
+            spec.Constraints.Add("执行过程必须可解释，并记录使用的上下文、工具和记忆")
             If spec.ExpectedSlideCount > 0 Then spec.SuccessCriteria.Add($"实际创建至少 {spec.ExpectedSlideCount} 张幻灯片")
             If spec.ExpectedOutputs.Contains("images") Then spec.SuccessCriteria.Add("实际插入可访问的图片，不得用占位形状冒充")
             If spec.RiskLevel <> "safe" Then
-                spec.SuccessCriteria.Add("执行后保留可观察结果或失败原因")
+                spec.Constraints.Add("执行后必须保留可观察结果或失败原因")
             End If
 
             ' 当前执行合同使用一个 primary Skill 作为工具安全边界；其余召回结果只用于
@@ -282,7 +282,7 @@ Namespace Agent
             Dim primarySkill = If(selectedSkills?.FirstOrDefault(), Nothing)
             If isReadOnlyDataAnswer Then
                 AddRequiredTool(spec, "ReadRange")
-                AddMandatoryTool(spec, "ReadRange")
+                AddRequiredCapability(spec, "ReadRange")
             ElseIf isExplicitPythonCompute Then
                 AddRequiredTool(spec, "ReadRange")
                 AddRequiredTool(spec, "PythonCompute")
@@ -291,17 +291,12 @@ Namespace Agent
                 ' to recreate it or report a false capability gap.
                 If RequestsNewWorksheet(semanticInput) Then AddRequiredTool(spec, "CreateSheet")
                 AddRequiredTool(spec, "WriteData")
-                AddMandatoryToolInSequence(spec, "ReadRange")
-                AddMandatoryToolInSequence(spec, "PythonCompute")
-                If RequestsNewWorksheet(semanticInput) Then AddMandatoryToolInSequence(spec, "CreateSheet")
-                AddMandatoryToolInSequence(spec, "WriteData")
+                AddRequiredCapability(spec, "PythonCompute")
             ElseIf primarySkill IsNot Nothing Then
                 If isPlainWorksheetCreation Then
                     spec.RequiredTools.Add("CreateSheet")
-                    AddMandatoryTool(spec, "CreateSheet")
                 ElseIf isObservedChartCreation Then
                     spec.RequiredTools.Add("CreateChart")
-                    AddMandatoryTool(spec, "CreateChart")
                 ElseIf primarySkill.AllowedTools IsNot Nothing Then
                     For Each toolId In primarySkill.AllowedTools
                         If Not String.IsNullOrWhiteSpace(toolId) AndAlso Not spec.RequiredTools.Contains(toolId) Then
@@ -338,15 +333,9 @@ Namespace Agent
             If Not spec.RequiredTools.Contains(toolId) Then spec.RequiredTools.Add(toolId)
         End Sub
 
-        Private Shared Sub AddMandatoryTool(spec As AgentTaskSpec, toolId As String)
+        Private Shared Sub AddRequiredCapability(spec As AgentTaskSpec, toolId As String)
             If spec Is Nothing OrElse String.IsNullOrWhiteSpace(toolId) Then Return
-            If Not spec.MandatoryTools.Contains(toolId) Then spec.MandatoryTools.Add(toolId)
-        End Sub
-
-        Private Shared Sub AddMandatoryToolInSequence(spec As AgentTaskSpec, toolId As String)
-            AddMandatoryTool(spec, toolId)
-            If spec Is Nothing OrElse String.IsNullOrWhiteSpace(toolId) Then Return
-            If Not spec.MandatoryToolSequence.Contains(toolId) Then spec.MandatoryToolSequence.Add(toolId)
+            If Not spec.RequiredCapabilities.Contains(toolId) Then spec.RequiredCapabilities.Add(toolId)
         End Sub
 
         Private Shared Sub AddExpectedOutput(spec As AgentTaskSpec, output As String)
