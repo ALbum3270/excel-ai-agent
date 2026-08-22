@@ -165,8 +165,8 @@ if ($null -ne $agentRequest.Property("max_tokens")) {
     throw "Internal agent request still serializes a max_tokens limit"
 }
 
-# A generated plan already contains executable command JSON. The loop must execute it
-# directly instead of paying for a second model call per step.
+# A generated plan is only a high-level skeleton. Every action must be selected after the
+# latest observation, so planned command JSON must never be executed directly.
 $testTool = [ShareRibbon.Agent.ToolDescriptor]::new()
 $testTool.Id = "TestAction"
 $testTool.Name = "Test action"
@@ -174,11 +174,19 @@ $testTool.AppType = "excel"
 $testTool.RiskLevel = "safe"
 $testTool.AccessMode = "write"
 $registry.RegisterTool($testTool)
+$script:adaptiveExecutions = 0
 $registry.ExecuteCodeWithToolResult = {
     param($code, $language, $preview)
+    $commandObject = [Newtonsoft.Json.Linq.JObject]::Parse($code)
+    if ([bool]$commandObject["params"]["planned"]) {
+        throw "Loop executed stale PlanStep.Code instead of the current ReAct action"
+    }
+    $script:adaptiveExecutions += 1
+    $message = if ($script:adaptiveExecutions -eq 1) { "first-observation" } else { "second-observation" }
     $observation = [Newtonsoft.Json.Linq.JObject]::Parse(
         '{"kind":"write","summary":"changed","changed":true,"satisfied":true,"targetRefs":["Excel:test"]}')
-    return [ShareRibbon.Agent.ToolResult]::Succeed("TestAction", "ok", $null, $observation)
+    $observation["summary"] = [Newtonsoft.Json.Linq.JValue]::CreateString($message)
+    return [ShareRibbon.Agent.ToolResult]::Succeed("TestAction", $message, $null, $observation)
 }
 
 $promptManager = [ShareRibbon.Agent.PromptManager]::new((Join-Path $repoRoot "ShareRibbon\Prompts"))
@@ -217,11 +225,126 @@ if ($contractPrompt.Contains("SKILL-HANDBOOK-MARKER") -or
 $memory = [ShareRibbon.Agent.AgentMemory]::new()
 $loop = [ShareRibbon.Agent.LoopEngine]::new($registry, $memory, $promptManager)
 $script:modelCalls = 0
+if (-not ("AgentRuntimeContextProbe" -as [type])) {
+    $newtonsoftAssemblyPath = Join-Path (Split-Path $assemblyPath) "Newtonsoft.Json.dll"
+    Add-Type -ReferencedAssemblies $assemblyPath,$newtonsoftAssemblyPath -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using ShareRibbon;
+using ShareRibbon.Agent;
+using ShareRibbon.Agent.Context;
+
+public static class AgentRuntimeContextProbe
+{
+    public static int Captures { get; private set; }
+    public static readonly Func<ContextPack> CaptureDelegate = Capture;
+    public static int PythonModelCalls { get; private set; }
+    public static int PythonHostExecutions { get; private set; }
+    public static readonly Func<string, string, List<HistoryMessage>, Task<string>> PythonModelDelegate = PythonModel;
+    public static readonly Func<string, string, bool, ToolResult> PythonHostDelegate = PythonHost;
+
+    public static void Reset()
+    {
+        Captures = 0;
+        PythonModelCalls = 0;
+        PythonHostExecutions = 0;
+    }
+
+    public static ContextPack Capture()
+    {
+        Captures++;
+        var pack = new ContextPack();
+        pack.AppType = "Excel";
+        pack.Document.Preview = "context-version-" + Captures;
+        return pack;
+    }
+
+    public static Task<string> PythonModel(string prompt, string system, List<HistoryMessage> history)
+    {
+        PythonModelCalls++;
+        switch (PythonModelCalls)
+        {
+            case 1:
+                return Task.FromResult("{\"understanding\":\"python workflow\",\"steps\":[{\"step\":1,\"description\":\"read full data\",\"toolHint\":\"ReadRange\"},{\"step\":2,\"description\":\"compute averages\",\"toolHint\":\"PythonCompute\"},{\"step\":3,\"description\":\"create destination\",\"toolHint\":\"CreateSheet\"},{\"step\":4,\"description\":\"write result\",\"toolHint\":\"WriteData\"}],\"summary\":\"written\",\"capabilityGap\":\"\"}");
+            case 2:
+                return Task.FromResult("{\"decision\":\"act\",\"thought\":\"read first\",\"action\":{\"tool\":\"ReadRange\",\"params\":{\"range\":\"SalesData!A1:B5\"}}}");
+            case 3:
+                return Task.FromResult("{\"decision\":\"act\",\"thought\":\"compute observed rows\",\"action\":{\"tool\":\"PythonCompute\",\"params\":{\"code\":\"groups = {}\\nfor row in input_data['rows']:\\n    key = row[0]\\n    groups.setdefault(key, []).append(float(row[1]))\\nresult = [['Region', 'Average']] + [[key, sum(values) / len(values)] for key, values in sorted(groups.items())]\",\"input\":{\"preview\":true}}}}");
+            case 4:
+                return Task.FromResult("{\"decision\":\"act\",\"thought\":\"create destination\",\"action\":{\"tool\":\"CreateSheet\",\"params\":{\"name\":\"PythonAverage\"}}}");
+            case 5:
+                return Task.FromResult("{\"decision\":\"act\",\"thought\":\"write computed rows\",\"action\":{\"tool\":\"WriteData\",\"params\":{\"targetRange\":\"PythonAverage!A1\",\"data\":[[\"wrong\",-1]]}}}");
+            default:
+                return Task.FromResult("{\"decision\":\"complete\",\"thought\":\"all four verified observations exist\",\"message\":\"done\"}");
+        }
+    }
+
+    public static ToolResult PythonHost(string code, string language, bool preview)
+    {
+        PythonHostExecutions++;
+        var commandObject = JObject.Parse(code);
+        var command = commandObject.Value<string>("command");
+        var parameters = (JObject)commandObject["params"];
+        if (command == "ReadRange")
+        {
+            var data = JObject.Parse("{\"workbook\":\"book.xlsx\",\"sheet\":\"SalesData\",\"address\":\"A1:B5\",\"rowCount\":5,\"columnCount\":2,\"values\":[[\"Region\",\"Sales\"],[\"East\",1000],[\"East\",2000],[\"North\",1500],[\"North\",2500]]}");
+            return ToolResult.Succeed("ReadRange", "full-read-observed", data);
+        }
+        if (command == "CreateSheet")
+        {
+            var observation = JObject.Parse("{\"kind\":\"write\",\"summary\":\"sheet-created\",\"changed\":true,\"satisfied\":true,\"targetRefs\":[\"Excel:PythonAverage\"]}");
+            return ToolResult.Succeed("CreateSheet", "sheet-created", null, observation);
+        }
+        if (command == "WriteData")
+        {
+            var written = parameters["data"].ToString(Newtonsoft.Json.Formatting.None);
+            if (!written.Contains("1500.0") || !written.Contains("2000.0"))
+                throw new InvalidOperationException("WriteData did not receive PythonCompute output: " + written);
+            var observation = JObject.Parse("{\"kind\":\"write\",\"summary\":\"python-output-written\",\"changed\":true,\"satisfied\":true,\"targetRefs\":[\"Excel:PythonAverage!A1:B3\"]}");
+            return ToolResult.Succeed("WriteData", "python-output-written", null, observation);
+        }
+        throw new InvalidOperationException("Unexpected host tool: " + command);
+    }
+}
+'@
+}
+$loop.CaptureContextPack = [AgentRuntimeContextProbe]::CaptureDelegate
+if ($null -eq $loop.CaptureContextPack) {
+    throw "LoopEngine did not retain the ContextPack capture delegate"
+}
+$directContext = $loop.CaptureContextPack.Invoke()
+if ($directContext.Document.Preview -ne "context-version-1") {
+    throw "ContextPack capture delegate is not callable"
+}
+[AgentRuntimeContextProbe]::Reset()
 $loop.SendAIRequest = {
     param($prompt, $system, $history)
     $script:modelCalls += 1
+    if ($script:modelCalls -eq 1) {
+        return [System.Threading.Tasks.Task[string]]::FromResult(
+            '{"understanding":"test","steps":[{"step":1,"description":"first","toolHint":"TestAction"},{"step":2,"description":"second","toolHint":"TestAction"}],"summary":"done","capabilityGap":""}')
+    }
+    if (-not $prompt.Contains("[adaptive-react]")) {
+        throw "Adaptive ReAct prompt marker is missing"
+    }
+    $expectedContext = "context-version-$($script:modelCalls - 1)"
+    if (-not $prompt.Contains($expectedContext)) {
+        throw "The ReAct decision did not receive refreshed ContextPack: expected=$expectedContext"
+    }
+    if ($script:modelCalls -eq 3 -and -not $prompt.Contains("first-observation")) {
+        throw "The next ReAct decision did not receive the previous tool observation"
+    }
+    if ($script:modelCalls -eq 4) {
+        if (-not $prompt.Contains("second-observation")) {
+            throw "Completion decision did not receive the final tool observation"
+        }
+        return [System.Threading.Tasks.Task[string]]::FromResult(
+            '{"decision":"complete","thought":"verified by observations","message":"done"}')
+    }
     return [System.Threading.Tasks.Task[string]]::FromResult(
-        '{"understanding":"test","steps":[{"step":1,"description":"run","code":"{\"command\":\"TestAction\",\"params\":{}}","language":"json"}],"summary":"done","capabilityGap":""}')
+        '{"decision":"act","thought":"choose from current facts","action":{"tool":"TestAction","params":{}}}')
 }
 $planSession = [ShareRibbon.Agent.AgentSession]::new("run", "Excel", "")
 $planSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
@@ -234,8 +357,175 @@ $runTask = [System.Threading.Tasks.Task[ShareRibbon.Agent.AgentResult]]$loop.Run
     "system",
     $planSkill)
 $runResult = $runTask.GetAwaiter().GetResult()
-if (-not $runResult.Success -or $script:modelCalls -ne 1) {
-    throw "Plan execution made $script:modelCalls model calls; expected exactly one planning call"
+if (-not $runResult.Success -or $script:modelCalls -ne 4 -or
+    $script:adaptiveExecutions -ne 2 -or [AgentRuntimeContextProbe]::Captures -ne 3) {
+    throw "Adaptive plan execution did not close the observation loop: calls=$script:modelCalls executions=$script:adaptiveExecutions contexts=$([AgentRuntimeContextProbe]::Captures) result=$($runResult.Message)"
+}
+
+# The model cannot end a run merely by saying "complete". Deterministic acceptance must
+# reject premature completion and feed the missing contract back as the next observation.
+$acceptRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+$acceptTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$acceptTool.Id = "RequiredAction"
+$acceptTool.Name = "Required action"
+$acceptTool.AppType = "excel"
+$acceptTool.RiskLevel = "safe"
+$acceptTool.AccessMode = "write"
+$acceptRegistry.RegisterTool($acceptTool)
+$supportTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$supportTool.Id = "SupportAction"
+$supportTool.Name = "Support action"
+$supportTool.AppType = "excel"
+$supportTool.RiskLevel = "safe"
+$supportTool.AccessMode = "write"
+$acceptRegistry.RegisterTool($supportTool)
+$script:acceptExecutions = 0
+$acceptRegistry.ExecuteCodeWithToolResult = {
+    param($code, $language, $preview)
+    $script:acceptExecutions += 1
+    $commandObject = [Newtonsoft.Json.Linq.JObject]::Parse($code)
+    $executedTool = $commandObject["command"].ToString()
+    $observation = [Newtonsoft.Json.Linq.JObject]::Parse(
+        '{"kind":"write","summary":"required-action-observed","changed":true,"satisfied":true,"targetRefs":["Excel:test"]}')
+    return [ShareRibbon.Agent.ToolResult]::Succeed($executedTool, "$executedTool-observed", $null, $observation)
+}
+$acceptLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $acceptRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$script:acceptModelCalls = 0
+$acceptLoop.SendAIRequest = {
+    param($prompt, $system, $history)
+    $script:acceptModelCalls += 1
+    switch ($script:acceptModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"acceptance","steps":[{"step":1,"description":"perform required action","toolHint":"RequiredAction"}],"summary":"done","capabilityGap":""}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"too early","message":"done"}') }
+        3 {
+            if (-not $prompt.Contains("Completion was rejected by deterministic acceptance")) {
+                throw "Premature completion rejection was not fed back into ReAct"
+            }
+            return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"supporting action first","action":{"tool":"SupportAction","params":{}}}')
+        }
+        4 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"support action is insufficient","message":"done"}') }
+        5 {
+            if (-not $prompt.Contains("Completion was rejected by deterministic acceptance")) {
+                throw "An unrelated successful tool incorrectly completed the plan milestone"
+            }
+            return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"close contract gap","action":{"tool":"RequiredAction","params":{}}}')
+        }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"accepted evidence exists","message":"done"}') }
+    }
+}
+$acceptSession = [ShareRibbon.Agent.AgentSession]::new("accept", "Excel", "")
+$acceptSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$acceptSession.Spec.Goal = "accept"
+$acceptSession.Spec.MandatoryTools.Add("RequiredAction")
+$acceptSkill = [ShareRibbon.Agent.AgentSkill]::new()
+$acceptSkill.RequiredTools.Add("RequiredAction")
+$acceptSkill.RequiredTools.Add("SupportAction")
+$acceptResult = $acceptLoop.RunAsync($acceptSession, "system", $acceptSkill).GetAwaiter().GetResult()
+if (-not $acceptResult.Success -or $script:acceptExecutions -ne 2 -or $script:acceptModelCalls -ne 6) {
+    throw "Deterministic completion gate failed: calls=$script:acceptModelCalls executions=$script:acceptExecutions result=$($acceptResult.Message)"
+}
+
+# Replanning is a normal decision after a successful observation, not merely a last-ditch
+# error handler. The replacement skeleton must be followed by a fresh current action.
+$replanRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+$replanTool = [ShareRibbon.Agent.ToolDescriptor]::new()
+$replanTool.Id = "ReplanAction"
+$replanTool.Name = "Replan action"
+$replanTool.AppType = "excel"
+$replanTool.RiskLevel = "safe"
+$replanTool.AccessMode = "write"
+$replanRegistry.RegisterTool($replanTool)
+$script:replanExecutions = 0
+$replanRegistry.ExecuteCodeWithToolResult = {
+    param($code, $language, $preview)
+    $script:replanExecutions += 1
+    $summary = "replan-observation-$script:replanExecutions"
+    $observation = [Newtonsoft.Json.Linq.JObject]::Parse(
+        '{"kind":"write","summary":"changed","changed":true,"satisfied":true,"targetRefs":["Excel:test"]}')
+    $observation["summary"] = [Newtonsoft.Json.Linq.JValue]::CreateString($summary)
+    return [ShareRibbon.Agent.ToolResult]::Succeed("ReplanAction", $summary, $null, $observation)
+}
+$replanLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $replanRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$script:replanModelCalls = 0
+$replanLoop.SendAIRequest = {
+    param($prompt, $system, $history)
+    $script:replanModelCalls += 1
+    switch ($script:replanModelCalls) {
+        1 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"initial","steps":[{"step":1,"description":"initial action","toolHint":"ReplanAction"}],"summary":"initial","capabilityGap":""}') }
+        2 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"first action","action":{"tool":"ReplanAction","params":{}}}') }
+        3 {
+            if (-not $prompt.Contains("replan-observation-1")) {
+                throw "Successful observation was not available to the replan decision"
+            }
+            return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"replan","thought":"new facts require a revised skeleton","message":"revise"}')
+        }
+        4 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"understanding":"replanned","steps":[{"step":1,"description":"replanned action","toolHint":"ReplanAction"}],"summary":"replanned","capabilityGap":""}') }
+        5 { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"act","thought":"act from replacement skeleton","action":{"tool":"ReplanAction","params":{}}}') }
+        default { return [System.Threading.Tasks.Task[string]]::FromResult(
+                '{"decision":"complete","thought":"all observations accepted","message":"done"}') }
+    }
+}
+$replanSession = [ShareRibbon.Agent.AgentSession]::new("replan", "Excel", "")
+$replanSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$replanSession.Spec.Goal = "replan"
+$replanSkill = [ShareRibbon.Agent.AgentSkill]::new()
+$replanSkill.RequiredTools.Add("ReplanAction")
+$replanResult = $replanLoop.RunAsync($replanSession, "system", $replanSkill).GetAwaiter().GetResult()
+if (-not $replanResult.Success -or $script:replanExecutions -ne 2 -or $script:replanModelCalls -ne 6) {
+    throw "Success-triggered replan did not execute adaptively: calls=$script:replanModelCalls executions=$script:replanExecutions result=$($replanResult.Message)"
+}
+
+# Exercise the complete read -> compute -> create -> write workflow through the adaptive
+# loop. Runtime data, not preview literals generated during planning, must cross each seam.
+$pythonLoopRegistry = [ShareRibbon.Agent.ToolRegistry]::new($null)
+foreach ($toolId in @("ReadRange", "PythonCompute", "CreateSheet", "WriteData")) {
+    $descriptor = [ShareRibbon.Agent.ToolDescriptor]::new()
+    $descriptor.Id = $toolId
+    $descriptor.Name = $toolId
+    $descriptor.AppType = "excel"
+    $descriptor.RiskLevel = "safe"
+    $descriptor.AccessMode = if ($toolId -eq "ReadRange") { "read" } elseif ($toolId -eq "PythonCompute") { "compute" } else { "write" }
+    $pythonLoopRegistry.RegisterTool($descriptor)
+}
+[AgentRuntimeContextProbe]::Reset()
+$pythonLoopRegistry.ExecuteCodeWithToolResult = [AgentRuntimeContextProbe]::PythonHostDelegate
+$pythonLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $pythonLoopRegistry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    $promptManager)
+$pythonLoop.SendAIRequest = [AgentRuntimeContextProbe]::PythonModelDelegate
+$pythonLoopSession = [ShareRibbon.Agent.AgentSession]::new("python workflow", "Excel", "")
+$pythonLoopSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$pythonLoopSession.Spec.Goal = "python workflow"
+$pythonLoopSkill = [ShareRibbon.Agent.AgentSkill]::new()
+foreach ($toolId in @("ReadRange", "PythonCompute", "CreateSheet", "WriteData")) {
+    $pythonLoopSession.Spec.RequiredTools.Add($toolId)
+    $pythonLoopSession.Spec.MandatoryTools.Add($toolId)
+    $pythonLoopSession.Spec.MandatoryToolSequence.Add($toolId)
+    $pythonLoopSkill.RequiredTools.Add($toolId)
+}
+$pythonLoopResult = $pythonLoop.RunAsync($pythonLoopSession, "system", $pythonLoopSkill).GetAwaiter().GetResult()
+if (-not $pythonLoopResult.Success -or $pythonLoopSession.CurrentIteration -ne 4 -or
+    [AgentRuntimeContextProbe]::PythonHostExecutions -ne 3 -or
+    [AgentRuntimeContextProbe]::PythonModelCalls -ne 6) {
+    throw "Adaptive Python workflow failed: calls=$([AgentRuntimeContextProbe]::PythonModelCalls) actions=$($pythonLoopSession.CurrentIteration) hostExecutions=$([AgentRuntimeContextProbe]::PythonHostExecutions) result=$($pythonLoopResult.Message)"
 }
 
 # Incomplete plans get one bounded correction response and must never execute. This is
@@ -324,6 +614,10 @@ $repairLoop.SendAIRequest = {
         return [System.Threading.Tasks.Task[string]]::FromResult(
             '{"understanding":"repair","steps":[{"step":1,"description":"run","code":"{\"command\":\"MandatoryAction\",\"params\":{}}","language":"json"}],"summary":"done","capabilityGap":""}')
     }
+    if ($script:repairModelCalls -eq 2) {
+        return [System.Threading.Tasks.Task[string]]::FromResult(
+            '{"thought":"run mandatory action","action":{"tool":"MandatoryAction","params":{}}}')
+    }
     return [System.Threading.Tasks.Task[string]]::FromResult(
         '{"toolId":"FallbackAction","parameters":{}}')
 }
@@ -337,7 +631,7 @@ $repairSkill = [ShareRibbon.Agent.AgentSkill]::new()
 $repairSkill.RequiredTools.Add("MandatoryAction")
 $repairSkill.RequiredTools.Add("FallbackAction")
 $repairResult = $repairLoop.RunAsync($repairSession, "system", $repairSkill).GetAwaiter().GetResult()
-if ($repairResult.Success -or $script:fallbackExecutions -ne 0 -or $script:repairModelCalls -ne 2) {
+if ($repairResult.Success -or $script:fallbackExecutions -ne 0 -or $script:repairModelCalls -ne 3) {
     throw "Mandatory tool was substituted during repair: calls=$script:repairModelCalls fallbackExecutions=$script:fallbackExecutions"
 }
 

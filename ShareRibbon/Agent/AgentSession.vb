@@ -64,6 +64,16 @@ Namespace Agent
     Public Class PlanStep
         Public Property StepNumber As Integer
         Public Property Description As String
+        ''' <summary>
+        ''' Capability milestone for a high-level step. Supporting actions may run first, but
+        ''' the step advances only after this tool succeeds; runtime parameters are always
+        ''' chosen after Observe. A different implementation requires an explicit replan.
+        ''' </summary>
+        Public Property ToolHint As String
+        ''' <summary>
+        ''' Legacy executable-plan payload retained for persisted sessions and older providers.
+        ''' Adaptive ReAct never executes this value directly.
+        ''' </summary>
         Public Property Code As String
         Public Property Language As String = "json"
         Public Property Status As StepStatus = StepStatus.Pending

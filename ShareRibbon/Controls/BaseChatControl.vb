@@ -188,7 +188,9 @@ Public MustInherit Class BaseChatControl
                     _chatStateService,
                     systemHistoryMessageData,
                     AddressOf ManageHistoryMessageSize,
-                    AddressOf GetOfficeAppType)
+                    AddressOf GetOfficeAppType,
+                    AddressOf CaptureOfficeContextForAgent,
+                    AddressOf GetCurrentOfficeContentForAgent)
             End If
             Return _agentKernelService
         End Get
@@ -1588,7 +1590,7 @@ Public MustInherit Class BaseChatControl
 
                          GlobalStatusStrip.ShowInfo("正在规划任务...")
 
-                         Dim currentContent = GetCurrentOfficeContent()
+                         Dim currentContent = GetCurrentOfficeContentForAgent()
                          Dim historyMessages As New List(Of Tuple(Of String, String))()
                          For Each msg In systemHistoryMessageData
                              If msg.role = "user" OrElse msg.role = "assistant" Then
@@ -1601,7 +1603,7 @@ Public MustInherit Class BaseChatControl
                              appType,
                              currentContent,
                              historyMessages,
-                             CaptureOfficeContext(appType),
+                             CaptureOfficeContextForAgent(appType),
                              analysis?.TaskSpec,
                              analysis?.SelectedSkills)
 
@@ -1620,6 +1622,22 @@ Public MustInherit Class BaseChatControl
 
     Protected Overridable Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
         Return New Agent.Context.OfficeContext With {.AppType = appType}
+    End Function
+
+    Private Function CaptureOfficeContextForAgent(appType As String) As Agent.Context.OfficeContext
+        If Me.IsHandleCreated AndAlso Me.InvokeRequired Then
+            Return DirectCast(Me.Invoke(New Func(Of Agent.Context.OfficeContext)(
+                Function() CaptureOfficeContext(appType))), Agent.Context.OfficeContext)
+        End If
+        Return CaptureOfficeContext(appType)
+    End Function
+
+    Private Function GetCurrentOfficeContentForAgent() As String
+        If Me.IsHandleCreated AndAlso Me.InvokeRequired Then
+            Return DirectCast(Me.Invoke(New Func(Of String)(
+                Function() GetCurrentOfficeContent())), String)
+        End If
+        Return GetCurrentOfficeContent()
     End Function
 
     ''' <summary>
@@ -1846,7 +1864,7 @@ Public MustInherit Class BaseChatControl
         Task.Run(Async Function()
                      Try
                          Dim appType = GetApplicationType()
-                         Dim currentContent = GetCurrentOfficeContent()
+                         Dim currentContent = GetCurrentOfficeContentForAgent()
 
                          Dim historyMessages As New List(Of Tuple(Of String, String))()
                          For Each msg In systemHistoryMessageData
@@ -1856,7 +1874,7 @@ Public MustInherit Class BaseChatControl
                          Next
 
                          GlobalStatusStrip.ShowInfo("正在分析您的需求...")
-                         Dim success = Await AgentKernelSvc.StartAgentAsync(finalMessageToLLM, appType, currentContent, historyMessages, CaptureOfficeContext(appType))
+                         Dim success = Await AgentKernelSvc.StartAgentAsync(finalMessageToLLM, appType, currentContent, historyMessages, CaptureOfficeContextForAgent(appType))
 
                          If Not success Then
                              GlobalStatusStrip.ShowWarning("无法分析您的需求，请重试")

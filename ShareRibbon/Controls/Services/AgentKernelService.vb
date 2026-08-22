@@ -18,12 +18,15 @@ Public Class AgentKernelService
     Private ReadOnly _historyMessages As List(Of HistoryMessage)
     Private ReadOnly _manageHistorySize As Action
     Private ReadOnly _getOfficeAppType As Func(Of String)
+    Private ReadOnly _captureOfficeContext As Func(Of String, Agent.Context.OfficeContext)
+    Private ReadOnly _getCurrentOfficeContent As Func(Of String)
     Private ReadOnly _uiScriptSync As New Object()
     Private _uiScriptTail As Task = Task.CompletedTask
 
     ' 统一的 AgentKernel 实例
     Private _agentKernel As Agent.AgentKernel
     Private _officeHarness As Agent.Harness.IOfficeHarness
+    Private _currentAppType As String = ""
 
     ' Agent 状态字段（供 BaseChatControl 访问）
     Public Property AgentThinkingUuid As String = Nothing
@@ -40,7 +43,9 @@ Public Class AgentKernelService
         chatStateService As ChatStateService,
         historyMessages As List(Of HistoryMessage),
         manageHistorySize As Action,
-        getOfficeAppType As Func(Of String))
+        getOfficeAppType As Func(Of String),
+        captureOfficeContext As Func(Of String, Agent.Context.OfficeContext),
+        getCurrentOfficeContent As Func(Of String))
 
         _executeScript = executeScript
         _escapeJs = escapeJs
@@ -51,6 +56,8 @@ Public Class AgentKernelService
         _historyMessages = historyMessages
         _manageHistorySize = manageHistorySize
         _getOfficeAppType = getOfficeAppType
+        _captureOfficeContext = captureOfficeContext
+        _getCurrentOfficeContent = getCurrentOfficeContent
     End Sub
 
     ''' <summary>
@@ -66,6 +73,21 @@ Public Class AgentKernelService
                                           Return Await _sendAiRequest(prompt, system, history, AddressOf OnModelStreamDelta)
                                       End Function
         _agentKernel.SendAIRequestWithMessages = AddressOf SendAiRequestWithMessagesAsync
+        _agentKernel.CaptureContextPack = Function()
+                                              Dim appType = _currentAppType
+                                              If String.IsNullOrWhiteSpace(appType) AndAlso _getOfficeAppType IsNot Nothing Then
+                                                  appType = _getOfficeAppType()
+                                              End If
+                                              Dim officeContext As Agent.Context.OfficeContext = Nothing
+                                              Dim currentContent As String = ""
+                                              If _captureOfficeContext IsNot Nothing Then
+                                                  officeContext = _captureOfficeContext(appType)
+                                              End If
+                                              If _getCurrentOfficeContent IsNot Nothing Then
+                                                  currentContent = If(_getCurrentOfficeContent(), "")
+                                              End If
+                                              Return Agent.Context.ContextPack.FromOfficeContext(officeContext, currentContent)
+                                          End Function
 
         ' 绑定代码执行委托：Agent 主路径强制 ToolResult 回执。
         _agentKernel.ExecuteCodeWithToolResult = Function(code, lang, preview)
@@ -104,6 +126,7 @@ Public Class AgentKernelService
             AgentOriginalUserRequest = userRequest
             AgentFullUserMessage = userRequest
             CurrentAgentSessionId = Guid.NewGuid().ToString()
+            _currentAppType = If(appType, "")
 
             ' 显示思考状态
             Await ShowThinkingStatusAsync()
@@ -309,7 +332,8 @@ Public Class AgentKernelService
             For i = 0 To plan.Steps.Count - 1
                 If i > 0 Then stepsJson.Append(",")
                 Dim s = plan.Steps(i)
-                stepsJson.Append($"{{""description"":""{_escapeJs(s.Description)}"",""code"":""{_escapeJs(If(s.Code, ""))}"",""language"":""{s.Language}"",""status"":""pending""}}")
+                Dim planHint = If(Not String.IsNullOrWhiteSpace(s.ToolHint), s.ToolHint, If(s.Code, ""))
+                stepsJson.Append($"{{""description"":""{_escapeJs(s.Description)}"",""code"":""{_escapeJs(planHint)}"",""language"":""plan"",""status"":""pending""}}")
             Next
             stepsJson.Append("]")
 
@@ -326,8 +350,8 @@ Public Class AgentKernelService
                 planTrace.ExecutionPlan.Steps.Add(New ChatContextPlanStepTrace With {
                     .StepNumber = stepItem.StepNumber,
                     .Description = If(stepItem.Description, ""),
-                    .ToolOrCode = If(stepItem.Code, ""),
-                    .Language = If(stepItem.Language, "")
+                    .ToolOrCode = If(Not String.IsNullOrWhiteSpace(stepItem.ToolHint), stepItem.ToolHint, If(stepItem.Code, "")),
+                    .Language = "plan"
                 })
             Next
             Dim traceJson = JObject.FromObject(planTrace).ToString(Formatting.None)

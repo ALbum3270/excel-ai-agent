@@ -159,7 +159,7 @@ Namespace Agent
 
             sb.AppendLine()
             sb.AppendLine("【Agent 输出总规则】")
-            sb.AppendLine("- 规划阶段返回 execution plan JSON。")
+            sb.AppendLine("- 规划阶段只返回高层任务骨架；每一步的真实工具调用由执行阶段结合最新观察决定。")
             sb.AppendLine("- 执行阶段返回 thought/action JSON。")
             sb.AppendLine("- JSON 使用 ```json 代码块包裹，字段名和字符串值使用双引号。")
             sb.AppendLine("- 不输出与任务无关的长篇解释；执行说明由系统根据观察结果生成。")
@@ -245,13 +245,14 @@ Namespace Agent
             End If
 
             sb.AppendLine()
-            sb.AppendLine("请分析用户需求，制定可执行计划。")
+            sb.AppendLine("请分析用户需求，制定高层任务骨架。步骤 toolHint 是该里程碑的主要工具能力，不包含未来参数，也不是将被直接执行的脚本。")
+            sb.AppendLine("不要在规划阶段猜测依赖未来工具结果的数据；例如 ReadRange 尚未执行时，不得在后续步骤中编造完整 input/data。")
             If skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing AndAlso skill.RequiredTools.Count > 0 Then
-                sb.AppendLine("若匹配技能提供了建议工具，并且能完成任务，优先在步骤 code 中使用这些工具。")
+                sb.AppendLine("若匹配技能提供了建议工具，并且能完成任务，优先在步骤 toolHint 中使用这些工具。")
             End If
-            sb.AppendLine("每个步骤必须能被已注册工具执行。工具 ID 必须原样照抄【已注册工具】中的 ID；不要把普通解释、手动操作说明或未注册命令写入 code。")
+            sb.AppendLine("每个步骤必须能被已注册工具覆盖。toolHint 必须原样照抄【已注册工具】中的 ID；不要在规划阶段生成未来工具参数。")
             sb.AppendLine("兼容意图标签不是能力边界。应以开放式任务规格、命中的 Skill 和当前工具组合完成用户目标；若确实缺少原子能力，明确报告 capability gap，不得编造工具或宣称完成。")
-            sb.AppendLine("计划必须覆盖所有成功标准。要求图片时必须使用当前已注册且能产生真实图片的能力；PowerPoint 可在 CreateSlides 的 slides[].imagePath 中提供可访问路径。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
+            sb.AppendLine("计划必须覆盖所有成功标准。要求图片时，高层步骤只需用 toolHint 声明真实图片能力；可访问的 imagePath 应在执行轮根据当时事实决定。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
             sb.AppendLine("如果任务是生成可编辑文书模板，缺少具体字段时不要停在澄清问题；先用占位符生成模板草稿。")
             sb.AppendLine("返回 JSON 格式：")
             sb.AppendLine("```json")
@@ -261,8 +262,7 @@ Namespace Agent
             sb.AppendLine("    {")
             sb.AppendLine("      ""step"": 1,")
             sb.AppendLine("      ""description"": ""步骤描述"",")
-            sb.AppendLine("      ""code"": ""{""""command"""":""""工具ID"""",""""params"""":{}}"",")
-            sb.AppendLine("      ""language"": ""json""")
+            sb.AppendLine("      ""toolHint"": ""已注册工具ID""")
             sb.AppendLine("    }")
             sb.AppendLine("  ],")
             sb.AppendLine("  ""summary"": ""预期结果"",")
@@ -276,7 +276,8 @@ Namespace Agent
         ''' <summary>
         ''' 构建 ReAct 步骤提示词
         ''' </summary>
-        Public Function BuildReactPrompt(planStep As PlanStep,
+        Public Function BuildReactPrompt(session As AgentSession,
+                                          planStep As PlanStep,
                                           memory As AgentMemory,
                                           Optional previousObservation As String = "") As String
             Dim sb As New StringBuilder()
@@ -286,8 +287,32 @@ Namespace Agent
             Else
                 sb.AppendLine("你是 ReAct 执行专家。请根据当前步骤选择一个已注册工具。")
             End If
+            sb.AppendLine("[adaptive-react]")
 
             sb.AppendLine()
+            If session IsNot Nothing Then
+                sb.AppendLine("【最终目标】")
+                sb.AppendLine(If(session.Spec?.Goal, session.UserRequest))
+                If session.Spec?.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
+                    sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
+                End If
+                If session.Spec?.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
+                    sb.AppendLine("成功标准: " & String.Join("; ", session.Spec.SuccessCriteria))
+                End If
+                If session.Spec?.MandatoryTools IsNot Nothing AndAlso session.Spec.MandatoryTools.Count > 0 Then
+                    sb.AppendLine("必须真实成功调用的工具: " & String.Join(", ", session.Spec.MandatoryTools))
+                End If
+                sb.AppendLine()
+
+                If session.Plan?.Steps IsNot Nothing AndAlso session.Plan.Steps.Count > 0 Then
+                    sb.AppendLine("【高层任务骨架】")
+                    For Each stepItem In session.Plan.Steps
+                        sb.AppendLine($"- {stepItem.StepNumber}. {stepItem.Description} [{stepItem.Status}]")
+                    Next
+                    sb.AppendLine()
+                End If
+            End If
+
             sb.AppendLine("【当前步骤】")
             sb.AppendLine($"步骤 {planStep.StepNumber}: {planStep.Description}")
             sb.AppendLine()
@@ -305,11 +330,34 @@ Namespace Agent
                 sb.AppendLine()
             End If
 
-            sb.AppendLine("请输出一个工具调用。只能选择系统提示词中的已注册工具，工具 ID 必须原样照抄，禁止自创 snake_case/驼峰别名。")
+            If session?.Iterations IsNot Nothing AndAlso session.Iterations.Count > 0 Then
+                sb.AppendLine("【已执行动作】")
+                For Each item In session.Iterations.Skip(Math.Max(0, session.Iterations.Count - 6))
+                    Dim toolId = If(item.Action?.ToolId, "unknown")
+                    Dim outcome = If(item.Explanation IsNot Nothing AndAlso item.Explanation.Success, "成功", "失败")
+                    sb.AppendLine($"- {toolId}: {outcome}")
+                Next
+                sb.AppendLine()
+            End If
+
+            Dim contextPack = TryCast(memory.GetWorking("lastContextPack"), Context.ContextPack)
+            If contextPack IsNot Nothing Then
+                sb.AppendLine("【当前 ContextPack（本轮重新采集）】")
+                sb.AppendLine(contextPack.ToPromptText())
+                sb.AppendLine()
+            End If
+
+            sb.AppendLine("请根据最终目标、当前步骤和最新观察决定当前状态。不要照抄规划阶段的参数，也不要猜测尚未产生的工具结果。")
+            sb.AppendLine("decision=act 时只能选择系统提示词中的已注册工具，工具 ID 必须原样照抄，禁止自创 snake_case/驼峰别名。")
+            sb.AppendLine("当前里程碑允许先调用支持工具，但只有当前步骤的 toolHint 工具真实成功后才会推进里程碑；若需改用其他主要能力，先返回 replan。")
+            sb.AppendLine("只有在目标和成功标准已经由真实 Observation 满足时才能 decision=complete；系统仍会进行确定性验收。")
+            sb.AppendLine("需要改变高层骨架时使用 replan；确认无法安全完成时使用 fail，并给出明确原因。")
             sb.AppendLine("```json")
             sb.AppendLine("{")
-            sb.AppendLine("  ""thought"": ""你的思考过程"",")
-            sb.AppendLine("  ""action"": { ""tool"": ""工具ID"", ""params"": { ... } }")
+            sb.AppendLine("  ""decision"": ""act|complete|replan|fail"",")
+            sb.AppendLine("  ""thought"": ""基于当前事实的判断"",")
+            sb.AppendLine("  ""action"": { ""tool"": ""工具ID"", ""params"": { ... } },")
+            sb.AppendLine("  ""message"": ""完成、重规划或失败时的说明""")
             sb.AppendLine("}")
             sb.AppendLine("```")
 

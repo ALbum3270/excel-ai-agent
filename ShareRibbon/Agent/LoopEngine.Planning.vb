@@ -289,6 +289,7 @@ complexity 规则：
                             plan.Steps.Add(New PlanStep With {
                                 .StepNumber = stepNum,
                                 .Description = item("description")?.ToString(),
+                                .ToolHint = If(item("toolHint")?.ToString(), item("tool")?.ToString()),
                                 .Code = item("code")?.ToString(),
                                 .Language = If(item("language")?.ToString(), "json")
                             })
@@ -330,13 +331,16 @@ complexity 规则：
         Private Function ValidatePlanCoverage(spec As AgentTaskSpec, plan As ExecutionPlan) As String
             If spec Is Nothing OrElse plan Is Nothing Then Return ""
 
+            Dim milestoneError = ValidateMilestoneTools(plan)
+            If Not String.IsNullOrWhiteSpace(milestoneError) Then Return milestoneError
+
             Dim contractError = AgentExecutionContract.ValidatePlan(spec, plan)
             If Not String.IsNullOrWhiteSpace(contractError) Then Return contractError
 
             Dim toolIds = GetPlannedToolIds(plan)
             If spec.ExpectedOutputs.Contains("images") AndAlso
                Not toolIds.Contains("InsertImage") AndAlso
-               Not PlanContainsCreateSlidesImage(plan) Then
+               Not toolIds.Contains("CreateSlides") Then
                 Return "规划未覆盖用户要求的真实图片插入；没有可访问图片来源时必须明确报告 capability gap。"
             End If
             If spec.ExpectedOutputs.Contains("images") Then
@@ -355,6 +359,7 @@ complexity 规则：
             If plan?.Steps Is Nothing Then Return "图片计划为空。"
 
             For Each stepItem In plan.Steps
+                If String.IsNullOrWhiteSpace(stepItem.Code) Then Continue For
                 Try
                     Dim envelope = JObject.Parse(If(stepItem.Code, ""))
                     Dim commands As New List(Of JObject)()
@@ -466,6 +471,9 @@ complexity 规则：
             If plan?.Steps Is Nothing Then Return result
 
             For Each stepItem In plan.Steps
+                If Not String.IsNullOrWhiteSpace(stepItem.ToolHint) Then
+                    result.Add(stepItem.ToolHint.Trim())
+                End If
                 Try
                     Dim obj = JObject.Parse(If(stepItem.Code, ""))
                     Dim command = obj("command")?.ToString()
@@ -481,15 +489,6 @@ complexity 规则：
                 End Try
             Next
             Return result
-        End Function
-
-        Private Async Function ThinkAsync(session As AgentSession,
-                                           planStep As PlanStep,
-                                           systemPrompt As String) As Task(Of String)
-            Dim lastObservation = _memory.GetWorkingString("lastObservation")
-            Dim prompt = _promptManager.BuildReactPrompt(planStep, _memory, lastObservation)
-            Dim history = _memory.GetRecentMessages(10)
-            Return Await SendAIRequest(prompt, systemPrompt, history)
         End Function
 
         Private Async Function ReflectAndReplanAsync(session As AgentSession,

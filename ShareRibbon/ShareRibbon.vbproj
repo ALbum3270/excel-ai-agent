@@ -274,6 +274,7 @@
     <Compile Include="Agent\AgentPlanningScope.vb" />
     <Compile Include="Agent\ExecutionPathPolicy.vb" />
     <Compile Include="Agent\LoopEngine.Planning.vb" />
+    <Compile Include="Agent\LoopEngine.Decisions.vb" />
     <Compile Include="Agent\LoopEngine.PlanActions.vb" />
     <Compile Include="Agent\AgentToolDataflow.vb" />
     <Compile Include="Agent\LoopEngine.vb" />

@@ -19,6 +19,17 @@ Namespace Agent
 
                 If obj("action") IsNot Nothing Then Return ParseToolCall(jsonStr)
 
+                Dim rootTool = obj("tool")?.ToString()
+                If Not String.IsNullOrWhiteSpace(rootTool) Then
+                    Dim rootParameters = TryCast(obj("parameters"), JObject)
+                    If rootParameters Is Nothing Then rootParameters = TryCast(obj("params"), JObject)
+                    If rootParameters Is Nothing Then rootParameters = New JObject()
+                    Return New ToolCall With {
+                        .ToolId = rootTool,
+                        .Parameters = rootParameters
+                    }
+                End If
+
                 Dim command = obj("command")?.ToString()
                 If String.IsNullOrWhiteSpace(command) Then
                     Dim commands = TryCast(obj("commands"), JArray)

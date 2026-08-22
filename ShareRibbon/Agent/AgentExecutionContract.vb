@@ -70,6 +70,10 @@ Namespace Agent
             If plan?.Steps Is Nothing Then Return result
 
             For Each planStep In plan.Steps
+                If Not String.IsNullOrWhiteSpace(planStep.ToolHint) Then
+                    AddToolId(result, planStep.ToolHint)
+                    Continue For
+                End If
                 Try
                     Dim envelope = JObject.Parse(If(planStep.Code, ""))
                     AddToolId(result, envelope("command")?.ToString())

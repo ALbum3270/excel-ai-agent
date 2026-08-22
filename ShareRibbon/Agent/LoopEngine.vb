@@ -31,6 +31,7 @@ Namespace Agent
         Public Property OnPlanGenerated As Action(Of ExecutionPlan)
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
         Public Property SendAIRequestWithMessages As Func(Of JArray, Task(Of String))
+        Public Property CaptureContextPack As Func(Of Context.ContextPack)
 
         Public Sub New(toolRegistry As ToolRegistry, memory As AgentMemory, promptManager As PromptManager)
             _toolRegistry = toolRegistry
@@ -47,6 +48,8 @@ Namespace Agent
                                         Optional skill As AgentSkill = Nothing) As Task(Of AgentResult)
             Dim noProgressCount As Integer = 0
             Dim replanAttempts As Integer = 0
+            Dim decisionCount As Integer = 0
+            Dim modelDeclaredComplete As Boolean = False
             Dim readOnlyEvidence As New JArray()
             Dim toolDataflow As New AgentToolDataflow()
             _multimodalRepairDisabledForRun = False
@@ -87,35 +90,113 @@ Namespace Agent
 
                 ' Phase 3: ReAct Loop
                 Dim stepIndex As Integer = 0
-                While stepIndex < session.Plan.Steps.Count AndAlso session.CurrentIteration < MaxIterations
-                    Dim planStep = session.Plan.Steps(stepIndex)
+                While decisionCount < MaxIterations AndAlso Not modelDeclaredComplete
+                    Dim isCompletionCheck = stepIndex >= session.Plan.Steps.Count
+                    Dim planStep As PlanStep
+                    If isCompletionCheck Then
+                        planStep = New PlanStep With {
+                            .StepNumber = session.Plan.Steps.Count + 1,
+                            .Description = "检查整体目标是否已由真实观察满足；如未满足，选择当前唯一下一动作"
+                        }
+                    Else
+                        planStep = session.Plan.Steps(stepIndex)
+                    End If
                     planStep.Status = StepStatus.Running
+                    decisionCount += 1
 
                     ' --- THINK ---
                     session.Status = AgentStatus.Thinking
                     OnStatusChanged?.Invoke($"步骤 {stepIndex + 1}/{session.Plan.Steps.Count}: {planStep.Description}")
-                    ' The planning response already carries canonical executable JSON in
-                    ' PlanStep.Code. Execute that contract directly. Calling the model again
-                    ' for every step duplicates planning latency and can change a valid action.
-                    Dim thought = If(planStep.Code, "")
-                    Dim toolCall = ParsePlannedToolCall(thought)
-                    If toolCall Is Nothing Then
-                        thought = Await ThinkAsync(session, planStep, systemPrompt)
-                        toolCall = ParseToolCall(thought)
-                    Else
-                        AppLogger.Info("LoopEngine", $"Use planned action directly step={stepIndex + 1} toolId={toolCall.ToolId}")
+                    ' The plan is only a high-level task skeleton. Tool parameters that depend
+                    ' on future observations cannot be authoritative at planning time, so every
+                    ' step asks the model for the current action after the previous observation
+                    ' has been recorded. This is the adaptive ReAct seam.
+                    OnStatusChanged?.Invoke($"步骤 {stepIndex + 1}/{session.Plan.Steps.Count}: 正在结合最新观察决定下一动作...")
+                    Dim thought = Await ThinkAsync(session, planStep, systemPrompt)
+                    Dim decision = ParseReactDecision(thought)
+
+                    If decision IsNot Nothing AndAlso decision.Kind = "complete" Then
+                        Dim unfinishedMilestones = session.Plan.Steps.
+                            Where(Function(item) item.Status <> StepStatus.Completed).
+                            Count()
+                        Dim completionError = If(unfinishedMilestones > 0,
+                                                 $"高层任务骨架仍有 {unfinishedMilestones} 个步骤未由匹配的成功工具观察完成。",
+                                                 ValidateExecutionOutcome(session))
+                        If String.IsNullOrWhiteSpace(completionError) Then
+                            modelDeclaredComplete = True
+                            noProgressCount = 0
+                            _memory.SetWorking("lastObservation", "The model declared completion and deterministic acceptance passed.")
+                            Exit While
+                        End If
+
+                        noProgressCount += 1
+                        _memory.SetWorking("lastObservation",
+                                           $"Completion was rejected by deterministic acceptance: {completionError} Choose the next action that closes this gap.")
+                        AppLogger.Warn("LoopEngine", $"Rejected premature completion: {completionError}")
+                        If noProgressCount >= MaxNoProgress Then Exit While
+                        Continue While
                     End If
+
+                    If decision IsNot Nothing AndAlso decision.Kind = "replan" Then
+                        If replanAttempts >= MaxReplanAttempts Then
+                            _memory.SetWorking("lastObservation", "Replan limit reached. Choose an executable action or fail explicitly.")
+                            noProgressCount += 1
+                            If noProgressCount >= MaxNoProgress Then Exit While
+                            Continue While
+                        End If
+
+                        replanAttempts += 1
+                        session.Status = AgentStatus.Reflecting
+                        OnStatusChanged?.Invoke("正在根据最新观察重新规划...")
+                        Dim replanned = Await GeneratePlanAsync(session, systemPrompt, skill)
+                        If replanned Is Nothing OrElse replanned.Steps.Count = 0 Then
+                            noProgressCount += 1
+                            _memory.SetWorking("lastObservation", "Replan did not produce an executable high-level skeleton.")
+                            If noProgressCount >= MaxNoProgress Then Exit While
+                            Continue While
+                        End If
+
+                        Dim replanCoverageError = ValidatePlanCoverage(session.Spec, replanned)
+                        If Not String.IsNullOrWhiteSpace(replanCoverageError) Then
+                            noProgressCount += 1
+                            _memory.SetWorking("lastObservation", $"Replan was rejected: {replanCoverageError}")
+                            If noProgressCount >= MaxNoProgress Then Exit While
+                            Continue While
+                        End If
+
+                        session.Plan = replanned
+                        stepIndex = 0
+                        noProgressCount = 0
+                        OnPlanGenerated?.Invoke(session.Plan)
+                        Continue While
+                    End If
+
+                    If decision IsNot Nothing AndAlso decision.Kind = "fail" Then
+                        Dim explicitFailure = If(String.IsNullOrWhiteSpace(decision.Message),
+                                                 "The model determined that the task cannot be completed safely with the current facts and tools.",
+                                                 decision.Message)
+                        session.Status = AgentStatus.Failed
+                        OnStatusChanged?.Invoke(explicitFailure)
+                        Return AgentResult.Failed(session.Id, explicitFailure)
+                    End If
+
+                    Dim toolCall = If(decision?.Action, Nothing)
 
                     ' --- PARSE ACTION ---
                     If toolCall Is Nothing Then
                         noProgressCount += 1
-                        planStep.Status = StepStatus.Failed
-                        planStep.ErrorMessage = "无法解析工具调用"
-                        OnStepCompleted?.Invoke(stepIndex, False, "解析失败")
+                        planStep.ErrorMessage = "无法解析当前 ReAct 决策"
 
+                        _memory.SetWorking("lastObservation",
+                                           $"步骤 {stepIndex + 1} 的模型响应不是可解析的 act/complete/replan/fail 决策；请基于当前目标和已注册工具重新决定。")
                         If noProgressCount >= MaxNoProgress Then Exit While
-                        stepIndex += 1
                         Continue While
+                    End If
+
+                    If isCompletionCheck Then
+                        planStep.Description = $"完成目标所需的附加动作：{toolCall.ToolId}"
+                        planStep.ToolHint = toolCall.ToolId
+                        session.Plan.Steps.Add(planStep)
                     End If
 
                     Dim normalizeMessage As String = ""
@@ -125,8 +206,9 @@ Namespace Agent
                         planStep.ErrorMessage = normalizeMessage
                         OnStepCompleted?.Invoke(stepIndex, False, normalizeMessage)
 
+                        _memory.SetWorking("lastObservation",
+                                           $"工具调用未通过规范化：{normalizeMessage}。请使用已注册工具的原始 ID 和有效参数重新决定。")
                         If noProgressCount >= MaxNoProgress Then Exit While
-                        stepIndex += 1
                         Continue While
                     End If
                     If Not String.IsNullOrWhiteSpace(normalizeMessage) Then
@@ -332,9 +414,15 @@ Namespace Agent
 
                     ' 更新步骤状态
                     If toolResult.Success Then
-                        planStep.Status = StepStatus.Completed
                         noProgressCount = 0
-                        OnStepCompleted?.Invoke(stepIndex, True, toolResult.Message)
+                        If ActionCompletesPlanStep(planStep, toolCall) Then
+                            planStep.Status = StepStatus.Completed
+                            planStep.ErrorMessage = ""
+                            OnStepCompleted?.Invoke(stepIndex, True, toolResult.Message)
+                        Else
+                            planStep.Status = StepStatus.Running
+                            OnStatusChanged?.Invoke($"支持动作 {toolCall.ToolId} 已成功；继续完成当前里程碑 {planStep.ToolHint}。")
+                        End If
                     Else
                         planStep.Status = StepStatus.Failed
                         planStep.ErrorMessage = toolResult.ToObserveSummary()
@@ -383,12 +471,22 @@ Namespace Agent
                         End If
                     End If
 
-                    stepIndex += 1
+                    If toolResult.Success AndAlso planStep.Status = StepStatus.Completed Then
+                        stepIndex += 1
+                    ElseIf Not toolResult.Success Then
+                        ' A recoverable failure is a new fact, not a reason to blindly advance
+                        ' through the old plan. Keep the current high-level step and let the next
+                        ' ReAct iteration choose a different action from the observation.
+                        Continue While
+                    End If
                 End While
 
-                If session.CurrentIteration = 0 Then
+                If Not modelDeclaredComplete Then
                     session.Status = AgentStatus.Failed
-                    Dim failMsg = "任务未执行任何工具调用。可能是计划步骤没有生成可解析的 action，或当前宿主工具未加载。"
+                    Dim acceptanceError = ValidateExecutionOutcome(session)
+                    Dim failMsg = If(String.IsNullOrWhiteSpace(acceptanceError),
+                                     $"任务未形成可验收的完成决策，已达自适应决策上限 {MaxIterations}。",
+                                     $"任务未通过验收：{acceptanceError}")
                     OnStatusChanged?.Invoke(failMsg)
                     AppLogger.Warn("LoopEngine", failMsg)
                     Return AgentResult.Failed(session.Id, failMsg)
@@ -440,6 +538,19 @@ Namespace Agent
                 AppLogger.Error("LoopEngine", "RunAsync unhandled exception", ex)
                 Return AgentResult.Failed(session.Id, $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}")
             End Try
+        End Function
+
+        Private Function ActionCompletesPlanStep(planStep As PlanStep,
+                                                 toolCall As ToolCall) As Boolean
+            If planStep Is Nothing OrElse toolCall Is Nothing Then Return False
+
+            Dim expectedTool = If(planStep.ToolHint, "").Trim()
+            If String.IsNullOrWhiteSpace(expectedTool) AndAlso Not String.IsNullOrWhiteSpace(planStep.Code) Then
+                expectedTool = If(ParsePlannedToolCall(planStep.Code)?.ToolId, "").Trim()
+            End If
+            If String.IsNullOrWhiteSpace(expectedTool) Then Return True
+
+            Return String.Equals(expectedTool, toolCall.ToolId, StringComparison.OrdinalIgnoreCase)
         End Function
 
 

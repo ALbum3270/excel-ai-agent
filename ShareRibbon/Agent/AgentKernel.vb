@@ -29,6 +29,7 @@ Namespace Agent
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
         Public Property SendAIRequestWithMessages As Func(Of JArray, Task(Of String))
         Public Property ExecuteCodeWithToolResult As Func(Of String, String, Boolean, ToolResult)
+        Public Property CaptureContextPack As Func(Of Context.ContextPack)
 
         ' MCP 客户端（由外部设置，可选）
         Public Property McpClient As StreamJsonRpcMCPClient
@@ -86,6 +87,10 @@ Namespace Agent
                                                         If SendAIRequestWithMessages Is Nothing Then Return Task.FromResult(Of String)(Nothing)
                                                         Return SendAIRequestWithMessages(messages)
                                                     End Function
+            _loopEngine.CaptureContextPack = Function()
+                                                 If CaptureContextPack Is Nothing Then Return Nothing
+                                                 Return CaptureContextPack.Invoke()
+                                             End Function
 
             _loopEngine.OnPlanGenerated = Sub(plan)
                                               RaiseEvent OnPlanGenerated(plan)
@@ -248,12 +253,11 @@ Namespace Agent
                 ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
                 Dim contextText = contextPack.ToPromptText()
                 Dim executionTools = _toolRegistry.GetVisibleTools(appType, executionContext)
-                Dim planningTools = AgentPlanningScope.SelectTools(executionTools, _session.Spec)
                 AppLogger.Info("AgentKernel",
-                               $"Planning tool view count={planningTools.Count} executionToolCount={executionTools.Count}")
+                               $"Adaptive ReAct tool view count={executionTools.Count}")
                 Dim systemPrompt = _promptManager.BuildSystemPrompt(
                     appType,
-                    planningTools,
+                    executionTools,
                     _memory,
                     contextText
                 )
