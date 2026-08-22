@@ -1,5 +1,6 @@
 Imports System.Diagnostics
 Imports System.IO
+Imports System.Linq
 Imports System.Text
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
@@ -29,9 +30,11 @@ Namespace Services.Python
         Private Const MaxCodeChars As Integer = 16000
         Private Const MaxInputChars As Integer = 1000000
         Private Const MaxOutputChars As Integer = 2000000
+        Private Shared ReadOnly PythonResolutionLock As New Object()
+        Private Shared _cachedPythonPath As String = ""
 
         Private Shared ReadOnly AllowedImportRoots As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase) From {
-            "math", "statistics", "datetime", "decimal", "collections", "re", "functools", "itertools"
+            "math", "statistics", "datetime", "decimal", "collections", "re", "functools", "itertools", "json"
         }
 
         Private Shared ReadOnly BlockedTokens As String() = {
@@ -109,8 +112,27 @@ Namespace Services.Python
                     process.Start()
                     Dim stdoutTask = process.StandardOutput.ReadToEndAsync()
                     Dim stderrTask = process.StandardError.ReadToEndAsync()
-                    Await process.StandardInput.WriteAsync(inputJson)
-                    process.StandardInput.Close()
+                    ' .NET Framework ProcessStartInfo has no StandardInputEncoding property.
+                    ' Writing through StreamWriter would use the Windows console code page and
+                    ' corrupt Chinese JSON before Python decodes stdin as UTF-8.
+                    Dim inputBytes = New UTF8Encoding(False).GetBytes(inputJson)
+                    Dim stdinFailure As Exception = Nothing
+                    Try
+                        Await process.StandardInput.BaseStream.WriteAsync(inputBytes, 0, inputBytes.Length)
+                        Await process.StandardInput.BaseStream.FlushAsync()
+                    Catch ex As IOException
+                        ' Invalid generated source can make Python exit during ast.parse before it
+                        ' consumes stdin. Preserve that primary Python error below instead of
+                        ' misclassifying the secondary broken pipe as a filesystem IO failure.
+                        stdinFailure = ex
+                    Catch ex As ObjectDisposedException
+                        stdinFailure = ex
+                    Finally
+                        Try
+                            process.StandardInput.Close()
+                        Catch
+                        End Try
+                    End Try
 
                     Dim exited = Await Task.Run(Function() process.WaitForExit(timeoutSeconds * 1000))
                     If Not exited Then
@@ -141,7 +163,20 @@ Namespace Services.Python
                                         sw,
                                         detail)
                         End If
+                        If detail.IndexOf("SyntaxError", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+                           detail.IndexOf("IndentationError", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+                           detail.IndexOf("TabError", StringComparison.OrdinalIgnoreCase) >= 0 Then
+                            Return Fail(result,
+                                        ExceptionClassifier.CodeArgument,
+                                        "Python 代码存在语法错误",
+                                        sw,
+                                        detail)
+                        End If
                         Return Fail(result, ExceptionClassifier.CodeUnknown, "Python 计算失败", sw, detail)
+                    End If
+                    If stdinFailure IsNot Nothing Then
+                        Dim classified = ExceptionClassifier.Classify(stdinFailure)
+                        Return Fail(result, classified.ErrorCode, classified.UserMessage, sw, classified.DebugDetail)
                     End If
                     If String.IsNullOrWhiteSpace(stdout) Then
                         Return Fail(result, ExceptionClassifier.CodeJson, "Python 没有返回 JSON 结果", sw)
@@ -182,8 +217,8 @@ Namespace Services.Python
             For Each rawLine In lines
                 Dim line = rawLine.Trim()
                 If line.StartsWith("import ", StringComparison.OrdinalIgnoreCase) Then
-                    Dim imports = line.Substring(7).Split(","c)
-                    For Each item In imports
+                    Dim importItems = line.Substring(7).Split(","c)
+                    For Each item In importItems
                         Dim root = item.Trim().Split("."c, " "c)(0)
                         If Not AllowedImportRoots.Contains(root) Then Return $"PythonCompute 不允许导入模块: {root}"
                     Next
@@ -210,7 +245,7 @@ Namespace Services.Python
             sb.AppendLine("import json")
             sb.AppendLine("import sys")
             sb.AppendLine("source = " & JsonConvert.SerializeObject(code))
-            sb.AppendLine("allowed_roots = {'math','statistics','datetime','decimal','collections','re','functools','itertools'}")
+            sb.AppendLine("allowed_roots = {'math','statistics','datetime','decimal','collections','re','functools','itertools','json'}")
             sb.AppendLine("blocked_calls = {'open','eval','exec','compile','breakpoint','input','globals','locals','vars','getattr','setattr','delattr','__import__'}")
             sb.AppendLine("tree = ast.parse(source, filename='<PythonCompute>', mode='exec')")
             sb.AppendLine("for node in ast.walk(tree):")
@@ -246,25 +281,79 @@ Namespace Services.Python
         End Function
 
         Private Shared Function FindPython() As String
-            Dim configured = Environment.GetEnvironmentVariable("OFFICE_AI_PYTHON_PATH")
-            If Not String.IsNullOrWhiteSpace(configured) AndAlso File.Exists(configured) Then Return configured
+            SyncLock PythonResolutionLock
+                If Not String.IsNullOrWhiteSpace(_cachedPythonPath) Then Return _cachedPythonPath
 
-            For Each candidate In New String() {"python.exe", "python3.exe", "python", "python3"}
-                Try
-                    Using process As New Process()
-                        process.StartInfo.FileName = candidate
-                        process.StartInfo.Arguments = "--version"
-                        process.StartInfo.UseShellExecute = False
-                        process.StartInfo.CreateNoWindow = True
-                        process.StartInfo.RedirectStandardOutput = True
-                        process.StartInfo.RedirectStandardError = True
-                        process.Start()
-                        If process.WaitForExit(3000) AndAlso process.ExitCode = 0 Then Return candidate
-                    End Using
-                Catch
-                End Try
-            Next
-            Return ""
+                Dim candidates As New List(Of String)()
+                AddPythonCandidate(candidates, Environment.GetEnvironmentVariable("OFFICE_AI_PYTHON_PATH"))
+
+                Dim condaPrefix = Environment.GetEnvironmentVariable("CONDA_PREFIX")
+                If Not String.IsNullOrWhiteSpace(condaPrefix) Then
+                    AddPythonCandidate(candidates, Path.Combine(condaPrefix, "python.exe"))
+                End If
+
+                Dim virtualEnv = Environment.GetEnvironmentVariable("VIRTUAL_ENV")
+                If Not String.IsNullOrWhiteSpace(virtualEnv) Then
+                    AddPythonCandidate(candidates, Path.Combine(virtualEnv, "Scripts", "python.exe"))
+                    AddPythonCandidate(candidates, Path.Combine(virtualEnv, "bin", "python"))
+                End If
+
+                For Each commandName In New String() {"python.exe", "python3.exe", "python", "python3"}
+                    AddPythonCandidate(candidates, commandName)
+                Next
+
+                For Each candidate In candidates
+                    If CanRunPython(candidate) Then
+                        _cachedPythonPath = candidate
+                        AppLogger.Info("PythonCompute", $"Python runtime resolved source={DescribePythonSource(candidate)}")
+                        Return _cachedPythonPath
+                    End If
+                Next
+                Return ""
+            End SyncLock
+        End Function
+
+        Private Shared Sub AddPythonCandidate(candidates As List(Of String), candidate As String)
+            If candidates Is Nothing OrElse String.IsNullOrWhiteSpace(candidate) Then Return
+            Dim normalized = candidate.Trim().Trim(""""c)
+            If candidates.Any(Function(existing) String.Equals(existing, normalized, StringComparison.OrdinalIgnoreCase)) Then Return
+            candidates.Add(normalized)
+        End Sub
+
+        Private Shared Function CanRunPython(candidate As String) As Boolean
+            If String.IsNullOrWhiteSpace(candidate) Then Return False
+            If (candidate.Contains(Path.DirectorySeparatorChar) OrElse candidate.Contains(Path.AltDirectorySeparatorChar)) AndAlso
+               Not File.Exists(candidate) Then Return False
+
+            Try
+                Using process As New Process()
+                    process.StartInfo.FileName = candidate
+                    process.StartInfo.Arguments = "--version"
+                    process.StartInfo.UseShellExecute = False
+                    process.StartInfo.CreateNoWindow = True
+                    process.StartInfo.RedirectStandardOutput = True
+                    process.StartInfo.RedirectStandardError = True
+                    process.Start()
+                    Return process.WaitForExit(1500) AndAlso process.ExitCode = 0
+                End Using
+            Catch
+                Return False
+            End Try
+        End Function
+
+        Private Shared Function DescribePythonSource(candidate As String) As String
+            Dim configured = Environment.GetEnvironmentVariable("OFFICE_AI_PYTHON_PATH")
+            If Not String.IsNullOrWhiteSpace(configured) AndAlso
+               String.Equals(configured.Trim().Trim(""""c), candidate, StringComparison.OrdinalIgnoreCase) Then Return "configured"
+
+            Dim condaPrefix = Environment.GetEnvironmentVariable("CONDA_PREFIX")
+            If Not String.IsNullOrWhiteSpace(condaPrefix) AndAlso
+               candidate.StartsWith(condaPrefix, StringComparison.OrdinalIgnoreCase) Then Return "conda"
+
+            Dim virtualEnv = Environment.GetEnvironmentVariable("VIRTUAL_ENV")
+            If Not String.IsNullOrWhiteSpace(virtualEnv) AndAlso
+               candidate.StartsWith(virtualEnv, StringComparison.OrdinalIgnoreCase) Then Return "virtualenv"
+            Return "path"
         End Function
 
         Private Shared Function QuoteArgument(value As String) As String

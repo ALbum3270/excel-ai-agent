@@ -1,4 +1,5 @@
 Imports System.Text
+Imports System.Threading
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
@@ -11,12 +12,14 @@ Public Class AgentKernelService
 
     Private ReadOnly _executeScript As Func(Of String, Task)
     Private ReadOnly _escapeJs As Func(Of String, String)
-    Private ReadOnly _sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
+    Private ReadOnly _sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Action(Of AgentStreamDelta), Task(Of String))
     Private ReadOnly _executeCodeWithToolResult As Func(Of String, String, Boolean, Agent.ToolResult)
     Private ReadOnly _chatStateService As ChatStateService
     Private ReadOnly _historyMessages As List(Of HistoryMessage)
     Private ReadOnly _manageHistorySize As Action
     Private ReadOnly _getOfficeAppType As Func(Of String)
+    Private ReadOnly _uiScriptSync As New Object()
+    Private _uiScriptTail As Task = Task.CompletedTask
 
     ' 统一的 AgentKernel 实例
     Private _agentKernel As Agent.AgentKernel
@@ -32,7 +35,7 @@ Public Class AgentKernelService
     Public Sub New(
         executeScript As Func(Of String, Task),
         escapeJs As Func(Of String, String),
-        sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String)),
+        sendAiRequest As Func(Of String, String, List(Of HistoryMessage), Action(Of AgentStreamDelta), Task(Of String)),
         executeCodeWithToolResult As Func(Of String, String, Boolean, Agent.ToolResult),
         chatStateService As ChatStateService,
         historyMessages As List(Of HistoryMessage),
@@ -60,7 +63,7 @@ Public Class AgentKernelService
 
         ' 绑定 AI 请求委托
         _agentKernel.SendAIRequest = Async Function(prompt, system, history)
-                                          Return Await _sendAiRequest(prompt, system, history)
+                                          Return Await _sendAiRequest(prompt, system, history, AddressOf OnModelStreamDelta)
                                       End Function
         _agentKernel.SendAIRequestWithMessages = AddressOf SendAiRequestWithMessagesAsync
 
@@ -103,7 +106,7 @@ Public Class AgentKernelService
             CurrentAgentSessionId = Guid.NewGuid().ToString()
 
             ' 显示思考状态
-            ShowThinkingStatus()
+            Await ShowThinkingStatusAsync()
 
             ' 注入历史消息到 AgentMemory（预加载会话上下文）
             If historyMessages IsNot Nothing AndAlso historyMessages.Count > 0 Then
@@ -166,7 +169,7 @@ Public Class AgentKernelService
             AgentFullUserMessage = Nothing
             CurrentAgentSessionId = Nothing
 
-            _executeScript($"completeAgent('{sessionId}', false, '已终止')")
+            QueueUiScriptAsync($"completeAgent('{sessionId}', false, '已终止')")
 
             GlobalStatusStrip.ShowInfo("已终止Agent")
         Catch ex As Exception
@@ -216,7 +219,7 @@ Public Class AgentKernelService
         If e Is Nothing OrElse String.IsNullOrWhiteSpace(e.ContextPackJson) Then Return
         Try
             Dim escaped = _escapeJs(e.ContextPackJson)
-            _executeScript($"window.officeAiContextPack = JSON.parse('{escaped}'); if (typeof updateContextPackTrace === 'function') updateContextPackTrace(window.officeAiContextPack);")
+            QueueUiScriptAsync($"window.officeAiContextPack = JSON.parse('{escaped}'); if (typeof updateContextPackTrace === 'function') updateContextPackTrace(window.officeAiContextPack);")
         Catch ex As Exception
             AppLogger.Warn("AgentKernelService", $"ContextPack UI trace failed: {AppLogger.Redact(ex.Message)}")
         End Try
@@ -230,8 +233,9 @@ Public Class AgentKernelService
             GlobalStatusStrip.ShowInfo(status)
 
             ' 更新思考状态 div
-            If Not String.IsNullOrEmpty(AgentThinkingUuid) Then
-                _executeScript($"var thinkingDiv = document.getElementById('content-{AgentThinkingUuid}'); if(thinkingDiv) thinkingDiv.innerHTML = '<div style=""padding: 8px 0; color: #2563eb;"">{_escapeJs(status)}</div>';")
+            Dim progressId = GetActiveProgressId()
+            If Not String.IsNullOrEmpty(progressId) Then
+                QueueUiScriptAsync($"updateAgentProgressStatus('{_escapeJs(progressId)}', '{_escapeJs(status)}')")
             End If
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnStatusChanged 出错: {ex.Message}")
@@ -252,7 +256,7 @@ Public Class AgentKernelService
                 .observation = If(iteration.Observation, ""),
                 .explanation = iteration.Explanation
             }).ToString(Formatting.None)
-            _executeScript($"updateAgentIteration('{CurrentAgentSessionId}', {iterationJson})")
+            QueueUiScriptAsync($"updateAgentIteration('{CurrentAgentSessionId}', {iterationJson})")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnIterationUpdate 出错: {ex.Message}")
         End Try
@@ -264,7 +268,7 @@ Public Class AgentKernelService
     Private Sub OnKernelStepCompleted(stepIndex As Integer, success As Boolean, message As String)
         Try
             Dim stepStatus = If(success, "completed", "failed")
-            _executeScript($"updateAgentStep('{CurrentAgentSessionId}', {stepIndex}, '{stepStatus}', '{_escapeJs(message)}')")
+            QueueUiScriptAsync($"updateAgentStep('{CurrentAgentSessionId}', {stepIndex}, '{stepStatus}', '{_escapeJs(message)}')")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnStepCompleted 出错: {ex.Message}")
         End Try
@@ -274,7 +278,7 @@ Public Class AgentKernelService
         Try
             If explanation Is Nothing OrElse String.IsNullOrWhiteSpace(CurrentAgentSessionId) Then Return
             Dim explanationJson = JObject.FromObject(explanation).ToString(Formatting.None)
-            _executeScript($"showAgentExecutionExplanation('{CurrentAgentSessionId}', {explanationJson})")
+            QueueUiScriptAsync($"showAgentExecutionExplanation('{CurrentAgentSessionId}', {explanationJson})")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnExecutionExplained 出错: {ex.Message}")
         End Try
@@ -286,7 +290,7 @@ Public Class AgentKernelService
     Private Sub OnKernelRequestApproval(message As String, callback As Action(Of Boolean))
         Try
             ' 显示审批 UI
-            _executeScript($"showAgentApproval('{CurrentAgentSessionId}', '{_escapeJs(message)}')")
+            QueueUiScriptAsync($"showAgentApproval('{CurrentAgentSessionId}', '{_escapeJs(message)}')")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnRequestApproval 出错: {ex.Message}")
         End Try
@@ -311,7 +315,7 @@ Public Class AgentKernelService
 
             Dim planJson = $"{{""sessionId"":""{CurrentAgentSessionId}"",""understanding"":""{_escapeJs(If(plan.Understanding, ""))}"",""steps"":{stepsJson.ToString()},""summary"":""{_escapeJs(If(plan.Summary, ""))}"",""replaceThinkingUuid"":""{AgentThinkingUuid}""}}"
 
-            _executeScript($"showAgentPlanCard({planJson})")
+            QueueUiScriptAsync($"showAgentPlanCard({planJson})")
             Dim planTrace As New ChatContextTrace With {
                 .ExecutionPlan = New ChatContextPlanTrace With {
                     .Summary = If(plan.Summary, ""),
@@ -327,8 +331,8 @@ Public Class AgentKernelService
                 })
             Next
             Dim traceJson = JObject.FromObject(planTrace).ToString(Formatting.None)
-            _executeScript($"showContextHints({{ trace: {traceJson} }})")
-            _executeScript("var planningCard = document.getElementById('planning-status-card'); if(planningCard) planningCard.remove();")
+            QueueUiScriptAsync($"showContextHints({{ trace: {traceJson} }})")
+            QueueUiScriptAsync("var planningCard = document.getElementById('planning-status-card'); if(planningCard) planningCard.remove();")
             AgentThinkingUuid = Nothing
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnPlanGenerated 出错: {ex.Message}")
@@ -353,7 +357,7 @@ Public Class AgentKernelService
                 _chatStateService?.AddMessage("user", userMsgForHistory)
             End If
 
-            Dim assistantReply = terminalMessage
+            Dim assistantReply = If(String.IsNullOrWhiteSpace(result?.FinalOutput), terminalMessage, result.FinalOutput)
             _historyMessages.Add(New HistoryMessage With {
                 .role = "assistant",
                 .content = assistantReply
@@ -366,7 +370,8 @@ Public Class AgentKernelService
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] OnCompleted 出错: {ex.Message}")
         Finally
-            FinalizeAgentUi(terminalSuccess, terminalMessage)
+            Dim finalUiMessage = If(String.IsNullOrWhiteSpace(result?.FinalOutput), terminalMessage, result.FinalOutput)
+            FinalizeAgentUi(terminalSuccess, finalUiMessage)
         End Try
     End Sub
 
@@ -400,11 +405,11 @@ Public Class AgentKernelService
         Dim sessionId = If(CurrentAgentSessionId, "")
         Dim thinkingUuid = If(AgentThinkingUuid, "")
         Try
-            _executeScript($"completeAgent('{_escapeJs(sessionId)}', {success.ToString().ToLowerInvariant()}, '{_escapeJs(If(message, ""))}', '{_escapeJs(thinkingUuid)}')")
+            QueueUiScriptAsync($"completeAgent('{_escapeJs(sessionId)}', {success.ToString().ToLowerInvariant()}, '{_escapeJs(If(message, ""))}', '{_escapeJs(thinkingUuid)}')")
         Catch ex As Exception
             AppLogger.Warn("AgentKernelService", $"FinalizeAgentUi failed: {AppLogger.Redact(ex.Message)}")
             ' 即使主终态函数不存在，也直接执行最小按钮/规划卡复位。
-            _executeScript("var p=document.getElementById('planning-status-card');if(p)p.remove();if(typeof restoreAgentRequestUi==='function')restoreAgentRequestUi();else if(typeof changeSendButton==='function')changeSendButton();")
+            QueueUiScriptAsync("var p=document.getElementById('planning-status-card');if(p)p.remove();if(typeof restoreAgentRequestUi==='function')restoreAgentRequestUi();else if(typeof changeSendButton==='function')changeSendButton();")
         Finally
             AgentOriginalUserRequest = Nothing
             AgentFullUserMessage = Nothing
@@ -416,19 +421,65 @@ Public Class AgentKernelService
     ''' <summary>
     ''' 在聊天界面显示思考状态
     ''' </summary>
-    Private Sub ShowThinkingStatus()
+    Private Async Function ShowThinkingStatusAsync() As Task
         Try
             If String.IsNullOrEmpty(AgentThinkingUuid) Then
                 AgentThinkingUuid = Guid.NewGuid().ToString()
             End If
 
             Dim timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            _executeScript($"createChatSection('AI', '{timestamp}', '{AgentThinkingUuid}')")
-            _executeScript($"var thinkingDiv = document.getElementById('content-{AgentThinkingUuid}'); if(thinkingDiv) thinkingDiv.innerHTML = '<div class=""thinking-indicator""><div class=""thinking-dots""><span></span><span></span><span></span></div><span style=""margin-left: 12px; color: #6c757d;"">正在分析您的需求...</span></div>';")
+            Await QueueUiScriptAsync(
+                $"createChatSection('AI', '{timestamp}', '{AgentThinkingUuid}'); startAgentProgress('{AgentThinkingUuid}', '正在分析您的需求...');")
         Catch ex As Exception
             Debug.WriteLine($"[AgentKernelService] ShowThinkingStatus 出错: {ex.Message}")
         End Try
+    End Function
+
+    Private Sub OnModelStreamDelta(delta As AgentStreamDelta)
+        If delta Is Nothing Then Return
+        Dim progressId = GetActiveProgressId()
+        If String.IsNullOrWhiteSpace(progressId) Then Return
+
+        If Not String.IsNullOrEmpty(delta.ReasoningDelta) Then
+            QueueUiScriptAsync($"appendAgentStreamDelta('{_escapeJs(progressId)}', 'reasoning', '{_escapeJs(delta.ReasoningDelta)}')")
+        End If
+        If Not String.IsNullOrEmpty(delta.ContentDelta) Then
+            QueueUiScriptAsync($"appendAgentStreamDelta('{_escapeJs(progressId)}', 'content', '{_escapeJs(delta.ContentDelta)}')")
+        End If
+        If delta.Done Then
+            QueueUiScriptAsync($"appendAgentStreamDelta('{_escapeJs(progressId)}', 'done', '')")
+        End If
     End Sub
+
+    Private Function GetActiveProgressId() As String
+        If Not String.IsNullOrWhiteSpace(AgentThinkingUuid) Then Return AgentThinkingUuid
+        Return CurrentAgentSessionId
+    End Function
+
+    ''' <summary>
+    ''' WebView scripts must remain ordered. Fire-and-forget ExecuteScript calls can race the
+    ''' chat-section creation and make the first visible status disappear completely.
+    ''' </summary>
+    Private Function QueueUiScriptAsync(script As String) As Task
+        SyncLock _uiScriptSync
+            _uiScriptTail = RunQueuedUiScriptAsync(_uiScriptTail, script)
+            Return _uiScriptTail
+        End SyncLock
+    End Function
+
+    Private Async Function RunQueuedUiScriptAsync(previous As Task, script As String) As Task
+        Try
+            Await previous
+        Catch ex As Exception
+            AppLogger.Warn("AgentKernelService", $"Previous UI update failed: {AppLogger.Redact(ex.Message)}")
+        End Try
+
+        Try
+            Await _executeScript(script)
+        Catch ex As Exception
+            AppLogger.Warn("AgentKernelService", $"Agent UI update failed: {AppLogger.Redact(ex.Message)}")
+        End Try
+    End Function
 
 #End Region
 

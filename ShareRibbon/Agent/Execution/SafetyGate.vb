@@ -79,6 +79,13 @@ Namespace Agent.Execution
                                                       "risky")
             End If
 
+            ' Read-only is an execution contract, not a risk-label convention. Once the
+            ' destructive and dynamic Office-operation checks above have passed, a tool that
+            ' explicitly declares read access cannot require approval or mutate host state.
+            If String.Equals(If(tool.AccessMode, "").Trim(), "read", StringComparison.OrdinalIgnoreCase) Then
+                Return SafetyDecision.Allow("safe")
+            End If
+
             If RequireApprovalForRisky AndAlso String.Equals(risk, "risky", StringComparison.OrdinalIgnoreCase) Then
                 Return SafetyDecision.RequireApproval($"高风险工具 {toolId} 需要用户确认",
                                                       $"高风险工具 {toolId} 需要确认后才能执行",

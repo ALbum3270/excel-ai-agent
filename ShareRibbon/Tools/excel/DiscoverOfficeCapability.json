@@ -1,0 +1,38 @@
+{
+  "id": "DiscoverOfficeCapability",
+  "name": "发现 Office 对象能力",
+  "description": "只读检索当前 Office 宿主受控对象目录中的属性和方法。长尾操作先发现 memberId，再使用 OfficeObjectOperation；查询本身不修改文档。",
+  "appType": "excel",
+  "category": "Office 对象能力",
+  "riskLevel": "safe",
+  "accessMode": "read",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "要查找的自然语言能力目标"
+    },
+    {
+      "name": "targetType",
+      "type": "string",
+      "required": false,
+      "description": "可选目标对象类型"
+    },
+    {
+      "name": "includeReadOnly",
+      "type": "boolean",
+      "required": false,
+      "description": "是否包含只读成员，默认 true",
+      "defaultValue": true
+    },
+    {
+      "name": "maxResults",
+      "type": "integer",
+      "required": false,
+      "description": "最多返回成员数，默认 12，最大 20",
+      "defaultValue": 12
+    }
+  ]
+}

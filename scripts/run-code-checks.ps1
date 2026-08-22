@@ -41,6 +41,13 @@ try {
         "scripts\smoke-skills-usage-migration.ps1",
         "scripts\smoke-word-capability-registry.ps1",
         "scripts\smoke-ai-gateway-provider.ps1",
+        "scripts\smoke-excel-conditional-format-contract.ps1",
+        "scripts\smoke-excel-office-operation-runtime.ps1",
+        "scripts\smoke-excel-standard-tool-adapters.ps1",
+        "scripts\smoke-excel-advanced-tool-adapters.ps1",
+        "scripts\smoke-web-resource-sync.ps1",
+        "scripts\smoke-agent-runtime-policy.ps1",
+        "scripts\smoke-unified-chat-tools.ps1",
         "scripts\run-golden-l0.ps1"
     )
 
@@ -51,7 +58,14 @@ try {
         }
 
         Invoke-Step $smoke {
-            if ($smoke -eq "scripts\run-golden-l0.ps1") {
+            if ($smoke -eq "scripts\run-golden-l0.ps1" -or
+                $smoke -eq "scripts\smoke-excel-conditional-format-contract.ps1" -or
+                $smoke -eq "scripts\smoke-excel-office-operation-runtime.ps1" -or
+                $smoke -eq "scripts\smoke-excel-standard-tool-adapters.ps1" -or
+                $smoke -eq "scripts\smoke-excel-advanced-tool-adapters.ps1" -or
+                $smoke -eq "scripts\smoke-web-resource-sync.ps1" -or
+                $smoke -eq "scripts\smoke-agent-runtime-policy.ps1" -or
+                $smoke -eq "scripts\smoke-unified-chat-tools.ps1") {
                 powershell -NoProfile -ExecutionPolicy Bypass -File $fullPath -Configuration $Configuration
             }
             else {

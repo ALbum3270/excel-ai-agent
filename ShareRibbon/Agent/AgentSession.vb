@@ -167,8 +167,23 @@ Namespace Agent
         Public Property Constraints As New List(Of String)()
         Public Property SuccessCriteria As New List(Of String)()
         Public Property RequiredTools As New List(Of String)()
+        ''' <summary>
+        ''' Tools whose successful execution is part of the task contract. RequiredTools is
+        ''' only a planning hint; MandatoryTools is verified before and after execution.
+        ''' </summary>
+        Public Property MandatoryTools As New List(Of String)()
+        ''' <summary>
+        ''' Ordered subset of MandatoryTools for workflows whose data dependencies require
+        ''' a specific successful execution sequence.
+        ''' </summary>
+        Public Property MandatoryToolSequence As New List(Of String)()
         Public Property RiskLevel As String = "safe"
         Public Property Complexity As String = "medium"
+        ''' <summary>
+        ''' Controls whether the task may mutate the active Office document.  The planner and
+        ''' execution gate use this semantic contract instead of inferring safety from wording.
+        ''' </summary>
+        Public Property MutationPolicy As String = "allow"
         Public Property ExpectedOutputs As New List(Of String)()
         Public Property ExpectedSlideCount As Integer = 0
 

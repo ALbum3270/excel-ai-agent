@@ -47,6 +47,8 @@ Namespace Agent
                                         Optional skill As AgentSkill = Nothing) As Task(Of AgentResult)
             Dim noProgressCount As Integer = 0
             Dim replanAttempts As Integer = 0
+            Dim readOnlyEvidence As New JArray()
+            Dim toolDataflow As New AgentToolDataflow()
             _multimodalRepairDisabledForRun = False
 
             Try
@@ -92,10 +94,19 @@ Namespace Agent
                     ' --- THINK ---
                     session.Status = AgentStatus.Thinking
                     OnStatusChanged?.Invoke($"步骤 {stepIndex + 1}/{session.Plan.Steps.Count}: {planStep.Description}")
-                    Dim thought = Await ThinkAsync(session, planStep, systemPrompt)
+                    ' The planning response already carries canonical executable JSON in
+                    ' PlanStep.Code. Execute that contract directly. Calling the model again
+                    ' for every step duplicates planning latency and can change a valid action.
+                    Dim thought = If(planStep.Code, "")
+                    Dim toolCall = ParsePlannedToolCall(thought)
+                    If toolCall Is Nothing Then
+                        thought = Await ThinkAsync(session, planStep, systemPrompt)
+                        toolCall = ParseToolCall(thought)
+                    Else
+                        AppLogger.Info("LoopEngine", $"Use planned action directly step={stepIndex + 1} toolId={toolCall.ToolId}")
+                    End If
 
                     ' --- PARSE ACTION ---
-                    Dim toolCall = ParseToolCall(thought)
                     If toolCall Is Nothing Then
                         noProgressCount += 1
                         planStep.Status = StepStatus.Failed
@@ -121,6 +132,9 @@ Namespace Agent
                     If Not String.IsNullOrWhiteSpace(normalizeMessage) Then
                         Debug.WriteLine($"[LoopEngine] {normalizeMessage}")
                     End If
+                    Dim contractedToolId = If(AgentExecutionContract.IsMandatoryTool(session.Spec, toolCall.ToolId),
+                                              toolCall.ToolId,
+                                              "")
 
                     ' --- RISK NOTICE (autonomous mode) ---
                     Dim tool = _toolRegistry.GetTool(toolCall.ToolId)
@@ -151,6 +165,9 @@ Namespace Agent
 
                     ' 多轮修复循环
                     While fixAttempt < MaxFixAttempts
+                        ' A plan is produced before read/compute outputs exist. Bind the actual
+                        ' successful runtime result before schema validation and execution.
+                        toolDataflow.BindInputs(toolCall)
                         Dim normalized As String = ""
                         If Not _toolRegistry.TryNormalizeToolCall(session.AppType, toolCall, executionContext, normalized) Then
                             toolResult = ToolResult.Failed(toolCall.ToolId,
@@ -194,6 +211,15 @@ Namespace Agent
                         End If
 
                         If toolResult.Success Then
+                            toolDataflow.RecordSuccess(toolResult)
+                            If IsReadOnlyAnswerSpec(session.Spec) Then
+                                Dim evidenceError = AppendReadOnlyEvidence(readOnlyEvidence, toolCall, toolResult)
+                                If Not String.IsNullOrWhiteSpace(evidenceError) Then
+                                    session.Status = AgentStatus.Failed
+                                    OnStatusChanged?.Invoke(evidenceError)
+                                    Return AgentResult.Failed(session.Id, evidenceError)
+                                End If
+                            End If
                             ' 成功，跳出循环
                             Exit While
                         End If
@@ -240,6 +266,26 @@ Namespace Agent
                                 If Not String.IsNullOrEmpty(fixedJson) Then
                                     Dim fixedObj = JObject.Parse(fixedJson)
                                     Dim fixedToolCall = ParseFixedToolCall(fixedObj, toolCall)
+
+                                    If Not String.IsNullOrWhiteSpace(contractedToolId) AndAlso
+                                       Not String.Equals(fixedToolCall.ToolId, contractedToolId, StringComparison.OrdinalIgnoreCase) Then
+                                        Dim contractMessage = $"自动修复不能把任务合同要求的工具 {contractedToolId} 替换为 {fixedToolCall.ToolId}；已停止执行。"
+                                        toolResult = ToolResult.Failed(
+                                            contractedToolId,
+                                            contractMessage,
+                                            errorCode:=ExceptionClassifier.CodeSafetyBlocked,
+                                            userMessage:=contractMessage,
+                                            debugDetail:="Mandatory tool substitution rejected by execution contract.",
+                                            recoverable:=False,
+                                            observation:=New JObject From {
+                                                {"kind", "execution_contract"},
+                                                {"summary", contractMessage},
+                                                {"changed", False},
+                                                {"warnings", New JArray("mandatory_tool_substitution_rejected")}
+                                            })
+                                        AppLogger.Warn("LoopEngine", contractMessage)
+                                        Exit While
+                                    End If
 
                                     ' 使用修复后的工具调用
                                     toolCall = fixedToolCall
@@ -367,12 +413,25 @@ Namespace Agent
                     Return AgentResult.Failed(session.Id, outcomeError)
                 End If
 
+                Dim finalOutput As String = ""
+                If IsReadOnlyAnswerSpec(session.Spec) Then
+                    OnStatusChanged?.Invoke("正在根据已读取的完整数据生成答案...")
+                    finalOutput = Await GenerateReadOnlyAnswerAsync(session, readOnlyEvidence)
+                    If String.IsNullOrWhiteSpace(finalOutput) Then
+                        Dim answerFailure = "已读取工作簿数据，但未能生成可验证的最终答案；未对数据作任何修改"
+                        session.Status = AgentStatus.Failed
+                        OnStatusChanged?.Invoke(answerFailure)
+                        Return AgentResult.Failed(session.Id, answerFailure)
+                    End If
+                End If
+
                 ' 完成
                 session.Status = AgentStatus.Completed
                 Dim finalMsg = $"任务完成，共执行 {session.CurrentIteration} 个迭代"
                 OnStatusChanged?.Invoke(finalMsg)
                 AppLogger.Info("LoopEngine", finalMsg)
-                Return AgentResult.SuccessResult(session.Id, finalMsg)
+                Dim userMessage = If(String.IsNullOrWhiteSpace(finalOutput), finalMsg, finalOutput)
+                Return AgentResult.SuccessResult(session.Id, userMessage, finalOutput)
 
             Catch ex As Exception
                 session.Status = AgentStatus.Failed

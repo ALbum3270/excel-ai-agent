@@ -22,6 +22,11 @@ Public Class DefaultConversationRuntime
         requestObj("model") = context.ModelName
         requestObj("messages") = composition.Messages
         requestObj("stream") = context.Stream
+        If context.Stream AndAlso SupportsStreamUsage(context) Then
+            requestObj("stream_options") = New JObject From {
+                {"include_usage", True}
+            }
+        End If
         ReasoningRequestHelper.ApplyReasoningOptions(requestObj, context.ReasoningMode, context.ModelName, context.Platform, context.ApiUrl)
 
         Dim toolsArray = _toolBroker.GetTools(context)
@@ -35,6 +40,15 @@ Public Class DefaultConversationRuntime
             .UsedContextBuilder = composition.UsedContextBuilder,
             .Trace = composition.Trace
         }
+    End Function
+
+    Private Shared Function SupportsStreamUsage(context As ChatRequestContext) As Boolean
+        If context Is Nothing Then Return False
+        Dim provider = $"{If(context.Platform, "")} {If(context.ApiUrl, "")}".ToLowerInvariant()
+        Return provider.Contains("qwen") OrElse
+               provider.Contains("阿里云") OrElse
+               provider.Contains("aliyun") OrElse
+               provider.Contains("dashscope")
     End Function
 End Class
 

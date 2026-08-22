@@ -48,6 +48,42 @@
       "type": "integer",
       "required": false,
       "description": "ranking 输出的最大条数"
+    },
+    {
+      "name": "labelField",
+      "type": "string",
+      "required": false,
+      "description": "ranking 使用的标签字段名"
+    },
+    {
+      "name": "rankBy",
+      "type": "string",
+      "required": false,
+      "description": "ranking 使用的数值字段名"
+    },
+    {
+      "name": "descending",
+      "type": "boolean",
+      "required": false,
+      "description": "ranking 是否降序，默认 true"
+    },
+    {
+      "name": "rowFields",
+      "type": "array",
+      "required": false,
+      "description": "pivot 使用的行字段数组"
+    },
+    {
+      "name": "valueFields",
+      "type": "array",
+      "required": false,
+      "description": "pivot 使用的值字段数组"
+    },
+    {
+      "name": "columnFields",
+      "type": "array",
+      "required": false,
+      "description": "pivot 使用的列字段数组"
     }
   ]
 }

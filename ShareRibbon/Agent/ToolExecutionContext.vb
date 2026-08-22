@@ -20,6 +20,7 @@ Namespace Agent
         Public Property ApprovedTools As HashSet(Of String)
         Public Property ApprovedToolCalls As HashSet(Of String)
         Public Property EnforceAllowedTools As Boolean = True
+        Private _officeCapabilityDiscovered As Boolean
 
         Public Shared Function FromSession(session As AgentSession, skill As AgentSkill) As ToolExecutionContext
             Dim context As New ToolExecutionContext With {
@@ -33,8 +34,26 @@ Namespace Agent
                 .EnforceAllowedTools = False
             }
 
-            If skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing Then
-                For Each toolId In skill.RequiredTools
+            ' Skill allowed-tools is the capability/safety boundary. TaskSpec.RequiredTools
+            ' is a planner hint, not an exhaustive authorization list: compound operations
+            ' often need a supporting tool (for example CreateSheet before WriteData).
+            ' A read-only task is the exception because its mutation policy is an explicit
+            ' hard boundary and must exclude every write-capable Skill tool.
+            Dim taskTools = session?.Spec?.RequiredTools
+            Dim requiredTools As IEnumerable(Of String) = Nothing
+            Dim readOnlyTask = String.Equals(If(session?.Spec?.MutationPolicy, ""),
+                                             "read_only",
+                                             StringComparison.OrdinalIgnoreCase)
+            If readOnlyTask AndAlso taskTools IsNot Nothing AndAlso taskTools.Count > 0 Then
+                requiredTools = taskTools
+            ElseIf skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing AndAlso skill.RequiredTools.Count > 0 Then
+                requiredTools = skill.RequiredTools
+            ElseIf taskTools IsNot Nothing AndAlso taskTools.Count > 0 Then
+                requiredTools = taskTools
+            End If
+
+            If requiredTools IsNot Nothing Then
+                For Each toolId In requiredTools
                     If Not String.IsNullOrWhiteSpace(toolId) Then
                         context.AllowedTools.Add(toolId.Trim())
                     End If
@@ -57,6 +76,23 @@ Namespace Agent
             If String.IsNullOrWhiteSpace(toolId) Then Return False
             Return AllowedTools.Contains(toolId.Trim())
         End Function
+
+        ''' <summary>
+        ''' The generic object-operation interface is a second-stage capability. Keeping
+        ''' discovery state in the per-run context prevents a model from bypassing a
+        ''' registered high-level tool with invented COM-shaped commands.
+        ''' </summary>
+        Public Function IsOfficeObjectOperationReady() As Boolean
+            Return _officeCapabilityDiscovered
+        End Function
+
+        Public Sub RecordSuccessfulTool(toolId As String)
+            If String.Equals(If(toolId, "").Trim(),
+                             "DiscoverOfficeCapability",
+                             StringComparison.OrdinalIgnoreCase) Then
+                _officeCapabilityDiscovered = True
+            End If
+        End Sub
 
         Public Function AllowedToolsText() As String
             If AllowedTools Is Nothing OrElse AllowedTools.Count = 0 Then Return ""

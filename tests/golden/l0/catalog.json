@@ -21,7 +21,7 @@
       "expectedHostCalls": 0
     },
     {
-      "id": "S-python-compute-approval",
+      "id": "S-python-compute-controlled",
       "kind": "tool_execution",
       "appType": "Excel",
       "toolId": "PythonCompute",
@@ -30,7 +30,7 @@
         "code": "result = sum(input_data['values'])",
         "input": {"values": [1, 2, 3]}
       },
-      "expectedErrorCode": "SAFETY_NEEDS_APPROVAL",
+      "expectedSuccess": true,
       "expectedHostCalls": 0
     },
     {
@@ -40,6 +40,44 @@
       "toolId": "WriteData",
       "allowedTools": ["WriteData"],
       "expectedErrorCode": "HOST_UNSUPPORTED",
+      "expectedHostCalls": 0
+    },
+    {
+      "id": "S-office-operation-requires-discovery",
+      "kind": "tool_execution",
+      "appType": "Excel",
+      "toolId": "OfficeObjectOperation",
+      "allowedTools": ["DiscoverOfficeCapability", "OfficeObjectOperation"],
+      "params": {
+        "batch": {
+          "schemaVersion": "1.0",
+          "appType": "Excel",
+          "atomic": true,
+          "operations": []
+        }
+      },
+      "expectedErrorCode": "TOOL_NOT_ALLOWED",
+      "expectedRecoverable": true,
+      "expectedHostCalls": 0
+    },
+    {
+      "id": "S-office-operation-invalid-schema-repairs",
+      "kind": "tool_execution",
+      "appType": "Excel",
+      "toolId": "OfficeObjectOperation",
+      "allowedTools": ["DiscoverOfficeCapability", "OfficeObjectOperation"],
+      "successfulPriorTools": ["DiscoverOfficeCapability"],
+      "params": {
+        "batch": {
+          "schemaVersion": "1.0",
+          "appType": "Excel",
+          "commands": [
+            {"command": "CopySheet", "params": {"sourceName": "销售数据"}}
+          ]
+        }
+      },
+      "expectedErrorCode": "OPERATION_SCHEMA_INVALID",
+      "expectedRecoverable": true,
       "expectedHostCalls": 0
     },
     {
@@ -85,6 +123,21 @@
       "id": "C-excel-basic-required-tools",
       "kind": "contract",
       "contractType": "excel_basic_required_tools"
+    },
+    {
+      "id": "C-office-action-followup-routing",
+      "kind": "contract",
+      "contractType": "office_action_followup_routing"
+    },
+    {
+      "id": "C-chat-visible-output-context-query",
+      "kind": "contract",
+      "contractType": "chat_visible_output_context_query"
+    },
+    {
+      "id": "C-agent-stream-progress",
+      "kind": "contract",
+      "contractType": "agent_stream_progress"
     },
     {
       "id": "C-harness-approval-api",

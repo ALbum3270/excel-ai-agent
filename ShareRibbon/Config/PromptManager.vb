@@ -218,6 +218,13 @@ Public Class PromptManager
                 Return True
         End Select
 
+        ' interactionMode is the routing contract. A high-confidence capability or cause
+        ' question remains an answer, while an executable GENERAL_QUERY still needs the
+        ' legacy command format when that compatibility path is used.
+        Dim interactionMode = If(context.IntentResult?.ResponseMode, "").Trim().ToLowerInvariant()
+        If interactionMode = "answer" OrElse interactionMode = "clarify" Then Return False
+        If interactionMode = "execute" Then Return True
+
         ' Office应用始终需要JSON Schema约束
         ' 因为用户请求可能涉及命令操作（如翻译、公式、图表等）
         ' JSON Schema中已说明"对于简单问候或问答，直接用中文回复"
@@ -268,7 +275,11 @@ Public Class PromptManager
         If String.IsNullOrWhiteSpace(constraint) Then Return False
         Select Case If(appType, "").Trim().ToLowerInvariant()
             Case "excel"
-                Return constraint.Contains("【Excel支持的22个命令】")
+                Return constraint.Contains("【Excel支持的22个命令】") OrElse
+                    (constraint.Contains("【Excel command类型】") AndAlso
+                     constraint.Contains("5. CleanData - 清洗数据") AndAlso
+                     constraint.Contains("禁止返回下方未指定的command类型") AndAlso
+                     Not constraint.Contains("CreateSheet"))
             Case "word"
                 Return constraint.Contains("【Word支持的22个命令】")
             Case "powerpoint", "ppt"
@@ -612,44 +623,8 @@ Public Class PromptManager
             .Content = "你是Excel助手。如果用户需求明确且可以执行，返回JSON代码片段；如果用户需求不明确，请先询问用户澄清；对于简单问候或问答，直接用中文回复。"
         })
 
-        ' JSON Schema约束
-        excelApp.JsonSchemaConstraint = "
-【Excel JSON输出格式规范 - 必须严格遵守】
-
-【重要】JSON必须使用Markdown代码块格式返回，例如：
-```json
-{""command"": ""ApplyFormula"", ""params"": {...}}
-```
-禁止直接返回裸JSON文本！
-
-你必须且只能返回以下两种格式之一：
-
-单JSON代码格式：
-```json
-{""command"": ""ApplyFormula"", ""params"": {""targetRange"": ""C1:C{lastRow}"", ""formula"": ""=A1+B1"", ""fillDown"": true}}
-```
-
-多JSON代码格式：
-```json
-{""commands"": [{""command"": ""ApplyFormula"", ""params"": {...}}, {...}]}
-```
-
-【绝对禁止】
-- 禁止使用 actions 数组
-- 禁止使用 operations 数组
-- 禁止省略 params 包装
-- 禁止返回下方未指定的command类型
-- 禁止返回不带代码块的裸JSON
-
-【Excel command类型】
-1. ApplyFormula - 应用公式 (targetRange, formula, fillDown)
-2. WriteData - 写入数据 (targetRange, data)
-3. FormatRange - 格式化范围 (range, style, bold, fontSize, fontColor, bgColor)
-4. CreateChart - 创建图表 (dataRange, chartType, title)
-5. CleanData - 清洗数据 (range, operation: removeDuplicates/fillEmpty/trim)
-
-【动态范围占位符】
-使用 {lastRow} 表示最后一行，系统会自动替换为实际行号"
+        ' 与运行时回退共用同一份默认值，避免新配置再次写入旧版五命令 Prompt。
+        excelApp.JsonSchemaConstraint = GetExcelJsonSchemaConstraintDefault()
 
         Return excelApp
     End Function

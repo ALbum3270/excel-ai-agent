@@ -10,6 +10,107 @@ window.agentCardState = {
     session: null,
     locked: false
 };
+window.agentProgressTimers = window.agentProgressTimers || {};
+
+/**
+ * Create the visible Agent heartbeat before the first model byte arrives.
+ * This panel survives all streaming updates; status updates never replace it.
+ */
+function startAgentProgress(uuid, initialStatus) {
+    if (!uuid) return false;
+
+    const host = document.getElementById('content-' + uuid) ||
+        document.getElementById('agent-stream-host-' + uuid);
+    if (!host) return false;
+
+    let panel = document.getElementById('agent-progress-' + uuid);
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'agent-live-progress';
+        panel.id = 'agent-progress-' + uuid;
+        panel.dataset.startedAt = String(Date.now());
+        panel.dataset.receivedChars = '0';
+        panel.innerHTML = `
+            <div class="agent-progress-line">
+                <span class="agent-progress-spinner" aria-hidden="true"></span>
+                <span class="agent-progress-status" id="agent-progress-status-${uuid}"></span>
+                <span class="agent-progress-elapsed" id="agent-progress-elapsed-${uuid}">0 秒</span>
+            </div>
+            <div class="agent-progress-receipt" id="agent-progress-receipt-${uuid}">等待模型返回首个数据块...</div>
+            <details class="agent-stream-reasoning" id="agent-stream-reasoning-box-${uuid}" open style="display:none;">
+                <summary>💭 思考过程（实时）</summary>
+                <pre id="agent-stream-reasoning-${uuid}"></pre>
+            </details>
+        `;
+        host.appendChild(panel);
+    }
+
+    updateAgentProgressStatus(uuid, initialStatus || '正在处理...');
+    stopAgentProgress(uuid);
+    const startedAt = Number(panel.dataset.startedAt || Date.now());
+    window.agentProgressTimers[uuid] = window.setInterval(() => {
+        const elapsed = document.getElementById('agent-progress-elapsed-' + uuid);
+        if (!elapsed) {
+            stopAgentProgress(uuid);
+            return;
+        }
+        const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        elapsed.textContent = `${seconds} 秒`;
+    }, 1000);
+    return true;
+}
+
+function updateAgentProgressStatus(uuid, status) {
+    if (!uuid) return false;
+    let statusEl = document.getElementById('agent-progress-status-' + uuid);
+    if (!statusEl) {
+        if (!startAgentProgress(uuid, status)) return false;
+        statusEl = document.getElementById('agent-progress-status-' + uuid);
+    }
+    if (statusEl) statusEl.textContent = status || '正在处理...';
+    return !!statusEl;
+}
+
+/**
+ * Append provider deltas without exposing the structured JSON as a chat answer.
+ * reasoning is rendered verbatim; content updates a live receive counter while the
+ * complete content is retained by the backend for safe JSON parsing.
+ */
+function appendAgentStreamDelta(uuid, kind, text) {
+    if (!uuid) return false;
+    let panel = document.getElementById('agent-progress-' + uuid);
+    if (!panel) {
+        if (!startAgentProgress(uuid, '正在接收模型输出...')) return false;
+        panel = document.getElementById('agent-progress-' + uuid);
+    }
+
+    if (kind === 'reasoning' && text) {
+        const box = document.getElementById('agent-stream-reasoning-box-' + uuid);
+        const reasoning = document.getElementById('agent-stream-reasoning-' + uuid);
+        if (box) box.style.display = 'block';
+        if (reasoning) {
+            reasoning.textContent += text;
+            reasoning.scrollTop = reasoning.scrollHeight;
+        }
+    } else if (kind === 'content' && text) {
+        const received = Number(panel.dataset.receivedChars || 0) + text.length;
+        panel.dataset.receivedChars = String(received);
+        const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+        if (receipt) receipt.textContent = `已流式接收 ${received} 字，正在解析执行指令...`;
+    } else if (kind === 'done') {
+        const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+        if (receipt) receipt.textContent = '本轮模型输出接收完成，正在解析并继续执行...';
+    }
+
+    if (typeof contentScroll === 'function') contentScroll();
+    return true;
+}
+
+function stopAgentProgress(uuid) {
+    const timer = window.agentProgressTimers[uuid];
+    if (timer) window.clearInterval(timer);
+    delete window.agentProgressTimers[uuid];
+}
 
 /**
  * 锁定聊天输入（Agent 执行期间）
@@ -89,10 +190,17 @@ function showAgentPlanCard(planData) {
         const timestamp = formatDateTime(new Date());
 
         let chatContainer;
+        let previousReasoning = '';
+        let previousReceived = 0;
         if (planData.replaceThinkingUuid) {
             const thinkingDiv = document.getElementById('content-' + planData.replaceThinkingUuid);
             const parentContainer = thinkingDiv ? thinkingDiv.closest('.chat-container') : null;
             if (parentContainer) {
+                const oldReasoning = document.getElementById('agent-stream-reasoning-' + planData.replaceThinkingUuid);
+                const oldProgress = document.getElementById('agent-progress-' + planData.replaceThinkingUuid);
+                previousReasoning = oldReasoning ? oldReasoning.textContent : '';
+                previousReceived = oldProgress ? Number(oldProgress.dataset.receivedChars || 0) : 0;
+                stopAgentProgress(planData.replaceThinkingUuid);
                 chatContainer = parentContainer;
                 chatContainer.className = 'chat-container agent-card-container';
                 chatContainer.id = 'agent-plan-' + uuid;
@@ -132,6 +240,7 @@ function showAgentPlanCard(planData) {
                 <div class="agent-understanding">
                     <strong>📋 理解：</strong>${escapeHtml(planData.understanding || '')}
                 </div>
+                <div class="agent-stream-host" id="agent-stream-host-${uuid}"></div>
                 <div class="agent-steps-container">
                     <div class="agent-steps-header">
                         <span>📝 执行计划</span>
@@ -166,6 +275,15 @@ function showAgentPlanCard(planData) {
             if (chatHistoryContainer) {
                 chatHistoryContainer.appendChild(chatContainer);
             }
+        }
+
+        startAgentProgress(uuid, '规划完成，正在准备执行...');
+        if (previousReasoning) appendAgentStreamDelta(uuid, 'reasoning', previousReasoning);
+        if (previousReceived > 0) {
+            const progressPanel = document.getElementById('agent-progress-' + uuid);
+            const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+            if (progressPanel) progressPanel.dataset.receivedChars = String(previousReceived);
+            if (receipt) receipt.textContent = `已流式接收 ${previousReceived} 字，正在继续执行...`;
         }
 
         chatContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -434,6 +552,7 @@ function refineAgentPlan(uuid) {
  * 终止 Agent
  */
 function abortAgent(uuid) {
+    stopAgentProgress(uuid);
     updateAgentStatus(uuid, 'aborted', '已终止');
     const actions = document.getElementById('agent-actions-' + uuid);
     if (actions) {
@@ -476,6 +595,8 @@ function updateAgentStatus(uuid, status, text) {
  */
 function completeAgent(uuid, success, message, thinkingUuid) {
     try {
+        stopAgentProgress(uuid);
+        if (thinkingUuid) stopAgentProgress(thinkingUuid);
         const statusBar = document.getElementById('agent-status-' + uuid);
         if (statusBar) {
             const icon = success ? '✅' : '❌';
@@ -541,6 +662,10 @@ window.refineAgentPlan = refineAgentPlan;
 window.abortAgent = abortAgent;
 window.updateAgentStatus = updateAgentStatus;
 window.completeAgent = completeAgent;
+window.startAgentProgress = startAgentProgress;
+window.updateAgentProgressStatus = updateAgentProgressStatus;
+window.appendAgentStreamDelta = appendAgentStreamDelta;
+window.stopAgentProgress = stopAgentProgress;
 window.lockChatInput = lockChatInput;
 window.unlockChatInput = unlockChatInput;
 window.restoreAgentRequestUi = restoreAgentRequestUi;

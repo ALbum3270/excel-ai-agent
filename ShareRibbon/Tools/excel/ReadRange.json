@@ -5,6 +5,7 @@
   "appType": "excel",
   "category": "读取操作",
   "riskLevel": "safe",
+  "accessMode": "read",
   "isVbaFallback": false,
   "parameters": [
     {

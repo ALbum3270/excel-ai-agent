@@ -75,7 +75,7 @@ Public Class ExcelJsonCommandSchema
     },
     {
       ""command"": ""FormatRange"",
-      ""params"": { ""range"": ""A1:C1"", ""style"": ""header"" }
+      ""params"": { ""range"": ""A1:C1"", ""bold"": true, ""backgroundColor"": ""#4472C4"", ""fontColor"": ""#FFFFFF"", ""horizontalAlignment"": ""center"" }
     }
   ]
 }
@@ -92,7 +92,7 @@ Public Class ExcelJsonCommandSchema
 === 基础操作 (5个) ===
 1. ApplyFormula: targetRange(必需), formula(必需), fillDown(可选)
 2. WriteData: targetRange(必需), data(必需,可以是单值或二维数组)
-3. FormatRange: range(必需), style(可选:header/total/data), bold/italic/fontSize/backgroundColor/fontColor(可选), borders(可选:true/""all""/""outline""/""none"")
+3. FormatRange: range(必需), numberFormat(可选, Excel格式代码如""#,##0""/""0.00%""/""yyyy-mm-dd""), bold/italic/fontSize/backgroundColor/fontColor(可选), borders(可选:all/thin/outline/none), horizontalAlignment(可选:left/center/right/general), verticalAlignment(可选:top/center/bottom), wrapText(可选)。数字、日期、百分比、货币显示必须使用numberFormat，不得用style预设代替
 4. CreateChart: dataRange(必需), type(可选:column/line/pie/bar/scatter/area), title(可选), position(可选), seriesNames(可选,系列名称数组如[""2022"",""2021""]), categoryAxis(可选,分类轴范围如""B2:B7""), legendPosition(可选:right/left/top/bottom)
 5. CleanData: range(必需), operation(必需:removeduplicates/fillempty/trim/replace), fillValue/findText/replaceText(按需)
 
@@ -523,6 +523,15 @@ Public Class ExcelJsonCommandSchema
             Return False
         End If
 
+        Dim explicitProperties As String() = {
+            "numberFormat", "bold", "italic", "fontSize", "backgroundColor", "fontColor",
+            "borders", "horizontalAlignment", "verticalAlignment", "wrapText"
+        }
+        If Not explicitProperties.Any(Function(name) params(name) IsNot Nothing) Then
+            errorMessage = "FormatRange至少需要一个明确格式属性；不再接受含义不稳定的style预设"
+            Return False
+        End If
+
         Return True
     End Function
 
@@ -716,9 +725,9 @@ Public Class ExcelJsonCommandSchema
     ''' 校验CreateSheet命令参数
     ''' </summary>
     Private Shared Function ValidateCreateSheet(params As JToken, ByRef errorMessage As String) As Boolean
-        Dim name = params("name")?.ToString()
+        Dim name = If(params("name")?.ToString(), params("sheetName")?.ToString())
         If String.IsNullOrEmpty(name) Then
-            errorMessage = "CreateSheet缺少name参数"
+            errorMessage = "CreateSheet缺少name参数（也可使用sheetName）"
             Return False
         End If
         Return True

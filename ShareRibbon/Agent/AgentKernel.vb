@@ -240,12 +240,20 @@ Namespace Agent
                 If matchedSkill Is Nothing Then matchedSkill = SelectSkillForRequest(userRequest, appType)
                 If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
                 Dim executionContext As ToolExecutionContext = ToolExecutionContext.FromSession(_session, matchedSkill)
+                AppLogger.Info("AgentKernel",
+                               $"Primary skill={If(matchedSkill?.Name, "none")} " &
+                               $"allowedTools={executionContext.AllowedToolsText()} " &
+                               $"taskHints={String.Join(",", If(_session.Spec?.RequiredTools, New List(Of String)()))}")
 
                 ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
                 Dim contextText = contextPack.ToPromptText()
+                Dim executionTools = _toolRegistry.GetVisibleTools(appType, executionContext)
+                Dim planningTools = AgentPlanningScope.SelectTools(executionTools, _session.Spec)
+                AppLogger.Info("AgentKernel",
+                               $"Planning tool view count={planningTools.Count} executionToolCount={executionTools.Count}")
                 Dim systemPrompt = _promptManager.BuildSystemPrompt(
                     appType,
-                    _toolRegistry.GetVisibleTools(appType, executionContext),
+                    planningTools,
                     _memory,
                     contextText
                 )

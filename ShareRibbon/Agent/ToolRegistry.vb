@@ -16,6 +16,11 @@ Namespace Agent
         Public Property AppType As String              ' "excel" / "word" / "powerpoint" / "common"
         Public Property Category As String             ' "基础操作" / "数据操作" / "高级功能"
         Public Property RiskLevel As String = "safe"   ' "safe" / "medium" / "risky"
+        ''' <summary>
+        ''' Declares whether the tool only reads state, performs isolated computation, or
+        ''' may mutate external state. Safety policy must not infer this from localized names.
+        ''' </summary>
+        Public Property AccessMode As String = "write" ' "read" / "compute" / "write"
         Public Property AvailabilityStatus As String = "available" ' "available" / "unavailable" / "error"
         Public Property LastError As String = ""
         Public Property IsVbaFallback As Boolean = False
@@ -218,6 +223,7 @@ Namespace Agent
                 .AppType = "common",
                 .Category = "记忆工具",
                 .RiskLevel = "safe",
+                .AccessMode = "read",
                 .Parameters = New List(Of ToolParam) From {
                     New ToolParam With {.Name = "keyword", .Type = "string", .Required = True, .Description = "要检索的关键词或自然语言问题"},
                     New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
@@ -232,6 +238,7 @@ Namespace Agent
                 .AppType = "common",
                 .Category = "记忆工具",
                 .RiskLevel = "safe",
+                .AccessMode = "read",
                 .Parameters = New List(Of ToolParam) From {
                     New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
                     New ToolParam With {.Name = "limit", .Type = "integer", .Required = False, .Description = "最多返回条数，默认 10"}
@@ -345,6 +352,11 @@ Namespace Agent
                 If String.IsNullOrWhiteSpace(existing.Name) Then existing.Name = tool.Name
                 If existing.Parameters Is Nothing OrElse existing.Parameters.Count = 0 Then existing.Parameters = tool.Parameters
                 If String.IsNullOrWhiteSpace(existing.Category) OrElse existing.Category = "基础操作" Then existing.Category = tool.Category
+                If Not String.IsNullOrWhiteSpace(tool.AccessMode) AndAlso
+                   (String.IsNullOrWhiteSpace(existing.AccessMode) OrElse
+                    String.Equals(existing.AccessMode, "write", StringComparison.OrdinalIgnoreCase)) Then
+                    existing.AccessMode = tool.AccessMode
+                End If
                 If String.Equals(existing.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) AndAlso
                    Not String.Equals(tool.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) Then
                     existing.RiskLevel = tool.RiskLevel
@@ -502,6 +514,7 @@ Namespace Agent
             Dim direct = GetTool(original)
             If direct IsNot Nothing AndAlso SupportsApp(direct, appType) Then
                 toolCall.ToolId = direct.Id
+                NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
                 Return True
             End If
 
@@ -510,6 +523,7 @@ Namespace Agent
                 Dim aliasTool = GetTool(aliasId)
                 If aliasTool IsNot Nothing AndAlso SupportsApp(aliasTool, appType) Then
                     toolCall.ToolId = aliasTool.Id
+                    NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
                     Return True
                 End If
             End If
@@ -520,6 +534,7 @@ Namespace Agent
                 ToList()
             If matches.Count = 1 Then
                 toolCall.ToolId = matches(0).Id
+                NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
                 message = $"已将工具 {original} 规范化为 {toolCall.ToolId}"
                 Return True
             End If
@@ -528,6 +543,22 @@ Namespace Agent
             message = $"未找到工具: {original}。只能使用当前 {If(appType, "Office")} 已注册工具，例如: {available}"
             Return False
         End Function
+
+        ''' <summary>
+        ''' Normalize common model-produced parameter aliases before schema validation and
+        ''' execution. The canonical CreateSheet contract uses "name", while some providers
+        ''' emit the semantically equivalent "sheetName".
+        ''' </summary>
+        Private Shared Sub NormalizeBuiltInParameters(toolId As String, params As JObject)
+            If params Is Nothing OrElse String.IsNullOrWhiteSpace(toolId) Then Return
+
+            Select Case toolId.Trim().ToLowerInvariant()
+                Case "createsheet" ' CreateSheet: accept sheetName as an alias of name.
+                    If params("name") Is Nothing AndAlso params("sheetName") IsNot Nothing Then
+                        params("name") = params("sheetName").DeepClone()
+                    End If
+            End Select
+        End Sub
 
         Private Shared Function NormalizeToolKey(value As String) As String
             If String.IsNullOrWhiteSpace(value) Then Return ""
@@ -664,6 +695,20 @@ Namespace Agent
             If tool Is Nothing Then
                 sw.Stop()
                 Return ToolResult.Failed(toolId, $"未找到工具: {toolId}")
+            End If
+
+            If executionContext IsNot Nothing AndAlso
+               String.Equals(tool.Id, "OfficeObjectOperation", StringComparison.OrdinalIgnoreCase) AndAlso
+               Not executionContext.IsOfficeObjectOperationReady() Then
+                sw.Stop()
+                Dim message = "OfficeObjectOperation 仅用于已发现的长尾能力；请先调用 DiscoverOfficeCapability。已有专用工具时直接调用专用工具。"
+                Return ToolResult.Failed(tool.Id,
+                                         message,
+                                         New With {.requiredPriorTool = "DiscoverOfficeCapability"},
+                                         ExceptionClassifier.CodeToolNotAllowed,
+                                         message,
+                                         message,
+                                         recoverable:=True)
             End If
 
             ' VBA 默认禁用是全局安全边界，应先于宿主兼容性判断。
@@ -874,6 +919,9 @@ Namespace Agent
                     End If
                     If String.IsNullOrWhiteSpace(hostResult.ToolId) Then hostResult.ToolId = toolId
                     If hostResult.ElapsedMs <= 0 Then hostResult.ElapsedMs = sw.ElapsedMilliseconds
+                    If hostResult.Success AndAlso executionContext IsNot Nothing Then
+                        executionContext.RecordSuccessfulTool(tool.Id)
+                    End If
                     Return hostResult
                 Catch ex As Exception
                     sw.Stop()
@@ -897,6 +945,11 @@ Namespace Agent
             Dim message = If(String.IsNullOrWhiteSpace(decision.UserMessage),
                              decision.Reason,
                              decision.UserMessage)
+            ' A declarative schema error occurs before any host mutation, so the agent can
+            ' safely repair the batch. Policy denials and rejected approvals remain terminal.
+            Dim recoverable = String.Equals(errorCode,
+                                            ExceptionClassifier.CodeOperationSchemaInvalid,
+                                            StringComparison.OrdinalIgnoreCase)
             AppLogger.Warn("ToolRegistry", $"Safety denied toolId={tool.Id} action={decision.Action} code={errorCode}: {AppLogger.Redact(decision.Reason)}")
             Return ToolResult.Failed(tool.Id,
                                      message,
@@ -908,7 +961,7 @@ Namespace Agent
                                      errorCode,
                                      message,
                                      decision.Reason,
-                                     recoverable:=False)
+                                     recoverable:=recoverable)
         End Function
 
         Private Async Function ExecuteMemoryToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)

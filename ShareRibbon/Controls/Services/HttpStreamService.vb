@@ -21,6 +21,8 @@ Public Class HttpStreamService
     Private ReadOnly _stateService As ChatStateService
     Private ReadOnly _getApplication As Func(Of ApplicationInfo)
     Private ReadOnly _executeScript As Func(Of String, Task)
+    Private ReadOnly _getLocalTools As Func(Of JArray)
+    Private ReadOnly _executeLocalTool As Func(Of String, JObject, Task(Of Agent.ToolResult))
 
     ' MCP 工具调用相关
     Private ReadOnly _pendingToolCalls As New Dictionary(Of String, JObject)()
@@ -32,6 +34,7 @@ Public Class HttpStreamService
     Private Const STREAM_FLUSH_MIN_CHARS As Integer = 96
     Private Shared ReadOnly STREAM_FLUSH_INTERVAL As TimeSpan = TimeSpan.FromMilliseconds(80)
     Private _originalRequestMessages As JArray = Nothing
+    Private _executedToolCallCount As Integer = 0
 
     ' 流处理状态
     Private _mainStreamCompleted As Boolean = False
@@ -78,7 +81,9 @@ Public Class HttpStreamService
                        Optional waitForRendererMap As Func(Of String, Task) = Nothing,
                        Optional onStreamComplete As Action(Of String, System.Text.StringBuilder) = Nothing,
                        Optional onAgentContent As Action(Of String) = Nothing,
-                       Optional onAgentCompleted As Action = Nothing)
+                       Optional onAgentCompleted As Action = Nothing,
+                       Optional getLocalTools As Func(Of JArray) = Nothing,
+                       Optional executeLocalTool As Func(Of String, JObject, Task(Of Agent.ToolResult)) = Nothing)
         _stateService = stateService
         _getApplication = getApplication
         _executeScript = executeScript
@@ -86,6 +91,8 @@ Public Class HttpStreamService
         _onStreamComplete = onStreamComplete
         _onAgentContent = onAgentContent
         _onAgentCompleted = onAgentCompleted
+        _getLocalTools = getLocalTools
+        _executeLocalTool = executeLocalTool
     End Sub
 
     Public Sub CancelRequest(Optional requestUuid As String = Nothing)
@@ -441,6 +448,7 @@ Public Class HttpStreamService
         _mainStreamCompleted = False
         _pendingMcpTasks = 0
         _toolCallIterations = 0
+        _executedToolCallCount = 0
         _originalRequestMessages = Nothing
         _stateService.ResetSessionTokens()
 
@@ -571,6 +579,11 @@ Public Class HttpStreamService
                     End Using
                 End Using
             End Using
+
+            ' Some compatible models serialize a function envelope in assistant content
+            ' instead of using the native tool_calls field. Treat both representations as
+            ' the same execution request after the complete response is available.
+            Await ProcessAssistantContentToolCallAsync(responseUuid, originQuestion)
         Catch ex As OperationCanceledException
             Debug.WriteLine($"[HttpStream] 请求已取消: {requestUuid}")
             StopStream = True
@@ -839,7 +852,7 @@ Public Class HttpStreamService
                         }
                 End If
 
-                ' 处理推理内容
+                ' 处理推理内容（单独渲染，正文到达后由前端自动折叠）
                 Dim reasoning_content As String = Nothing
                 If jsonObj("choices") IsNot Nothing AndAlso jsonObj("choices").Count > 0 Then
                     reasoning_content = jsonObj("choices")(0)("delta")("reasoning_content")?.ToString()
@@ -1043,6 +1056,24 @@ Public Class HttpStreamService
                 _currentMarkdownBuffer.Append($"<br/>**正在调用工具: {toolName}**<br/>参数: `{argumentsObj.ToString(Newtonsoft.Json.Formatting.None)}`<br/>")
                 Await FlushBufferAsync("content", uuid)
 
+                ' Native Office tools and MCP tools share one model-facing tool channel.
+                ' The registered local runtime gets first refusal; unknown names continue
+                ' through the existing MCP resolution path.
+                If _executeLocalTool IsNot Nothing Then
+                    Dim localResult = Await _executeLocalTool(toolName, argumentsObj)
+                    If localResult IsNot Nothing Then
+                        _executedToolCallCount += 1
+                        allToolCalls.Add(toolCall)
+                        allToolResults.Add(ToModelToolResult(localResult))
+                        _currentMarkdownBuffer.Append(
+                            If(localResult.Success,
+                               $"<br/>✅ {If(localResult.UserMessage, localResult.Message)}<br/>",
+                               $"<br/>❌ {If(localResult.UserMessage, localResult.Message)}<br/>"))
+                        Await FlushBufferAsync("content", uuid)
+                        Continue For
+                    End If
+                End If
+
                 ' 获取 MCP 连接
                 Dim chatSettings As New ChatSettings(_getApplication())
                 Dim enabledMcpList = chatSettings.EnabledMcpList
@@ -1099,6 +1130,80 @@ Public Class HttpStreamService
             _completedToolCalls.Clear()
         Catch ex As Exception
         End Try
+    End Function
+
+    ''' <summary>
+    ''' Executes an exact structured tool envelope returned as assistant text, then feeds the
+    ''' observation back through the same ReAct continuation used by native tool_calls.
+    ''' </summary>
+    Private Async Function ProcessAssistantContentToolCallAsync(uuid As String,
+                                                                originQuestion As String) As Task
+        If _executeLocalTool Is Nothing OrElse _executedToolCallCount > 0 Then Return
+
+        Dim callInfo As Agent.ToolCall = Nothing
+        Dim content = _stateService.PlainMarkdownBuffer.ToString()
+        If Not ChatToolCallParser.TryParse(content, callInfo) Then Return
+
+        Dim result = Await _executeLocalTool(callInfo.ToolId, callInfo.Parameters)
+        If result Is Nothing Then Return
+
+        _executedToolCallCount += 1
+        _currentMarkdownBuffer.Append($"<br/>**正在调用工具: {callInfo.ToolId}**<br/>")
+        _currentMarkdownBuffer.Append(
+            If(result.Success,
+               $"✅ {If(result.UserMessage, result.Message)}<br/>",
+               $"❌ {If(result.UserMessage, result.Message)}<br/>"))
+        Await FlushBufferAsync("content", uuid, True)
+
+        Dim syntheticCall As New JObject From {
+            {"realId", "content_tool_" & Guid.NewGuid().ToString("N")},
+            {"function", New JObject From {
+                {"name", callInfo.ToolId},
+                {"arguments", callInfo.Parameters.ToString(Formatting.None)}
+            }}
+        }
+        _pendingMcpTasks += 1
+        Await SendToolResultForReActAsync(
+            New List(Of JObject) From {syntheticCall},
+            New List(Of JObject) From {ToModelToolResult(result)},
+            uuid,
+            originQuestion,
+            ConfigSettings.ApiUrl,
+            ConfigSettings.ApiKey,
+            ConfigSettings.ApiUrl.Contains("anthropic.com"))
+    End Function
+
+    Private Shared Function ToModelToolResult(result As Agent.ToolResult) As JObject
+        If result Is Nothing Then Return CreateErrorResponseStatic("工具执行器未返回结果")
+
+        Dim response As New JObject From {
+            {"success", result.Success},
+            {"toolId", If(result.ToolId, "")},
+            {"message", If(result.UserMessage, result.Message)},
+            {"errorCode", If(result.ErrorCode, "")}
+        }
+        AddSerializableValue(response, "data", result.Data)
+        AddSerializableValue(response, "observation", result.Observation)
+        If Not result.Success Then response("isError") = True
+        Return response
+    End Function
+
+    Private Shared Sub AddSerializableValue(target As JObject, name As String, value As Object)
+        If target Is Nothing OrElse value Is Nothing Then Return
+        Try
+            Dim token = TryCast(value, JToken)
+            target(name) = If(token Is Nothing, JToken.FromObject(value), token.DeepClone())
+        Catch
+            target(name) = value.ToString()
+        End Try
+    End Sub
+
+    Private Shared Function CreateErrorResponseStatic(errorMessage As String) As JObject
+        Return New JObject From {
+            {"isError", True},
+            {"success", False},
+            {"errorMessage", errorMessage}
+        }
     End Function
 
     ''' <summary>
@@ -1399,14 +1504,24 @@ Public Class HttpStreamService
     End Function
 
     ''' <summary>
-    ''' 构建工具数组
+    ''' 构建统一工具数组（本地 Office + MCP）
     ''' </summary>
     Private Function BuildToolsArray() As JArray
-        Dim toolsArray As JArray = Nothing
+        Dim toolsArray As New JArray()
+        Dim names As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+
+        If _getLocalTools IsNot Nothing Then
+            Dim localTools = _getLocalTools()
+            If localTools IsNot Nothing Then
+                For Each tool In localTools
+                    AddUniqueTool(toolsArray, names, tool)
+                Next
+            End If
+        End If
+
         Dim chatSettings As New ChatSettings(_getApplication())
 
         If chatSettings.EnabledMcpList IsNot Nothing AndAlso chatSettings.EnabledMcpList.Count > 0 Then
-            toolsArray = New JArray()
             Dim connections = MCPConnectionManager.LoadConnections()
 
             For Each mcpName In chatSettings.EnabledMcpList
@@ -1414,15 +1529,24 @@ Public Class HttpStreamService
                 If connection IsNot Nothing Then
                     If connection.Tools IsNot Nothing AndAlso connection.Tools.Count > 0 Then
                         For Each toolObj In connection.Tools
-                            toolsArray.Add(toolObj)
+                            AddUniqueTool(toolsArray, names, toolObj)
                         Next
                     End If
                 End If
             Next
         End If
 
-        Return toolsArray
+        Return If(toolsArray.Count = 0, Nothing, toolsArray)
     End Function
+
+    Private Shared Sub AddUniqueTool(target As JArray,
+                                     names As HashSet(Of String),
+                                     tool As JToken)
+        If target Is Nothing OrElse names Is Nothing OrElse tool Is Nothing Then Return
+        Dim name = tool("function")?("name")?.ToString()
+        If String.IsNullOrWhiteSpace(name) OrElse Not names.Add(name) Then Return
+        target.Add(tool.DeepClone())
+    End Sub
 
     ''' <summary>
     ''' 转义问题字符串

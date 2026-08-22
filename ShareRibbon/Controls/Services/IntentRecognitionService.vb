@@ -474,6 +474,10 @@ Public Class IntentRecognitionService
                 If llmResult IsNot Nothing Then
                     ' 使用LLM的置信度（这是核心改动）
                     result.Confidence = llmResult.Confidence
+                    ' interactionMode 与封闭意图枚举正交，必须保留，否则“新增工作表”等
+                    ' 开放式 Office 操作会被 GENERAL_QUERY 错误路由到普通聊天。
+                    result.ResponseMode = llmResult.ResponseMode
+                    result.RequestedOutputs = llmResult.RequestedOutputs
 
                     ' 如果LLM的意图类型判断更可信，也使用LLM的意图
                     If llmResult.Confidence > 0.3 Then
@@ -517,26 +521,9 @@ Public Class IntentRecognitionService
             Dim apiKey = cfg.key
             Dim modelName = selectedModel.modelName
 
-            ' 构建上下文信息
-            Dim contextInfo As String = ""
-            If context IsNot Nothing Then
-                If context("sheetName") IsNot Nothing Then
-                    contextInfo &= $"当前工作表: {context("sheetName")}" & vbCrLf
-                End If
-                If context("selectionAddress") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selectionAddress").ToString()) Then
-                    contextInfo &= $"选中区域: {context("selectionAddress")}" & vbCrLf
-                End If
-                If context("selection") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selection").ToString()) Then
-                    contextInfo &= $"选中内容预览:" & vbCrLf & context("selection").ToString() & vbCrLf
-                End If
-                ' 阶段四：内容区引用摘要与 RAG 记忆
-                If context("referenceSummary") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("referenceSummary").ToString()) Then
-                    contextInfo &= "用户引用: " & context("referenceSummary").ToString() & vbCrLf
-                End If
-                If context("ragSnippets") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("ragSnippets").ToString()) Then
-                    contextInfo &= "相关记忆:" & vbCrLf & context("ragSnippets").ToString() & vbCrLf
-                End If
-            End If
+            ' BuildContextSnapshot 已经把宿主读取到的完整 OfficeContext 放入
+            ' officeContext。这里必须继续传给意图模型，不能只保留当前单元格。
+            Dim contextInfo = BuildIntentContextInfo(context)
 
             ' 增强版提示词：构建更智能的意图识别系统提示词
             Dim systemPrompt = GetEnhancedIntentRecognitionSystemPrompt()
@@ -588,7 +575,52 @@ Public Class IntentRecognitionService
         End Try
 
         Return result
-    End Function
+        End Function
+
+        ''' <summary>
+        ''' 将用于路由的结构化上下文压平成意图模型可读文本。
+        ''' 保持为纯函数，便于回归测试“宿主已观察到数据但意图层看不到”的问题。
+        ''' </summary>
+        Private Shared Function BuildIntentContextInfo(context As JObject) As String
+            If context Is Nothing Then Return ""
+
+            Dim sb As New System.Text.StringBuilder()
+            If context("sheetName") IsNot Nothing Then
+                sb.AppendLine($"当前工作表: {context("sheetName")}")
+            End If
+            If context("selectionAddress") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selectionAddress").ToString()) Then
+                sb.AppendLine($"选中区域: {context("selectionAddress")}")
+            End If
+            If context("selection") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selection").ToString()) Then
+                sb.AppendLine("选中内容预览:")
+                sb.AppendLine(context("selection").ToString())
+            End If
+            If context("officeContext") IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(context("officeContext").ToString()) Then
+                sb.AppendLine("插件实时读取的结构化 Office 上下文:")
+                sb.AppendLine(context("officeContext").ToString())
+            End If
+            If context("referenceSummary") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("referenceSummary").ToString()) Then
+                sb.AppendLine("用户引用: " & context("referenceSummary").ToString())
+            End If
+            If context("ragSnippets") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("ragSnippets").ToString()) Then
+                sb.AppendLine("相关记忆:")
+                sb.AppendLine(context("ragSnippets").ToString())
+            End If
+            Dim availableTools = TryCast(context("availableTools"), JArray)
+            If availableTools IsNot Nothing AndAlso availableTools.Count > 0 Then
+                sb.AppendLine("当前运行时已注册工具（能力判断以此清单为准）:")
+                For Each tool In availableTools
+                    sb.Append("- ").Append(tool?("id")?.ToString())
+                    Dim toolName = tool?("name")?.ToString()
+                    If Not String.IsNullOrWhiteSpace(toolName) Then sb.Append("（").Append(toolName).Append("）")
+                    Dim availability = tool?("availability")?.ToString()
+                    If Not String.IsNullOrWhiteSpace(availability) Then sb.Append(" [").Append(availability).Append("]")
+                    sb.AppendLine()
+                Next
+                sb.AppendLine("不得声称上述 available 工具不存在；工具是否执行由后续统一工具运行时决定。")
+            End If
+            Return sb.ToString().TrimEnd()
+        End Function
 
     ''' <summary>
     ''' 获取增强版意图识别系统提示词 - 根据AppType返回不同的提示词
@@ -622,6 +654,8 @@ Public Class IntentRecognitionService
   ""intentType"": ""DATA_ANALYSIS"",
   ""confidence"": 0.92,
   ""description"": ""用户想要对选中区域进行统计分析，计算平均值和总和"",
+  ""interactionMode"": ""execute"",
+  ""requestedOutputs"": [""table""],
   ""requiresConfirmation"": false,
   ""suggestedAction"": ""直接执行统计计算"",
   ""executionPriority"": ""high"",
@@ -645,6 +679,17 @@ Public Class IntentRecognitionService
 - GENERAL_QUERY: 一般问答（不需要操作Excel）
 - UNCLEAR: 意图不明确，需要进一步询问
 - MULTI_STEP_TASK: 多步骤复杂任务（需使用Ralph Loop）
+
+【交互模式 - 必填】
+- interactionMode必须是 execute、answer、clarify 之一，并且独立于intentType。
+- 用户要求修改当前Excel（包括格式、公式、图表、工作表、数据写入）时用execute。
+- 用户询问原因、能力或操作方法时用answer；只有缺少阻塞执行的信息时才用clarify。
+- 用户要求基于当前工作簿数据进行统计、查询或比较，即使同时说【只回答】【不写入】，intentType仍为DATA_ANALYSIS；interactionMode可为answer，但这只禁止修改，不禁止后续只读工具获取精确数据。
+- 当前Office上下文若已经包含表区域、使用区域、表头或数据预览，表示插件已经观察到这些数据；不得因为光标位于表外或单个空白单元格就要求用户重复提供列范围。
+- 用户明确要求生成图表，且上下文已有可识别的表区域和对应表头时，必须用execute并从已观察区域推断源范围。
+- requestedOutputs列出执行后必须验证的产物，例如table、chart、formatted_content、worksheet。
+- 如果操作没有精确匹配的intentType，可以保留GENERAL_QUERY，但interactionMode仍必须为execute。
+- 例如【新增一个名为汇总的工作表】 → GENERAL_QUERY, interactionMode=execute, requestedOutputs=[""worksheet""]。
 
 【智能判断规则】
 1. **置信度评估**：

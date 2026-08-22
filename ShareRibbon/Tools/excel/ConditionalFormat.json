@@ -1,7 +1,7 @@
 {
   "id": "ConditionalFormat",
   "name": "条件格式",
-  "description": "为单元格范围添加条件格式",
+  "description": "为单元格范围添加条件格式；highlight 会按 condition 中的运算符和值设置单元格规则",
   "appType": "excel",
   "category": "数据操作",
   "riskLevel": "safe",
@@ -23,13 +23,13 @@
       "name": "condition",
       "type": "string",
       "required": false,
-      "description": "条件表达式"
+      "description": "highlight 的比较条件，例如 >2500、>=2500、<2500、<=2500、=2500 或 <>2500"
     },
     {
       "name": "color",
       "type": "string",
       "required": false,
-      "description": "颜色"
+      "description": "填充色，使用 #RRGGBB（推荐）或名称，例如 #90EE90、lightgreen、浅绿色"
     }
   ]
 }

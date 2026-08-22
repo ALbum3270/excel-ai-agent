@@ -58,9 +58,18 @@ Namespace Context
                     summary.AppendLine($"使用区域: {GetRangeAddress(usedRange)}")
                     summary.AppendLine($"使用区域规模: {usedRange.Rows.Count} 行 x {usedRange.Columns.Count} 列")
                     summary.AppendLine(BuildHeaderSummary(usedRange))
+                    summary.AppendLine("识别数据区域预览（最多前 8 行 x 8 列）:")
+                    summary.AppendLine(BuildRangePreview(usedRange, 8, 8))
                     summary.AppendLine(BuildFormulaSummary(usedRange))
                     summary.AppendLine(BuildQualitySummary(usedRange))
-                    summary.AppendLine($"推荐默认工作范围: {If(selectedRange IsNot Nothing, GetRangeAddress(selectedRange), GetRangeAddress(usedRange))}")
+                    Dim recommendedRange = GetRangeAddress(usedRange)
+                    If tableRegion IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
+                        recommendedRange = $"{tableRegion.Sheet}!{tableRegion.Address}"
+                    End If
+                    summary.AppendLine($"推荐默认工作范围: {recommendedRange}")
+                    If selectedRange IsNot Nothing Then
+                        summary.AppendLine($"当前选区可作为明确写入/格式目标: {GetRangeAddress(selectedRange)}")
+                    End If
                     summary.AppendLine($"推荐输出位置: {GetSuggestedOutputCell(usedRange)}")
                 End If
 
