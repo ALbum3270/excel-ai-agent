@@ -179,6 +179,16 @@ Namespace Agent
             Else
                 spec.Goal = If(String.IsNullOrWhiteSpace(input), "自动分析当前 Office 上下文并选择合适处理方式", input)
             End If
+            Dim authoritativeRawRequest = input
+            If priorTask?.GoalContract IsNot Nothing AndAlso
+               Not String.IsNullOrWhiteSpace(priorTask.GoalContract.RawUserRequest) Then
+                authoritativeRawRequest = priorTask.GoalContract.RawUserRequest & vbCrLf & input
+            ElseIf priorTask IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(priorTask.RawUserRequest) Then
+                authoritativeRawRequest = priorTask.RawUserRequest & vbCrLf & input
+            End If
+            If String.IsNullOrWhiteSpace(authoritativeRawRequest) Then authoritativeRawRequest = spec.Goal
+            spec.CaptureRawUserRequest(authoritativeRawRequest)
+
             If isNonExecution Then
                 spec.TargetObject = "用户问题"
             ElseIf isReadOnlyDataAnswer Then

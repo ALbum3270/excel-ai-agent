@@ -214,8 +214,33 @@ Namespace Agent
 
             If session.Spec IsNot Nothing Then
                 sb.AppendLine()
-                sb.AppendLine("【开放式任务规格（权威）】")
-                sb.AppendLine($"目标: {session.Spec.Goal}")
+                If session.Spec.GoalContract IsNot Nothing Then
+                    sb.AppendLine("【冻结目标合同（唯一语义权威）】")
+                    sb.AppendLine("[Planner/Replan may choose or replace strategy, but MUST NOT relax or replace this GoalContract]")
+                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}")
+                    sb.AppendLine($"Raw user request: {session.Spec.GoalContract.RawUserRequest}")
+                    sb.AppendLine("Source clauses:")
+                    For Each sourceClause In session.Spec.GoalContract.SourceClauses
+                        sb.AppendLine($"- {sourceClause.Id}: {sourceClause.Text}")
+                    Next
+                    sb.AppendLine("Required criteria:")
+                    For Each criterion In session.Spec.GoalContract.Criteria.Where(Function(item) item.Required)
+                        sb.AppendLine($"- {criterion.Id} [{criterion.Kind}]: {criterion.Statement}; source=[{String.Join(",", criterion.SourceClauseIds)}]")
+                    Next
+                    If session.Spec.GoalContract.Constraints.Count > 0 Then
+                        sb.AppendLine("Required constraints:")
+                        For Each constraint In session.Spec.GoalContract.Constraints.Where(Function(item) item.Required)
+                            sb.AppendLine($"- {constraint.Id} [{constraint.Kind}]: {constraint.Statement}; source=[{String.Join(",", constraint.SourceClauseIds)}]")
+                        Next
+                    End If
+                    If session.Spec.GoalContract.RequiredCapabilities.Count > 0 Then
+                        sb.AppendLine("Required capabilities: " & String.Join(", ", session.Spec.GoalContract.RequiredCapabilities))
+                    End If
+                End If
+                sb.AppendLine()
+                sb.AppendLine("【任务规格投影（非权威规划提示）】")
+                sb.AppendLine("[This projection and the legacy OutcomeContract may guide planning/verification, but MUST NOT redefine the frozen goal]")
+                sb.AppendLine($"目标: {If(session.Spec.GoalContract?.RawUserRequest, session.Spec.Goal)}")
                 sb.AppendLine($"目标对象: {session.Spec.TargetObject}")
                 sb.AppendLine($"复杂度: {session.Spec.Complexity}; 风险: {session.Spec.RiskLevel}")
                 sb.AppendLine($"文档修改策略: {session.Spec.MutationPolicy}")
@@ -319,9 +344,30 @@ Namespace Agent
             sb.AppendLine()
             If session IsNot Nothing Then
                 sb.AppendLine("【最终目标】")
-                sb.AppendLine(If(session.Spec?.Goal, session.UserRequest))
+                If session.Spec?.GoalContract IsNot Nothing Then
+                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}")
+                    sb.AppendLine(session.Spec.GoalContract.RawUserRequest)
+                    For Each criterion In session.Spec.GoalContract.Criteria.Where(Function(item) item.Required)
+                        sb.AppendLine($"- {criterion.Id} [{criterion.Kind}]: {criterion.Statement}")
+                    Next
+                    If session.Spec.GoalContract.RequiredCapabilities.Count > 0 Then
+                        sb.AppendLine("Required capabilities: " & String.Join(", ", session.Spec.GoalContract.RequiredCapabilities))
+                    End If
+                    If session.Spec.GoalContract.Constraints.Count > 0 Then
+                        sb.AppendLine("Required constraints:")
+                        For Each constraint In session.Spec.GoalContract.Constraints.Where(Function(item) item.Required)
+                            sb.AppendLine($"- {constraint.Id} [{constraint.Kind}]: {constraint.Statement}")
+                        Next
+                    End If
+                    sb.AppendLine("This frozen goal is authoritative and cannot be relaxed or replaced by ReAct or Replan.")
+                Else
+                    sb.AppendLine(If(session.Spec?.Goal, session.UserRequest))
+                End If
+                sb.AppendLine()
+                sb.AppendLine("【旧任务规格投影（非权威执行提示）】")
+                sb.AppendLine("[The following mutable fields may guide routing and host verification, but cannot add, remove, or redefine user-goal semantics]")
                 If session.Spec?.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
-                    sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
+                    sb.AppendLine("执行/路由提示: " & String.Join("; ", session.Spec.Constraints))
                 End If
                 If session.Spec?.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
                     sb.AppendLine("成功标准:")
@@ -330,11 +376,11 @@ Namespace Agent
                     Next
                 End If
                 If session.Spec?.RequiredCapabilities IsNot Nothing AndAlso session.Spec.RequiredCapabilities.Count > 0 Then
-                    sb.AppendLine("用户明确要求的能力: " & String.Join(", ", session.Spec.RequiredCapabilities))
+                    sb.AppendLine("旧能力投影: " & String.Join(", ", session.Spec.RequiredCapabilities))
                 End If
                 If session.Spec?.OutcomeContract?.Requirements IsNot Nothing AndAlso
                    session.Spec.OutcomeContract.Requirements.Count > 0 Then
-                    sb.AppendLine("冻结的结果合同:")
+                    sb.AppendLine("冻结的旧验证合同（仅用于证据验收，不得改写冻结目标）:")
                     For Each requirement In session.Spec.OutcomeContract.Requirements
                         sb.AppendLine($"- {requirement.Id}: effect={requirement.EffectType}; target={requirement.TargetRef}; property={requirement.PropertyName}; operator={requirement.Operator}; derivedFrom={requirement.DerivedFromCapability}; criteria=[{String.Join(",", If(requirement.CriterionIds, New List(Of String)()))}]; expected={If(requirement.ExpectedValue?.ToString(Formatting.None), "null")}")
                     Next

@@ -46,6 +46,7 @@ try {
         "scripts\smoke-excel-standard-tool-adapters.ps1",
         "scripts\smoke-excel-advanced-tool-adapters.ps1",
         "scripts\smoke-web-resource-sync.ps1",
+        "scripts\smoke-goal-boundary.ps1",
         "scripts\smoke-agent-runtime-policy.ps1",
         "scripts\smoke-unified-chat-tools.ps1",
         "scripts\run-golden-l0.ps1"
@@ -64,6 +65,7 @@ try {
                 $smoke -eq "scripts\smoke-excel-standard-tool-adapters.ps1" -or
                 $smoke -eq "scripts\smoke-excel-advanced-tool-adapters.ps1" -or
                 $smoke -eq "scripts\smoke-web-resource-sync.ps1" -or
+                $smoke -eq "scripts\smoke-goal-boundary.ps1" -or
                 $smoke -eq "scripts\smoke-agent-runtime-policy.ps1" -or
                 $smoke -eq "scripts\smoke-unified-chat-tools.ps1") {
                 powershell -NoProfile -ExecutionPolicy Bypass -File $fullPath -Configuration $Configuration

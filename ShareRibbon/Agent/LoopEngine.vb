@@ -50,6 +50,7 @@ Namespace Agent
             Dim blockedActionSignatures As New Dictionary(Of String, BlockedActionState)(StringComparer.Ordinal)
             Dim retryableFailureCounts As New Dictionary(Of String, Integer)(StringComparer.Ordinal)
             Dim worldRevision As Long = 0
+            Dim frozenGoalHash As String = ""
 
             Try
                 OnStatusChanged?.Invoke("正在分析任务...")
@@ -60,6 +61,14 @@ Namespace Agent
                 End If
 
                 OnStatusChanged?.Invoke("正在制定高层任务骨架...")
+                Dim goalContractError = EstablishFrozenGoalContract(session)
+                If Not String.IsNullOrWhiteSpace(goalContractError) Then
+                    session.Status = AgentStatus.Failed
+                    OnStatusChanged?.Invoke(goalContractError)
+                    Return AgentResult.Failed(session.Id, goalContractError)
+                End If
+                frozenGoalHash = session.Spec.GoalContract.ContractHash
+
                 session.Plan = Await GeneratePlanAsync(session, systemPrompt, skill)
                 If session.Plan Is Nothing Then
                     session.Plan = CreateFallbackPlan(session)
@@ -80,6 +89,12 @@ Namespace Agent
                 Dim iterationLimit = Math.Min(MaxIterations, Math.Max(1, session.MaxIterations))
 
                 While decisionCount < iterationLimit AndAlso Not modelDeclaredComplete
+                    Dim goalInvariantError = ValidateFrozenGoalInvariant(session, frozenGoalHash)
+                    If Not String.IsNullOrWhiteSpace(goalInvariantError) Then
+                        session.Status = AgentStatus.Failed
+                        OnStatusChanged?.Invoke(goalInvariantError)
+                        Return AgentResult.Failed(session.Id, goalInvariantError)
+                    End If
                     Dim planStep = GetCurrentPlanHint(session.Plan)
                     decisionCount += 1
 
@@ -87,6 +102,13 @@ Namespace Agent
                     OnStatusChanged?.Invoke($"决策 {decisionCount}/{iterationLimit}: 正在根据最新观察选择下一动作...")
                     Dim rawDecision = Await ThinkAsync(session, planStep, systemPrompt)
                     Dim decision = ParseReactDecision(rawDecision)
+
+                    goalInvariantError = ValidateFrozenGoalInvariant(session, frozenGoalHash)
+                    If Not String.IsNullOrWhiteSpace(goalInvariantError) Then
+                        session.Status = AgentStatus.Failed
+                        OnStatusChanged?.Invoke(goalInvariantError)
+                        Return AgentResult.Failed(session.Id, goalInvariantError)
+                    End If
 
                     If decision Is Nothing Then
                         _memory.SetWorking(
@@ -131,6 +153,13 @@ Namespace Agent
                             session.Status = AgentStatus.Reflecting
                             OnStatusChanged?.Invoke("正在根据最新观察更新高层任务骨架...")
                             Dim replanned = Await GeneratePlanAsync(session, systemPrompt, skill)
+                            If session.Spec.GoalContract Is Nothing OrElse
+                               Not String.Equals(session.Spec.GoalContract.ContractHash, frozenGoalHash, StringComparison.Ordinal) Then
+                                Dim invariantError = "GoalContract changed during replanning; execution stopped before further Office actions."
+                                session.Status = AgentStatus.Failed
+                                OnStatusChanged?.Invoke(invariantError)
+                                Return AgentResult.Failed(session.Id, invariantError)
+                            End If
                             If replanned Is Nothing OrElse replanned.Steps Is Nothing OrElse replanned.Steps.Count = 0 Then
                                 _memory.SetWorking(
                                     "lastObservation",
@@ -663,6 +692,43 @@ Namespace Agent
             Catch
                 Return False
             End Try
+        End Function
+
+        Private Shared Function EstablishFrozenGoalContract(session As AgentSession) As String
+            If session?.Spec Is Nothing Then Return "Task specification is missing; the user goal cannot be frozen."
+            Try
+                If String.IsNullOrWhiteSpace(session.Spec.RawUserRequest) Then
+                    Dim rawRequest = If(session.UserRequest, "")
+                    If String.IsNullOrWhiteSpace(rawRequest) Then rawRequest = session.Spec.Goal
+                    session.Spec.CaptureRawUserRequest(rawRequest)
+                End If
+
+                If session.Spec.GoalContract IsNot Nothing Then Return ""
+
+                ' Freeze only semantics derived from the exact user request. TaskSpec fields
+                ' are mutable legacy projections and must never flow back into GoalContract.
+                Dim compilation = Goals.GoalCompiler.Compile(session.Spec.RawUserRequest)
+                Dim validation = Goals.GoalCoverageValidator.Validate(compilation)
+                If Not validation.Succeeded Then
+                    Return "Goal compilation failed: " & String.Join("; ", validation.Errors)
+                End If
+
+                Dim frozenGoal = Goals.GoalContractFreezer.Freeze(compilation, validation)
+                session.Spec.SetGoalContractOnce(frozenGoal)
+                Return ""
+            Catch ex As Exception
+                Return "Goal compilation failed: " & ex.Message
+            End Try
+        End Function
+
+        Private Shared Function ValidateFrozenGoalInvariant(session As AgentSession, expectedHash As String) As String
+            If session?.Spec?.GoalContract Is Nothing Then
+                Return "Frozen GoalContract is missing; execution stopped before further Office actions."
+            End If
+            If Not String.Equals(session.Spec.GoalContract.ContractHash, expectedHash, StringComparison.Ordinal) Then
+                Return "GoalContract changed during execution; execution stopped before further Office actions."
+            End If
+            Return ""
         End Function
 
         Private Shared Function ToolMayMutate(tool As ToolDescriptor) As Boolean

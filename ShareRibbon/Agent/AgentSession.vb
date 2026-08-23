@@ -211,6 +211,9 @@ Namespace Agent
     ''' 任务规格（Spec驱动）
     ''' </summary>
     Public Class AgentTaskSpec
+        Private _rawUserRequest As String = ""
+        Private _goalContract As Goals.GoalContract
+
         Public Property Goal As String = ""
         Public Property TargetObject As String = ""
         Public Property Constraints As New List(Of String)()
@@ -241,7 +244,62 @@ Namespace Agent
         Public Property MutationPolicy As String = "allow"
         Public Property ExpectedOutputs As New List(Of String)()
         Public Property ExpectedSlideCount As Integer = 0
+        ''' <summary>
+        ''' Legacy host-evidence acceptance projection. It remains operational during migration,
+        ''' but is non-authoritative for user-goal semantics and MUST NOT be converted back into
+        ''' Goals.GoalContract.
+        ''' </summary>
         Public Property OutcomeContract As OutcomeContract
+
+        ''' <summary>
+        ''' Exact user language captured before interpretation. It can be captured once and
+        ''' cannot be silently replaced by a later plan or repair turn.
+        ''' </summary>
+        Public ReadOnly Property RawUserRequest As String
+            Get
+                Return _rawUserRequest
+            End Get
+        End Property
+
+        ''' <summary>
+        ''' Frozen authoritative goal. Planner and ReAct may read it but cannot replace it.
+        ''' </summary>
+        Public ReadOnly Property GoalContract As Goals.GoalContract
+            Get
+                Return _goalContract
+            End Get
+        End Property
+
+        Friend Sub CaptureRawUserRequest(value As String)
+            Dim candidate = If(value, "")
+            If String.IsNullOrWhiteSpace(candidate) Then
+                Throw New ArgumentException("Raw user request cannot be empty.", NameOf(value))
+            End If
+            If String.IsNullOrEmpty(_rawUserRequest) Then
+                _rawUserRequest = candidate
+                Return
+            End If
+            If Not String.Equals(_rawUserRequest, candidate, StringComparison.Ordinal) Then
+                Throw New InvalidOperationException("RawUserRequest has already been captured and cannot be replaced.")
+            End If
+        End Sub
+
+        Friend Sub SetGoalContractOnce(value As Goals.GoalContract)
+            If value Is Nothing Then Throw New ArgumentNullException(NameOf(value))
+            If String.IsNullOrEmpty(_rawUserRequest) Then
+                Throw New InvalidOperationException("RawUserRequest must be captured before GoalContract is attached.")
+            End If
+            If _goalContract IsNot Nothing Then
+                If Not String.Equals(_goalContract.ContractHash, value.ContractHash, StringComparison.Ordinal) Then
+                    Throw New InvalidOperationException("GoalContract is frozen and cannot be replaced.")
+                End If
+                Return
+            End If
+            If Not String.Equals(_rawUserRequest, value.RawUserRequest, StringComparison.Ordinal) Then
+                Throw New InvalidOperationException("GoalContract does not represent the captured RawUserRequest.")
+            End If
+            _goalContract = value
+        End Sub
 
         Public ReadOnly Property IsSimple As Boolean
             Get
