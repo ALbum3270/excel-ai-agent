@@ -7,16 +7,16 @@ Namespace Agent.Goals
         Private ReadOnly _id As String
         Private ReadOnly _text As String
         Private ReadOnly _explicit As Boolean
-        Private ReadOnly _requiredCapability As String
+        Private ReadOnly _sourceStart As Integer
 
         Friend Sub New(id As String,
                        text As String,
                        isExplicit As Boolean,
-                       requiredCapability As String)
+                       sourceStart As Integer)
             _id = id
             _text = text
             _explicit = isExplicit
-            _requiredCapability = requiredCapability
+            _sourceStart = sourceStart
         End Sub
 
         Public ReadOnly Property Id As String
@@ -37,9 +37,13 @@ Namespace Agent.Goals
             End Get
         End Property
 
-        Public ReadOnly Property RequiredCapability As String
+        ''' <summary>
+        ''' Zero-based UTF-16 offset in RawUserRequest.  This is verified before freeze and is
+        ''' the stable semantic identity of an explicit occurrence; model-generated ids are not.
+        ''' </summary>
+        Public ReadOnly Property SourceStart As Integer
             Get
-                Return _requiredCapability
+                Return _sourceStart
             End Get
         End Property
     End Class
@@ -51,7 +55,7 @@ Namespace Agent.Goals
         Public Property Id As String = ""
         Public Property Text As String = ""
         Public Property IsExplicit As Boolean = True
-        Public Property RequiredCapability As String = ""
+        Public Property SourceStart As Integer = -1
     End Class
 
     Public NotInheritable Class GoalCriterion

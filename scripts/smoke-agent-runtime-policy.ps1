@@ -16,6 +16,181 @@ Add-Type -Path $assemblyPath
 $registry = [ShareRibbon.Agent.ToolRegistry]::new($null)
 $registry.LoadFromDirectory($toolsPath)
 
+$goalOutcomeProjectionType = [ShareRibbon.Agent.AgentSession].Assembly.GetType(
+    "ShareRibbon.Agent.Goals.GoalOutcomeProjection",
+    $true)
+$sealOutcomeContractMethod = $goalOutcomeProjectionType.GetMethod(
+    "Seal",
+    [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::NonPublic)
+if ($null -eq $sealOutcomeContractMethod) {
+    throw "GoalOutcomeProjection.Seal was not found"
+}
+$captureRawGoalMethod = [ShareRibbon.Agent.AgentTaskSpec].GetMethod(
+    "CaptureRawUserRequest",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$setFrozenGoalMethod = [ShareRibbon.Agent.AgentTaskSpec].GetMethod(
+    "SetGoalContractOnce",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$setGoalCompilationMethod = [ShareRibbon.Agent.AgentTaskSpec].GetMethod(
+    "SetGoalCompilationOnce",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$recordGoalFallbackMethod = [ShareRibbon.Agent.AgentTaskSpec].GetMethod(
+    "RecordGoalInterpretationFallback",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$goalExecutionAdmissionType = [ShareRibbon.Agent.AgentSession].Assembly.GetType(
+    "ShareRibbon.Agent.Goals.GoalExecutionAdmission",
+    $true)
+$validateGoalExecutionAdmissionMethod = $goalExecutionAdmissionType.GetMethod(
+    "Validate",
+    [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::NonPublic)
+if ($null -eq $captureRawGoalMethod -or $null -eq $setFrozenGoalMethod -or
+    $null -eq $setGoalCompilationMethod -or $null -eq $recordGoalFallbackMethod -or
+    $null -eq $validateGoalExecutionAdmissionMethod) {
+    throw "AgentTaskSpec Goal boundary methods were not found"
+}
+
+function New-TestGoalContract {
+    param(
+        [string]$RawRequest,
+        [string[]]$ClauseTexts,
+        [string[]]$CriterionIds,
+        [string[]]$CriterionKinds
+    )
+
+    if ($ClauseTexts.Count -ne $CriterionIds.Count -or
+        $ClauseTexts.Count -ne $CriterionKinds.Count) {
+        throw "Goal test vectors must have matching lengths"
+    }
+
+    $candidate = [ShareRibbon.Agent.Goals.CandidateGoalContract]::new()
+    $candidate.RawUserRequest = $RawRequest
+    $searchStart = 0
+    for ($index = 0; $index -lt $ClauseTexts.Count; $index++) {
+        $text = $ClauseTexts[$index]
+        $sourceStart = $RawRequest.IndexOf(
+            $text,
+            $searchStart,
+            [System.StringComparison]::Ordinal)
+        if ($sourceStart -lt 0) {
+            throw "Goal test clause is not an exact raw-request span: $text"
+        }
+        $clauseId = "source-$($index + 1)"
+        $clause = [ShareRibbon.Agent.Goals.CandidateGoalSourceClause]::new()
+        $clause.Id = $clauseId
+        $clause.Text = $text
+        $clause.IsExplicit = $true
+        $clause.SourceStart = $sourceStart
+        $candidate.SourceClauses.Add($clause)
+
+        $criterion = [ShareRibbon.Agent.Goals.CandidateGoalCriterion]::new()
+        $criterion.Id = $CriterionIds[$index]
+        $criterion.Statement = $text
+        $criterion.Kind = $CriterionKinds[$index]
+        $criterion.Required = $true
+        $criterion.SourceClauseIds.Add($clauseId)
+        $candidate.Criteria.Add($criterion)
+        $searchStart = $sourceStart + $text.Length
+    }
+
+    $compilation = [ShareRibbon.Agent.Goals.GoalCompiler]::Compile($candidate)
+    $validation = [ShareRibbon.Agent.Goals.GoalCoverageValidator]::Validate($compilation)
+    if (-not $validation.Succeeded) {
+        throw "Test GoalContract failed validation: $($validation.Errors -join '; ')"
+    }
+    return [ShareRibbon.Agent.Goals.GoalContractFreezer]::Freeze(
+        $compilation,
+        $validation)
+}
+
+function New-TestGoalSession {
+    param([ShareRibbon.Agent.Goals.GoalContract]$GoalContract)
+
+    $session = [ShareRibbon.Agent.AgentSession]::new(
+        $GoalContract.RawUserRequest,
+        "Excel",
+        "")
+    $session.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+    $session.Spec.Goal = $GoalContract.RawUserRequest
+    $null = $captureRawGoalMethod.Invoke(
+        $session.Spec,
+        @($GoalContract.RawUserRequest))
+    $null = $setFrozenGoalMethod.Invoke($session.Spec, @($GoalContract))
+    return $session
+}
+
+# A raw-preserving interpretation fallback is evidence that semantic interpretation did
+# not complete. It may support read-only exploration, but it cannot authorize mutation.
+$fallbackRawRequest = "format the current worksheet"
+$fallbackCompilation = [ShareRibbon.Agent.Goals.GoalCompiler]::Compile($fallbackRawRequest)
+$fallbackValidation = [ShareRibbon.Agent.Goals.GoalCoverageValidator]::Validate($fallbackCompilation)
+if (-not $fallbackValidation.Succeeded) {
+    throw "Raw-preserving Goal fixture failed validation: $($fallbackValidation.Errors -join '; ')"
+}
+$fallbackGoal = [ShareRibbon.Agent.Goals.GoalContractFreezer]::Freeze(
+    $fallbackCompilation,
+    $fallbackValidation)
+$fallbackSession = New-TestGoalSession $fallbackGoal
+$null = $setGoalCompilationMethod.Invoke($fallbackSession.Spec, @($fallbackCompilation))
+$null = $recordGoalFallbackMethod.Invoke(
+    $fallbackSession.Spec,
+    @("structured interpretation unavailable"))
+$fallbackSession.Spec.MutationPolicy = "allow"
+$fallbackMutationAdmissionError = [string]$validateGoalExecutionAdmissionMethod.Invoke(
+    $null,
+    @($fallbackSession.Spec))
+if ([string]::IsNullOrWhiteSpace($fallbackMutationAdmissionError)) {
+    throw "Exact-text interpretation fallback authorized an Office mutation"
+}
+$fallbackSession.Spec.MutationPolicy = "read_only"
+$fallbackReadAdmissionError = [string]$validateGoalExecutionAdmissionMethod.Invoke(
+    $null,
+    @($fallbackSession.Spec))
+if (-not [string]::IsNullOrWhiteSpace($fallbackReadAdmissionError)) {
+    throw "Exact-text interpretation fallback blocked a read-only task: $fallbackReadAdmissionError"
+}
+
+# Required constraints are preserved in the frozen Goal, but must fail closed until a
+# trusted ConstraintVerifier can prove them. The planner cannot silently drop them.
+$constraintRawRequest = "write result without changing source"
+$constraintCandidate = [ShareRibbon.Agent.Goals.CandidateGoalContract]::new()
+$constraintCandidate.RawUserRequest = $constraintRawRequest
+$constraintClause = [ShareRibbon.Agent.Goals.CandidateGoalSourceClause]::new()
+$constraintClause.Id = "source-constraint"
+$constraintClause.Text = $constraintRawRequest
+$constraintClause.IsExplicit = $true
+$constraintClause.SourceStart = 0
+$constraintCandidate.SourceClauses.Add($constraintClause)
+$constraintCriterion = [ShareRibbon.Agent.Goals.CandidateGoalCriterion]::new()
+$constraintCriterion.Id = "goal-constrained-write"
+$constraintCriterion.Statement = $constraintRawRequest
+$constraintCriterion.Kind = "semantic"
+$constraintCriterion.Required = $true
+$constraintCriterion.SourceClauseIds.Add("source-constraint")
+$constraintCandidate.Criteria.Add($constraintCriterion)
+$requiredConstraint = [ShareRibbon.Agent.Goals.CandidateGoalConstraint]::new()
+$requiredConstraint.Id = "constraint-source"
+$requiredConstraint.Statement = $constraintRawRequest
+$requiredConstraint.Required = $true
+$requiredConstraint.SourceClauseIds.Add("source-constraint")
+$constraintCandidate.Constraints.Add($requiredConstraint)
+$constraintCompilation = [ShareRibbon.Agent.Goals.GoalCompiler]::Compile($constraintCandidate)
+$constraintValidation = [ShareRibbon.Agent.Goals.GoalCoverageValidator]::Validate($constraintCompilation)
+if (-not $constraintValidation.Succeeded) {
+    throw "Required-constraint Goal fixture failed validation: $($constraintValidation.Errors -join '; ')"
+}
+$constraintGoal = [ShareRibbon.Agent.Goals.GoalContractFreezer]::Freeze(
+    $constraintCompilation,
+    $constraintValidation)
+$constraintSession = New-TestGoalSession $constraintGoal
+$null = $setGoalCompilationMethod.Invoke($constraintSession.Spec, @($constraintCompilation))
+$constraintAdmissionError = [string]$validateGoalExecutionAdmissionMethod.Invoke(
+    $null,
+    @($constraintSession.Spec))
+if ([string]::IsNullOrWhiteSpace($constraintAdmissionError) -or
+    -not $constraintAdmissionError.Contains("constraint-source")) {
+    throw "A required Goal constraint reached planning without a trusted verifier"
+}
+
 # Read-only is a semantic safety invariant. A stale or overly conservative risk label
 # must not turn a non-mutating lookup into an approval prompt.
 $readTool = [ShareRibbon.Agent.ToolDescriptor]::new()
@@ -155,12 +330,20 @@ function New-TestOutcomeSession {
     $session.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
     $session.Spec.Goal = $Goal
     $contract = [ShareRibbon.Agent.OutcomeContract]::new()
-    $contract.Frozen = $true
     foreach ($requirement in $Requirements) {
         $contract.Requirements.Add($requirement)
     }
     $session.Spec.OutcomeContract = $contract
+    $null = $sealOutcomeContractMethod.Invoke($null, @($session.Spec, $contract))
     return $session
+}
+
+function Seal-TestOutcomeContract {
+    param([ShareRibbon.Agent.AgentSession]$Session)
+
+    $null = $sealOutcomeContractMethod.Invoke(
+        $null,
+        @($Session.Spec, $Session.Spec.OutcomeContract))
 }
 
 function New-TestOutcomeEvidence {
@@ -923,6 +1106,297 @@ if ([string]::IsNullOrWhiteSpace($freezeError) -or $weakPlan.OutcomeContract.Fro
     throw "Multiple independent success criteria were collapsed into one weak outcome requirement"
 }
 
+# Once GoalContract exists it is the only source of completion obligations. A stale legacy
+# SuccessCriteria list cannot hide a required Goal criterion or rename it to criterion-N.
+$twoCriterionGoal = New-TestGoalContract `
+    -RawRequest "create target worksheet; write result data" `
+    -ClauseTexts @("create target worksheet", "write result data") `
+    -CriterionIds @("goal-sheet-exists", "goal-result-written") `
+    -CriterionKinds @("state", "state")
+$goalOmissionSession = New-TestGoalSession $twoCriterionGoal
+$goalOmissionSession.Spec.SuccessCriteria.Add("stale legacy criterion")
+$goalOmissionRequirement = New-TestOutcomeRequirement `
+    -Id "goal-only-sheet" `
+    -TargetRef "Excel:GoalOutput" `
+    -EffectType "object_exists"
+$goalOmissionRequirement.CriterionIds.Add("goal-sheet-exists")
+$goalOmissionPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$goalOmissionPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$goalOmissionPlan.OutcomeContract.Requirements.Add($goalOmissionRequirement)
+$goalOmissionError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($goalOmissionSession, $goalOmissionPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($goalOmissionError) -or
+    $goalOmissionPlan.OutcomeContract.Frozen -or
+    -not $goalOmissionError.Contains("goal-result-written")) {
+    throw "A stale legacy criterion hid an omitted required Goal criterion"
+}
+
+function New-TwoCriterionGoalPlan {
+    $sheet = New-TestOutcomeRequirement `
+        -Id "goal-sheet" `
+        -TargetRef "Excel:GoalOutput" `
+        -EffectType "object_exists"
+    $sheet.CriterionIds.Add("goal-sheet-exists")
+    $expectedRows = [Newtonsoft.Json.Linq.JArray]::Parse(
+        '[["Region","Average Sales"],["East",1986.67]]')
+    $written = New-TestOutcomeRequirement `
+        -Id "goal-write" `
+        -TargetRef "Excel:GoalOutput!A1:B2" `
+        -EffectType "data_state" `
+        -ExpectedValue $expectedRows
+    $written.CriterionIds.Add("goal-result-written")
+    $plan = [ShareRibbon.Agent.ExecutionPlan]::new()
+    $plan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+    $plan.OutcomeContract.Requirements.Add($sheet)
+    $plan.OutcomeContract.Requirements.Add($written)
+    return $plan
+}
+
+$goalBoundSession = New-TestGoalSession $twoCriterionGoal
+$goalBoundSession.Spec.SuccessCriteria.Add("legacy must be ignored")
+$goalBoundPlan = New-TwoCriterionGoalPlan
+$goalBoundError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($goalBoundSession, $goalBoundPlan, "Excel"))
+if (-not [string]::IsNullOrWhiteSpace($goalBoundError) -or
+    -not $goalBoundPlan.OutcomeContract.Frozen -or
+    $goalBoundPlan.OutcomeContract.BindingMode -ne "goal-v1" -or
+    $goalBoundPlan.OutcomeContract.BoundGoalContractHash -ne $twoCriterionGoal.ContractHash) {
+    throw "A complete Goal criterion mapping was not frozen against the authoritative GoalContract: $goalBoundError"
+}
+$goalSheetEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-goal-sheet/e1" `
+    -IterationEvidenceId "obs-goal-sheet" `
+    -TargetRef "Excel:GoalOutput" `
+    -EffectType "object_exists" `
+    -SourceToolId "CreateSheet"
+$goalWriteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-goal-write/e1" `
+    -IterationEvidenceId "obs-goal-write" `
+    -TargetRef "Excel:GoalOutput!A1:B2" `
+    -EffectType "data_state" `
+    -Expected $goalBoundPlan.OutcomeContract.Requirements[1].ExpectedValue `
+    -SourceToolId "WriteData"
+Add-TestOutcomeIteration $goalBoundSession "obs-goal-sheet" "CreateSheet" @($goalSheetEvidence)
+Add-TestOutcomeIteration $goalBoundSession "obs-goal-write" "WriteData" @($goalWriteEvidence)
+$goalClaims = @("obs-goal-sheet/e1", "obs-goal-write/e1")
+if (-not [string]::IsNullOrWhiteSpace((Test-OutcomeContract $goalBoundSession $goalClaims))) {
+    throw "A fully evidenced Goal-bound outcome contract was rejected"
+}
+
+# Planning and ReAct share the same semantic authority boundary. Once GoalContract exists,
+# stale mutable TaskSpec projections must be absent from both prompts.
+$legacyPromptMarkers = @(
+    "LEGACY_SUCCESS_MARKER",
+    "LEGACY_CONSTRAINT_MARKER",
+    "LEGACY_OUTPUT_MARKER",
+    "LEGACY_CAPABILITY_MARKER",
+    "LEGACY_TOOL_MARKER")
+$goalBoundSession.Spec.SuccessCriteria.Add($legacyPromptMarkers[0])
+$goalBoundSession.Spec.Constraints.Add($legacyPromptMarkers[1])
+$goalBoundSession.Spec.ExpectedOutputs.Add($legacyPromptMarkers[2])
+$goalBoundSession.Spec.RequiredCapabilities.Add($legacyPromptMarkers[3])
+$goalBoundSession.Spec.RequiredTools.Add($legacyPromptMarkers[4])
+$goalPromptSkill = [ShareRibbon.Agent.AgentSkill]::new()
+$goalPromptSkill.Name = "Goal prompt authority"
+$goalPromptSkill.Description = "non-authoritative strategy hints"
+$goalPromptSkill.RequiredTools.Add("CreateSheet")
+$goalPromptManager = [ShareRibbon.Agent.PromptManager]::new(
+    (Join-Path $repoRoot "ShareRibbon\Prompts"))
+$goalPlanningPrompt = $goalPromptManager.BuildPlanningPrompt(
+    $goalBoundSession,
+    "",
+    $goalPromptSkill,
+    [ShareRibbon.Agent.AgentMemory]::new())
+$goalBoundSession.Plan = $goalBoundPlan
+$goalReactPrompt = $goalPromptManager.BuildReactPrompt(
+    $goalBoundSession,
+    [ShareRibbon.Agent.PlanStep]@{ StepNumber = 1; Description = "continue goal" },
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    "")
+foreach ($legacyPromptMarker in $legacyPromptMarkers) {
+    if ($goalPlanningPrompt.Contains($legacyPromptMarker) -or
+        $goalReactPrompt.Contains($legacyPromptMarker)) {
+        throw "A legacy TaskSpec projection leaked into a Goal-authoritative prompt: $legacyPromptMarker"
+    }
+}
+if (-not $goalPlanningPrompt.Contains("goal-sheet-exists") -or
+    -not $goalPlanningPrompt.Contains("goal-result-written") -or
+    -not $goalReactPrompt.Contains("goal-sheet-exists") -or
+    -not $goalReactPrompt.Contains("goal-result-written")) {
+    throw "Planning or ReAct prompt omitted an authoritative Goal criterion"
+}
+
+# Initial freeze is not the only guard. Removing a Goal mapping after freeze must be caught
+# again at the final completion seam even when all host evidence still matches.
+$goalBoundPlan.OutcomeContract.Requirements[1].CriterionIds.Clear()
+$postFreezeMappingError = Test-OutcomeContract $goalBoundSession $goalClaims
+if ([string]::IsNullOrWhiteSpace($postFreezeMappingError)) {
+    throw "Final verification accepted a post-freeze Goal mapping mutation"
+}
+
+$unknownGoalSession = New-TestGoalSession $twoCriterionGoal
+$unknownGoalRequirement = New-TestOutcomeRequirement `
+    -Id "legacy-id-in-goal-mode" `
+    -TargetRef "Excel:GoalOutput" `
+    -EffectType "object_exists"
+$unknownGoalRequirement.CriterionIds.Add("criterion-1")
+$unknownGoalPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$unknownGoalPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$unknownGoalPlan.OutcomeContract.Requirements.Add($unknownGoalRequirement)
+$unknownGoalError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($unknownGoalSession, $unknownGoalPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($unknownGoalError) -or $unknownGoalPlan.OutcomeContract.Frozen) {
+    throw "Goal mode accepted a fabricated legacy criterion id"
+}
+
+$extraGoalSession = New-TestGoalSession $twoCriterionGoal
+$extraGoalPlan = New-TwoCriterionGoalPlan
+$extraMutation = New-TestOutcomeRequirement `
+    -Id "unbound-extra-write" `
+    -TargetRef "Excel:Unrequested!A1" `
+    -EffectType "data_state" `
+    -ExpectedValue ([Newtonsoft.Json.Linq.JValue]::CreateString("unrequested"))
+$extraGoalPlan.OutcomeContract.Requirements.Add($extraMutation)
+$extraGoalError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($extraGoalSession, $extraGoalPlan, "Excel"))
+if ([string]::IsNullOrWhiteSpace($extraGoalError) -or $extraGoalPlan.OutcomeContract.Frozen) {
+    throw "An unbound mutating requirement expanded the frozen GoalContract"
+}
+
+$goalHashSession = New-TestGoalSession $twoCriterionGoal
+$goalHashPlan = New-TwoCriterionGoalPlan
+$goalHashFreezeError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($goalHashSession, $goalHashPlan, "Excel"))
+if (-not [string]::IsNullOrWhiteSpace($goalHashFreezeError)) {
+    throw "Goal hash fixture could not be frozen: $goalHashFreezeError"
+}
+$otherGoal = New-TestGoalContract `
+    -RawRequest "perform another goal" `
+    -ClauseTexts @("perform another goal") `
+    -CriterionIds @("goal-other") `
+    -CriterionKinds @("state")
+$boundGoalHashField = [ShareRibbon.Agent.OutcomeContract].GetField(
+    "_boundGoalContractHash",
+    [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+$boundGoalHashField.SetValue($goalHashPlan.OutcomeContract, $otherGoal.ContractHash)
+$goalHashError = Test-OutcomeContract $goalHashSession @()
+if ([string]::IsNullOrWhiteSpace($goalHashError) -or
+    -not $goalHashError.Contains("GoalContract")) {
+    throw "Final verification did not reject a mismatched GoalContract hash binding"
+}
+
+$outcomeHashSession = New-TestGoalSession $twoCriterionGoal
+$outcomeHashPlan = New-TwoCriterionGoalPlan
+$outcomeHashFreezeError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($outcomeHashSession, $outcomeHashPlan, "Excel"))
+if (-not [string]::IsNullOrWhiteSpace($outcomeHashFreezeError)) {
+    throw "Outcome integrity fixture could not be frozen: $outcomeHashFreezeError"
+}
+$outcomeHashPlan.OutcomeContract.Requirements[1].ExpectedValue =
+    [Newtonsoft.Json.Linq.JArray]::Parse('[["tampered"]]')
+$outcomeHashError = Test-OutcomeContract $outcomeHashSession @()
+if ([string]::IsNullOrWhiteSpace($outcomeHashError) -or
+    -not $outcomeHashError.Contains("OUTCOME_CONTRACT_MUTATED")) {
+    throw "Final verification did not reject a modified frozen OutcomeContract"
+}
+
+# Persisted sessions without GoalContract retain the old criterion-N mapping during the
+# migration, but this compatibility path is never consulted once a GoalContract exists.
+$legacySuccessSession = [ShareRibbon.Agent.AgentSession]::new("legacy goal", "Excel", "")
+$legacySuccessSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+$legacySuccessSession.Spec.SuccessCriteria.Add("first legacy state")
+$legacySuccessSession.Spec.SuccessCriteria.Add("second legacy state")
+$legacyRequirement1 = New-TestOutcomeRequirement `
+    -Id "legacy-first" `
+    -TargetRef "Excel:LegacyOne" `
+    -EffectType "object_exists"
+$legacyRequirement1.CriterionIds.Add("criterion-1")
+$legacyRequirement2 = New-TestOutcomeRequirement `
+    -Id "legacy-second" `
+    -TargetRef "Excel:LegacyTwo" `
+    -EffectType "object_exists"
+$legacyRequirement2.CriterionIds.Add("criterion-2")
+$legacyPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$legacyPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$legacyPlan.OutcomeContract.Requirements.Add($legacyRequirement1)
+$legacyPlan.OutcomeContract.Requirements.Add($legacyRequirement2)
+$legacyFreezeError = [string]$freezeMethod.Invoke(
+    $criterionLoop,
+    @($legacySuccessSession, $legacyPlan, "Excel"))
+if (-not [string]::IsNullOrWhiteSpace($legacyFreezeError) -or
+    -not $legacyPlan.OutcomeContract.Frozen -or
+    $legacyPlan.OutcomeContract.BindingMode -ne "legacy-v1") {
+    throw "Legacy criterion-N compatibility was broken: $legacyFreezeError"
+}
+
+# A capability criterion is verified by successful execution and compute lineage, not by
+# pretending that the capability itself is an Office host-state requirement.
+$pythonGoal = New-TestGoalContract `
+    -RawRequest "use Python to calculate regional averages" `
+    -ClauseTexts @("use Python to calculate regional averages") `
+    -CriterionIds @("goal-python-result") `
+    -CriterionKinds @("state")
+if (-not $pythonGoal.RequiredCapabilities.Contains("PythonCompute")) {
+    throw "Python capability evidence did not enter the authoritative GoalContract"
+}
+$pythonGoalLoop = [ShareRibbon.Agent.LoopEngine]::new(
+    $registry,
+    [ShareRibbon.Agent.AgentMemory]::new(),
+    [ShareRibbon.Agent.PromptManager]::new((Join-Path $repoRoot "ShareRibbon\Prompts")))
+$pythonGoalSession = New-TestGoalSession $pythonGoal
+$pythonReadRequirement = New-TestOutcomeRequirement `
+    -Id "python-source-read" `
+    -TargetRef "Excel:SalesData!A1:B5" `
+    -EffectType "read_coverage" `
+    -Operator "covers"
+$pythonResultRequirement = New-TestOutcomeRequirement `
+    -Id "python-result" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -DerivedFromCapability "PythonCompute"
+$pythonResultRequirement.CriterionIds.Add("goal-python-result")
+$pythonGoalPlan = [ShareRibbon.Agent.ExecutionPlan]::new()
+$pythonGoalPlan.OutcomeContract = [ShareRibbon.Agent.OutcomeContract]::new()
+$pythonGoalPlan.OutcomeContract.Requirements.Add($pythonReadRequirement)
+$pythonGoalPlan.OutcomeContract.Requirements.Add($pythonResultRequirement)
+$pythonGoalFreezeError = [string]$freezeMethod.Invoke(
+    $pythonGoalLoop,
+    @($pythonGoalSession, $pythonGoalPlan, "Excel"))
+if (-not [string]::IsNullOrWhiteSpace($pythonGoalFreezeError) -or
+    -not $pythonGoalPlan.OutcomeContract.Frozen) {
+    throw "Capability Goal could not freeze without mapping the capability criterion as host state: $pythonGoalFreezeError"
+}
+$pythonGoalReadEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-python-read/e1" `
+    -IterationEvidenceId "obs-python-read" `
+    -TargetRef "Excel:SalesData!A1:B5" `
+    -EffectType "read_coverage" `
+    -SourceToolId "ReadRange"
+$pythonGoalWriteEvidence = New-TestOutcomeEvidence `
+    -EvidenceId "obs-python-write/e1" `
+    -IterationEvidenceId "obs-python-write" `
+    -TargetRef "Excel:PythonAverage!A1:B3" `
+    -EffectType "data_state" `
+    -SourceToolId "WriteData" `
+    -DependsOn @("obs-python-compute")
+Add-TestOutcomeIteration $pythonGoalSession "obs-python-read" "ReadRange" @($pythonGoalReadEvidence)
+Add-TestOutcomeIteration $pythonGoalSession "obs-python-write" "WriteData" @($pythonGoalWriteEvidence) @("obs-python-compute")
+$pythonGoalClaims = @("obs-python-read/e1", "obs-python-write/e1")
+if ([string]::IsNullOrWhiteSpace((Test-OutcomeContract $pythonGoalSession $pythonGoalClaims))) {
+    throw "Host state alone bypassed the required Python capability"
+}
+Add-TestOutcomeIteration $pythonGoalSession "obs-python-compute" "PythonCompute" @() @("obs-python-read")
+if (-not [string]::IsNullOrWhiteSpace(
+    (Test-OutcomeContract $pythonGoalSession $pythonGoalClaims))) {
+    throw "A complete Goal-bound ReadRange -> PythonCompute -> WriteData proof was rejected"
+}
+
 $duplicateCriterionSession = [ShareRibbon.Agent.AgentSession]::new("create and write", "Excel", "")
 $duplicateCriterionSession.Spec = [ShareRibbon.Agent.AgentTaskSpec]::new()
 $duplicateCriterionSession.Spec.Goal = "create and write"
@@ -1243,6 +1717,7 @@ $pythonLineageSession = New-TestOutcomeSession `
     "read, compute with Python, and write" `
     @($readRequirement, $pythonWriteRequirement)
 $pythonLineageSession.Spec.OutcomeContract.ValidatedComputeCapabilities.Add("PythonCompute")
+Seal-TestOutcomeContract $pythonLineageSession
 $readEvidence = New-TestOutcomeEvidence `
     -EvidenceId "obs-1/e1" `
     -IterationEvidenceId "obs-1" `
@@ -1268,6 +1743,7 @@ $disconnectedPythonSession = New-TestOutcomeSession `
     "read, compute with Python, and write" `
     @($readRequirement, $pythonWriteRequirement)
 $disconnectedPythonSession.Spec.OutcomeContract.ValidatedComputeCapabilities.Add("PythonCompute")
+Seal-TestOutcomeContract $disconnectedPythonSession
 Add-TestOutcomeIteration $disconnectedPythonSession "obs-1" "PythonCompute"
 $lateReadEvidence = New-TestOutcomeEvidence `
     -EvidenceId "obs-2/e1" `
@@ -1464,7 +1940,7 @@ public static class AgentRuntimeContextProbe
         switch (PythonModelCalls)
         {
             case 1:
-                return Task.FromResult("{\"understanding\":\"python workflow\",\"steps\":[{\"step\":1,\"description\":\"read full data\",\"toolHint\":\"ReadRange\"},{\"step\":2,\"description\":\"compute averages\",\"toolHint\":\"PythonCompute\"},{\"step\":3,\"description\":\"create destination\",\"toolHint\":\"CreateSheet\"},{\"step\":4,\"description\":\"write result\",\"toolHint\":\"WriteData\"}],\"summary\":\"written\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"source-read\",\"targetRef\":\"Excel:SalesData!A1:B5\",\"effectType\":\"read_coverage\",\"required\":true},{\"id\":\"destination-created\",\"targetRef\":\"Excel:PythonAverage\",\"effectType\":\"object_exists\",\"required\":true},{\"id\":\"python-result-written\",\"targetRef\":\"Excel:PythonAverage!A1:B3\",\"effectType\":\"data_state\",\"derivedFromCapability\":\"PythonCompute\",\"required\":true}]}}");
+                return Task.FromResult("{\"understanding\":\"python workflow\",\"steps\":[{\"step\":1,\"description\":\"read full data\",\"toolHint\":\"ReadRange\"},{\"step\":2,\"description\":\"compute averages\",\"toolHint\":\"PythonCompute\"},{\"step\":3,\"description\":\"create destination\",\"toolHint\":\"CreateSheet\"},{\"step\":4,\"description\":\"write result\",\"toolHint\":\"WriteData\"}],\"summary\":\"written\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"source-read\",\"targetRef\":\"Excel:SalesData!A1:B5\",\"effectType\":\"read_coverage\",\"required\":true},{\"id\":\"destination-created\",\"targetRef\":\"Excel:PythonAverage\",\"effectType\":\"object_exists\",\"criterionIds\":[\"criterion-raw-user-request\"],\"required\":true},{\"id\":\"python-result-written\",\"targetRef\":\"Excel:PythonAverage!A1:B3\",\"effectType\":\"data_state\",\"derivedFromCapability\":\"PythonCompute\",\"criterionIds\":[\"criterion-raw-user-request\"],\"required\":true}]}}");
             case 2:
                 return Task.FromResult("{\"decision\":\"act\",\"thought\":\"read first\",\"action\":{\"tool\":\"ReadRange\",\"params\":{\"range\":\"SalesData!A1:B5\"}}}");
             case 3:
@@ -1520,7 +1996,7 @@ $loop.SendAIRequest = {
     $script:modelCalls += 1
     if ($script:modelCalls -eq 1) {
         return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"understanding":"test","steps":[{"step":1,"description":"first","toolHint":"TestAction"},{"step":2,"description":"second","toolHint":"TestAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"test-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}')
+            '{"understanding":"test","steps":[{"step":1,"description":"first","toolHint":"TestAction"},{"step":2,"description":"second","toolHint":"TestAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"test-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}')
     }
     if (-not $prompt.Contains("[adaptive-react]")) {
         throw "Adaptive ReAct prompt marker is missing"
@@ -1597,7 +2073,7 @@ $acceptLoop.SendAIRequest = {
     $script:acceptModelCalls += 1
     switch ($script:acceptModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"acceptance","steps":[{"step":1,"description":"perform required action","toolHint":"RequiredAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"accepted-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
+                '{"understanding":"acceptance","steps":[{"step":1,"description":"perform required action","toolHint":"RequiredAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"accepted-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"complete","thought":"too early","message":"done"}') }
         3 {
@@ -1680,7 +2156,7 @@ $replanLoop.SendAIRequest = {
     $script:replanModelCalls += 1
     switch ($script:replanModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"initial","steps":[{"step":1,"description":"initial action","toolHint":"ReplanAction"}],"summary":"initial","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"replan-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
+                '{"understanding":"initial","steps":[{"step":1,"description":"initial action","toolHint":"ReplanAction"}],"summary":"initial","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"replan-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"first action","action":{"tool":"ReplanAction","params":{}}}') }
         3 {
@@ -1783,7 +2259,7 @@ $failureLoop.SendAIRequest = {
     $script:failureModelCalls += 1
     switch ($script:failureModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"adaptive failure","steps":[{"step":1,"description":"satisfy goal","toolHint":"FailingAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","required":true}]}}') }
+                '{"understanding":"adaptive failure","steps":[{"step":1,"description":"satisfy goal","toolHint":"FailingAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:test","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"try primary implementation","action":{"tool":"FailingAction","params":{}}}') }
         3 {
@@ -1854,7 +2330,7 @@ $safeRetryLoop.SendAIRequest = {
     $script:safeRetryModelCalls += 1
     switch ($script:safeRetryModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"safe retry","steps":[{"step":1,"description":"read","toolHint":"SafeRetryRead"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"read-complete","targetRef":"Excel:SafeRead!A1","effectType":"read_coverage","required":true}]}}') }
+                '{"understanding":"safe retry","steps":[{"step":1,"description":"read","toolHint":"SafeRetryRead"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"read-complete","targetRef":"Excel:SafeRead!A1","effectType":"read_coverage","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"read","action":{"tool":"SafeRetryRead","params":{"options":{"b":2,"a":1}}}}') }
         3 { return [System.Threading.Tasks.Task[string]]::FromResult(
@@ -1950,7 +2426,7 @@ $coverageLoop.SendAIRequest = {
     $script:coverageModelCalls += 1
     switch ($script:coverageModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"soft plan","steps":[{"step":1,"description":"satisfy goal","toolHint":"PlannedAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:alternative","effectType":"artifact","operator":"exists","required":true}]}}') }
+                '{"understanding":"soft plan","steps":[{"step":1,"description":"satisfy goal","toolHint":"PlannedAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"alternative-state","targetRef":"Excel:alternative","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"current facts favor the alternative","action":{"tool":"AlternativeAction","params":{}}}') }
         default { return [System.Threading.Tasks.Task[string]]::FromResult(
@@ -2018,7 +2494,7 @@ $repairLoop.SendAIRequest = {
     $script:repairModelCalls += 1
     switch ($script:repairModelCalls) {
         1 { return [System.Threading.Tasks.Task[string]]::FromResult(
-                '{"understanding":"adaptive fallback","steps":[{"step":1,"description":"satisfy goal","toolHint":"NonRetryableAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fallback-complete","targetRef":"Excel:fallback","effectType":"artifact","operator":"exists","required":true}]}}') }
+                '{"understanding":"adaptive fallback","steps":[{"step":1,"description":"satisfy goal","toolHint":"NonRetryableAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fallback-complete","targetRef":"Excel:fallback","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}') }
         2 { return [System.Threading.Tasks.Task[string]]::FromResult(
                 '{"decision":"act","thought":"try first implementation","action":{"tool":"NonRetryableAction","params":{"value":1,"options":{"b":2,"a":1}}}}') }
         3 { return [System.Threading.Tasks.Task[string]]::FromResult(
@@ -2081,7 +2557,7 @@ $fatalLoop.SendAIRequest = {
     $script:fatalModelCalls += 1
     if ($script:fatalModelCalls -eq 1) {
         return [System.Threading.Tasks.Task[string]]::FromResult(
-            '{"understanding":"fatal","steps":[{"step":1,"description":"run","toolHint":"FatalAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fatal-action","targetRef":"Excel:fatal","effectType":"artifact","operator":"exists","required":true}]}}')
+            '{"understanding":"fatal","steps":[{"step":1,"description":"run","toolHint":"FatalAction"}],"summary":"done","capabilityGap":"","outcomeContract":{"schemaVersion":"1.0","requirements":[{"id":"fatal-action","targetRef":"Excel:fatal","effectType":"artifact","operator":"exists","criterionIds":["criterion-raw-user-request"],"required":true}]}}')
     }
     return [System.Threading.Tasks.Task[string]]::FromResult(
         '{"decision":"act","thought":"run","action":{"tool":"FatalAction","params":{}}}')
@@ -2171,7 +2647,7 @@ public static class ApprovalRuntimeProbe
             switch (ModelCalls)
             {
                 case 1:
-                    return Task.FromResult("{\"understanding\":\"two approvals\",\"steps\":[{\"step\":1,\"description\":\"first\",\"toolHint\":\"ApprovalWrite\"},{\"step\":2,\"description\":\"second\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"approved-write-1\",\"targetRef\":\"Excel:approval/1\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true},{\"id\":\"approved-write-2\",\"targetRef\":\"Excel:approval/2\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true}]}}");
+                    return Task.FromResult("{\"understanding\":\"two approvals\",\"steps\":[{\"step\":1,\"description\":\"first\",\"toolHint\":\"ApprovalWrite\"},{\"step\":2,\"description\":\"second\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"approved-write-1\",\"targetRef\":\"Excel:approval/1\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"criterionIds\":[\"criterion-raw-user-request\"],\"required\":true},{\"id\":\"approved-write-2\",\"targetRef\":\"Excel:approval/2\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"criterionIds\":[\"criterion-raw-user-request\"],\"required\":true}]}}");
                 case 2:
                     return Task.FromResult("{\"decision\":\"act\",\"thought\":\"first\",\"action\":{\"tool\":\"ApprovalWrite\",\"params\":{\"ordinal\":1}}}");
                 case 3:
@@ -2182,7 +2658,7 @@ public static class ApprovalRuntimeProbe
         }
 
         if (ModelCalls == 1)
-            return Task.FromResult("{\"understanding\":\"reject approval\",\"steps\":[{\"step\":1,\"description\":\"write\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"rejected-write\",\"targetRef\":\"Excel:approval/3\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"required\":true}]}}");
+            return Task.FromResult("{\"understanding\":\"reject approval\",\"steps\":[{\"step\":1,\"description\":\"write\",\"toolHint\":\"ApprovalWrite\"}],\"summary\":\"done\",\"capabilityGap\":\"\",\"outcomeContract\":{\"schemaVersion\":\"1.0\",\"requirements\":[{\"id\":\"rejected-write\",\"targetRef\":\"Excel:approval/3\",\"effectType\":\"artifact\",\"operator\":\"exists\",\"criterionIds\":[\"criterion-raw-user-request\"],\"required\":true}]}}");
         return Task.FromResult("{\"decision\":\"act\",\"thought\":\"request write\",\"action\":{\"tool\":\"ApprovalWrite\",\"params\":{\"ordinal\":3}}}");
     }
 

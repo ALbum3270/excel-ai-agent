@@ -1,7 +1,5 @@
 Imports System.Collections.Generic
 Imports System.Linq
-Imports System.Security.Cryptography
-Imports System.Text
 
 Namespace Agent.Goals
 
@@ -20,29 +18,44 @@ Namespace Agent.Goals
                 Throw New InvalidOperationException("Goal coverage validation failed: " & String.Join("; ", validation.Errors))
             End If
 
-            Dim candidateFingerprint = GoalCoverageValidator.ComputeCandidateFingerprint(compilation.Candidate)
-            If Not String.Equals(validation.CandidateFingerprint, candidateFingerprint, StringComparison.Ordinal) Then
+            Dim candidateFingerprintBefore = GoalCoverageValidator.ComputeCandidateFingerprint(compilation.Candidate)
+            If Not String.Equals(validation.CandidateFingerprint, candidateFingerprintBefore, StringComparison.Ordinal) Then
                 Throw New InvalidOperationException("Goal candidate does not match the candidate that passed coverage validation.")
             End If
 
+            Dim candidate = GoalCompiler.CloneCandidateSnapshot(compilation.Candidate)
+            Dim candidateFingerprintAfter = GoalCoverageValidator.ComputeCandidateFingerprint(compilation.Candidate)
+            Dim snapshotFingerprint = GoalCoverageValidator.ComputeCandidateFingerprint(candidate)
+            If Not String.Equals(candidateFingerprintBefore, candidateFingerprintAfter, StringComparison.Ordinal) OrElse
+               Not String.Equals(candidateFingerprintBefore, snapshotFingerprint, StringComparison.Ordinal) Then
+                Throw New InvalidOperationException("Goal candidate changed while the freeze snapshot was being captured.")
+            End If
+
+            Dim snapshotCompilation As New GoalCompilationResult(
+                candidate,
+                compilation.CoverageMap,
+                compilation.UnresolvedClauses,
+                compilation.Assumptions,
+                compilation.Diagnostics,
+                compilation.RequiresClarification)
+
             ' Revalidate at the freeze seam so a stale validation result cannot authorize a
             ' candidate that was mutated after validation.
-            Dim currentValidation = GoalCoverageValidator.Validate(compilation)
+            Dim currentValidation = GoalCoverageValidator.Validate(snapshotCompilation)
             If Not currentValidation.Succeeded Then
                 Throw New InvalidOperationException("Goal candidate changed after validation: " & String.Join("; ", currentValidation.Errors))
             End If
 
-            Dim candidate = compilation.Candidate
             Dim sourceClauses = candidate.SourceClauses.
                 Where(Function(item) item IsNot Nothing).
                 Select(Function(item) New GoalSourceClause(
                     NormalizeId(item.Id),
                     If(item.Text, ""),
                     item.IsExplicit,
-                    NormalizeId(item.RequiredCapability))).
+                    item.SourceStart)).
                 ToList()
             Dim criteria = candidate.Criteria.
-                Where(Function(item) item IsNot Nothing).
+                Where(Function(item) item IsNot Nothing AndAlso item.Required).
                 Select(Function(item) New GoalCriterion(
                     NormalizeId(item.Id),
                     If(item.Statement, ""),
@@ -53,7 +66,7 @@ Namespace Agent.Goals
                     NormalizeId(item.CapabilityId))).
                 ToList()
             Dim constraints = candidate.Constraints.
-                Where(Function(item) item IsNot Nothing).
+                Where(Function(item) item IsNot Nothing AndAlso item.Required).
                 Select(Function(item) New GoalConstraint(
                     NormalizeId(item.Id),
                     If(item.Statement, ""),
@@ -62,13 +75,19 @@ Namespace Agent.Goals
                     item.Required)).
                 ToList()
             Dim capabilities = NormalizeIdList(candidate.RequiredCapabilities)
-            Dim contractHash = ComputeContractHash(
+            Dim contractHash = GoalHashing.ComputeContractHash(
                 candidate.RawUserRequest,
                 sourceClauses,
                 criteria,
                 constraints,
                 capabilities)
-            Dim goalId = "goal-" & contractHash.Substring(0, 16).ToLowerInvariant()
+            Dim semanticHash = GoalHashing.ComputeSemanticHash(
+                candidate.RawUserRequest,
+                sourceClauses,
+                criteria,
+                constraints,
+                capabilities)
+            Dim goalId = "goal-" & semanticHash.Substring(0, 16).ToLowerInvariant()
 
             Return New GoalContract(
                 goalId,
@@ -77,57 +96,9 @@ Namespace Agent.Goals
                 criteria,
                 constraints,
                 capabilities,
-                contractHash)
+                contractHash,
+                semanticHash)
         End Function
-
-        Private Shared Function ComputeContractHash(rawUserRequest As String,
-                                                    sourceClauses As IEnumerable(Of GoalSourceClause),
-                                                    criteria As IEnumerable(Of GoalCriterion),
-                                                    constraints As IEnumerable(Of GoalConstraint),
-                                                    capabilities As IEnumerable(Of String)) As String
-            Dim canonical As New StringBuilder()
-            Append(canonical, "raw", NormalizeLineEndings(rawUserRequest))
-            For Each clause In sourceClauses.OrderBy(Function(item) item.Id, StringComparer.Ordinal)
-                Append(canonical, "clause.id", clause.Id)
-                Append(canonical, "clause.text", NormalizeLineEndings(clause.Text))
-                Append(canonical, "clause.explicit", clause.IsExplicit.ToString())
-                Append(canonical, "clause.capability", clause.RequiredCapability)
-            Next
-            For Each criterion In criteria.OrderBy(Function(item) item.Id, StringComparer.Ordinal)
-                Append(canonical, "criterion.id", criterion.Id)
-                Append(canonical, "criterion.statement", NormalizeLineEndings(criterion.Statement))
-                Append(canonical, "criterion.kind", criterion.Kind)
-                Append(canonical, "criterion.required", criterion.Required.ToString())
-                Append(canonical, "criterion.verifier", criterion.VerificationCapability)
-                Append(canonical, "criterion.capability", criterion.CapabilityId)
-                For Each sourceId In criterion.SourceClauseIds.OrderBy(Function(value) value, StringComparer.Ordinal)
-                    Append(canonical, "criterion.source", sourceId)
-                Next
-            Next
-            For Each constraint In constraints.OrderBy(Function(item) item.Id, StringComparer.Ordinal)
-                Append(canonical, "constraint.id", constraint.Id)
-                Append(canonical, "constraint.statement", NormalizeLineEndings(constraint.Statement))
-                Append(canonical, "constraint.kind", constraint.Kind)
-                Append(canonical, "constraint.required", constraint.Required.ToString())
-                For Each sourceId In constraint.SourceClauseIds.OrderBy(Function(value) value, StringComparer.Ordinal)
-                    Append(canonical, "constraint.source", sourceId)
-                Next
-            Next
-            For Each capability In capabilities.OrderBy(Function(value) value, StringComparer.Ordinal)
-                Append(canonical, "requiredCapability", capability)
-            Next
-
-            Using sha = SHA256.Create()
-                Dim bytes = Encoding.UTF8.GetBytes(canonical.ToString())
-                Return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "")
-            End Using
-        End Function
-
-        Private Shared Sub Append(builder As StringBuilder, name As String, value As String)
-            Dim safeValue = If(value, "")
-            builder.Append(name.Length).Append(":"c).Append(name)
-            builder.Append(safeValue.Length).Append(":"c).Append(safeValue).Append("|"c)
-        End Sub
 
         Private Shared Function NormalizeId(value As String) As String
             Return If(value, "").Trim()
@@ -143,9 +114,6 @@ Namespace Agent.Goals
             Return result
         End Function
 
-        Private Shared Function NormalizeLineEndings(value As String) As String
-            Return If(value, "").Replace(vbCrLf, vbLf).Replace(vbCr, vbLf)
-        End Function
     End Class
 
 End Namespace

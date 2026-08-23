@@ -29,7 +29,7 @@ Namespace Agent
                                       item.Explanation.Success).
                 Select(Function(item) item.Action.ToolId),
                 StringComparer.OrdinalIgnoreCase)
-            Dim missing = GetRequiredCapabilities(session.Spec).
+            Dim missing = ResolveRequiredCapabilities(session.Spec).
                 Where(Function(toolId) Not successful.Contains(toolId)).
                 ToList()
             If missing.Count > 0 Then
@@ -41,7 +41,7 @@ Namespace Agent
         Public Shared Function IsRequiredCapability(spec As AgentTaskSpec,
                                                      toolId As String) As Boolean
             If String.IsNullOrWhiteSpace(toolId) Then Return False
-            Return GetRequiredCapabilities(spec).
+            Return ResolveRequiredCapabilities(spec).
                 Any(Function(required) String.Equals(required, toolId, StringComparison.OrdinalIgnoreCase))
         End Function
 
@@ -51,14 +51,23 @@ Namespace Agent
             Return IsRequiredCapability(spec, toolId)
         End Function
 
-        Private Shared Function GetRequiredCapabilities(spec As AgentTaskSpec) As List(Of String)
+        ''' <summary>
+        ''' Single runtime authority for user-required capabilities.  Once a GoalContract
+        ''' exists, legacy TaskSpec projections must not add, remove or replace goal policy.
+        ''' Legacy fields are consulted only for persisted sessions that predate GoalContract.
+        ''' </summary>
+        Friend Shared Function ResolveRequiredCapabilities(spec As AgentTaskSpec) As List(Of String)
             If spec Is Nothing Then Return New List(Of String)()
 
             Dim result As New List(Of String)()
-            If spec.RequiredCapabilities IsNot Nothing Then result.AddRange(spec.RequiredCapabilities)
-            ' Accept older persisted TaskSpec payloads without allowing their sequence metadata
-            ' to regain control of the runtime.
-            If spec.MandatoryTools IsNot Nothing Then result.AddRange(spec.MandatoryTools)
+            If spec.GoalContract IsNot Nothing Then
+                result.AddRange(spec.GoalContract.RequiredCapabilities)
+            Else
+                ' Compatibility path for persisted TaskSpec payloads created before the Goal
+                ' Boundary existed.  This path disappears as soon as a frozen goal is attached.
+                If spec.RequiredCapabilities IsNot Nothing Then result.AddRange(spec.RequiredCapabilities)
+                If spec.MandatoryTools IsNot Nothing Then result.AddRange(spec.MandatoryTools)
+            End If
             Return result.
                 Where(Function(toolId) Not String.IsNullOrWhiteSpace(toolId)).
                 Select(Function(toolId) toolId.Trim()).

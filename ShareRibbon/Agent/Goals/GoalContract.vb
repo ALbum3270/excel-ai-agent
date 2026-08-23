@@ -27,6 +27,7 @@ Namespace Agent.Goals
         Private ReadOnly _constraints As ReadOnlyCollection(Of GoalConstraint)
         Private ReadOnly _requiredCapabilities As ReadOnlyCollection(Of String)
         Private ReadOnly _contractHash As String
+        Private ReadOnly _semanticHash As String
 
         Friend Sub New(goalId As String,
                        rawUserRequest As String,
@@ -34,7 +35,8 @@ Namespace Agent.Goals
                        criteria As IEnumerable(Of GoalCriterion),
                        constraints As IEnumerable(Of GoalConstraint),
                        requiredCapabilities As IEnumerable(Of String),
-                       contractHash As String)
+                       contractHash As String,
+                       semanticHash As String)
             _goalId = goalId
             _rawUserRequest = rawUserRequest
             _sourceClauses = New List(Of GoalSourceClause)(If(sourceClauses, New List(Of GoalSourceClause)())).AsReadOnly()
@@ -42,6 +44,7 @@ Namespace Agent.Goals
             _constraints = New List(Of GoalConstraint)(If(constraints, New List(Of GoalConstraint)())).AsReadOnly()
             _requiredCapabilities = New List(Of String)(If(requiredCapabilities, New List(Of String)())).AsReadOnly()
             _contractHash = contractHash
+            _semanticHash = semanticHash
         End Sub
 
         Public ReadOnly Property GoalId As String
@@ -83,6 +86,17 @@ Namespace Agent.Goals
         Public ReadOnly Property ContractHash As String
             Get
                 Return _contractHash
+            End Get
+        End Property
+
+        ''' <summary>
+        ''' Canonical semantic graph identity. It ignores model-generated entity ids and list
+        ''' order, but preserves raw authority, node multiplicity, typed fields and reference
+        ''' topology. Runtime immutability continues to use ContractHash.
+        ''' </summary>
+        Public ReadOnly Property SemanticHash As String
+            Get
+                Return _semanticHash
             End Get
         End Property
     End Class

@@ -30,7 +30,7 @@ Use this skill when the user asks PowerPoint to create or improve slides.
 - Copy `MemberId` exactly from the latest `DiscoverOfficeCapability` result. Do not derive or shorten it.
 - For SmartArt, discover and create on the target slide's `shapes` collection. Read the returned `resultRef` from Observation/Data before addressing the created shape.
 - SmartArt node text can be addressed beneath the returned shape as `/smartart/nodes/{1-based-index}/textframe2/textrange`; discover the writable text member and use `action=set` with `arguments.value`.
-- Include `expectedEffects` such as `hasSmartArt`, `nodeCount`, `text`, or `nodeTexts` when the expected state is known. Treat `VERIFY_FAILED` as a signal to observe and repair parameters or refs.
+- Every mutating operation must include observable `expectedEffects` such as `hasSmartArt`, `nodeCount`, `text`, or `nodeTexts`, or the batch must provide `successCriteria`. Treat `VERIFY_FAILED` as a real failure, not a successful host call.
 
 ## Common Tasks
 

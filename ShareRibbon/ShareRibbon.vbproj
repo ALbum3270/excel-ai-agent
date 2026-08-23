@@ -272,9 +272,15 @@
     <Compile Include="Agent\Goals\GoalConstraint.vb" />
     <Compile Include="Agent\Goals\GoalContract.vb" />
     <Compile Include="Agent\Goals\GoalCompilationResult.vb" />
+    <Compile Include="Agent\Goals\GoalCapabilityEvidenceResolver.vb" />
     <Compile Include="Agent\Goals\GoalCompiler.vb" />
+    <Compile Include="Agent\Goals\GoalInterpretation.vb" />
+    <Compile Include="Agent\Goals\GoalSourceAuthority.vb" />
     <Compile Include="Agent\Goals\GoalCoverageValidator.vb" />
+    <Compile Include="Agent\Goals\GoalHashing.vb" />
     <Compile Include="Agent\Goals\GoalContractFreezer.vb" />
+    <Compile Include="Agent\Goals\GoalExecutionAdmission.vb" />
+    <Compile Include="Agent\Goals\GoalOutcomeProjection.vb" />
     <Compile Include="Agent\AgentKernel.vb" />
     <Compile Include="Agent\AiNativeRuntime.vb" />
     <Compile Include="Agent\AgentExecutionContract.vb" />
@@ -407,6 +413,7 @@
     <Compile Include="Controls\Services\ChatFormatterAgent.vb" />
     <Compile Include="Controls\Services\ChatSystemPromptResolver.vb" />
     <Compile Include="Controls\Services\ChatRequestOrchestrator.vb" />
+    <Compile Include="Controls\Services\IntentAcceptancePolicy.vb" />
     <Compile Include="Controls\Services\ChatRoutingOrchestrator.vb" />
     <Compile Include="Controls\Services\ChatSendValidator.vb" />
     <Compile Include="Controls\Services\MemoryTurnRecorder.vb" />

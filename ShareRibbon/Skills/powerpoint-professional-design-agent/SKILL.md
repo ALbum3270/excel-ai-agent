@@ -22,6 +22,7 @@ Create presentation-ready slides through narrative planning, page archetype sele
 5. Call `CreateSlides` once with a coherent deck-level Scene specification. Do not generate one basic title-and-content command per page.
 6. Put a real accessible `imagePath` in the `CreateSlides` Scene when an image is required. Never create a fake image placeholder.
 7. Use `DiscoverOfficeCapability` and `OfficeObjectOperation` only for long-tail Office objects that the Scene compiler or high-level tools do not cover.
+   Every mutating object operation must declare observable `expectedEffects` or batch `successCriteria`; a COM call returning without an exception is not completion evidence.
 8. Observe `visualVerification`, `slideResults`, and warnings. Repair overflow, high density, missing artifacts, or failed pages before reporting completion.
 9. Never invent market statistics, customer numbers, benchmarks, or ROI figures. Every external metric must include `source`; if no reliable source is available, omit the number or explicitly label it as an assumption/illustrative estimate.
 10. Do not add generic AI branding, template watermarks, decorative circles, or filler labels unless the user or active brand template requires them.

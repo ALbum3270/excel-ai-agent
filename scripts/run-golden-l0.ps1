@@ -207,10 +207,73 @@ foreach ($case in $catalog.cases) {
             }
 
             $intentService = [ShareRibbon.IntentRecognitionService]::new("Excel")
-            $intentSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Controls\Services\IntentRecognitionService.vb") -Raw -Encoding UTF8
-            if ($intentSource -notmatch 'result\.ResponseMode\s*=\s*llmResult\.ResponseMode' -or
-                $intentSource -notmatch 'result\.RequestedOutputs\s*=\s*llmResult\.RequestedOutputs') {
+            $mergeIntentMethod = [ShareRibbon.IntentRecognitionService].GetMethod(
+                "MergeLlmIntentResult",
+                [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
+            $keywordIntent = [ShareRibbon.IntentResult]::new()
+            $modelIntent = [ShareRibbon.IntentResult]::new()
+            $modelIntent.Confidence = 0.9
+            $modelIntent.ResponseMode = "execute"
+            $modelIntent.RequestedOutputs.Add("worksheet")
+            $mergeIntentMethod.Invoke($null, @($keywordIntent, $modelIntent)) | Out-Null
+            if ($null -eq $mergeIntentMethod -or
+                $keywordIntent.ResponseMode -ne "execute" -or
+                -not $keywordIntent.RequestedOutputs.Contains("worksheet")) {
                 throw "Golden case $($case.id): parsed interaction mode is discarded before routing"
+            }
+            # The accepted model result is a snapshot, not an alias to mutable model output.
+            $modelIntent.RequestedOutputs.Add("chart")
+            if ($keywordIntent.RequestedOutputs.Contains("chart")) {
+                throw "Golden case $($case.id): accepted requestedOutputs still alias the model candidate"
+            }
+
+            # Candidate trust is atomic. A low-confidence answer must not partially overwrite a
+            # deterministic execute result while leaving its semantic intent behind.
+            $deterministicIntent = [ShareRibbon.IntentResult]::new()
+            $deterministicIntent.OfficeIntent = [ShareRibbon.OfficeIntentType]::FORMAT_STYLE
+            $deterministicIntent.IntentType = [ShareRibbon.ExcelIntentType]::FORMAT_STYLE
+            $deterministicIntent.Confidence = 0.8
+            $deterministicIntent.ResponseMode = "execute"
+            $deterministicIntent.UserFriendlyDescription = "deterministic"
+            $deterministicIntent.RequestedOutputs.Add("formatted_content")
+            $lowConfidenceAnswer = [ShareRibbon.IntentResult]::new()
+            $lowConfidenceAnswer.OfficeIntent = [ShareRibbon.OfficeIntentType]::GENERAL_QUERY
+            $lowConfidenceAnswer.IntentType = [ShareRibbon.ExcelIntentType]::GENERAL_QUERY
+            $lowConfidenceAnswer.Confidence = 0.3
+            $lowConfidenceAnswer.ResponseMode = "answer"
+            $lowConfidenceAnswer.UserFriendlyDescription = "untrusted"
+            $mergeIntentMethod.Invoke($null, @($deterministicIntent, $lowConfidenceAnswer)) | Out-Null
+            if ($deterministicIntent.OfficeIntent -ne [ShareRibbon.OfficeIntentType]::FORMAT_STYLE -or
+                $deterministicIntent.IntentType -ne [ShareRibbon.ExcelIntentType]::FORMAT_STYLE -or
+                $deterministicIntent.Confidence -ne 0.8 -or
+                $deterministicIntent.ResponseMode -ne "execute" -or
+                $deterministicIntent.UserFriendlyDescription -ne "deterministic" -or
+                $deterministicIntent.RequestedOutputs.Count -ne 1 -or
+                -not $deterministicIntent.RequestedOutputs.Contains("formatted_content")) {
+                throw "Golden case $($case.id): low-confidence model routing was partially accepted"
+            }
+
+            # A route candidate whose answer/clarify mode conflicts with execution artifacts is
+            # rejected as a whole instead of allowing requestedOutputs to force AgentKernel.
+            $inconsistentAnswer = [ShareRibbon.IntentResult]::new()
+            $inconsistentAnswer.Confidence = 0.95
+            $inconsistentAnswer.ResponseMode = "answer"
+            $inconsistentAnswer.RequestedOutputs.Add("worksheet")
+            $mergeIntentMethod.Invoke($null, @($deterministicIntent, $inconsistentAnswer)) | Out-Null
+            if ($deterministicIntent.ResponseMode -ne "execute" -or
+                $deterministicIntent.RequestedOutputs.Count -ne 1 -or
+                -not $deterministicIntent.RequestedOutputs.Contains("formatted_content")) {
+                throw "Golden case $($case.id): answer plus requestedOutputs was partially accepted"
+            }
+
+            $invalidModeIntent = [ShareRibbon.IntentResult]::new()
+            $invalidModeIntent.Confidence = 0.95
+            $invalidModeIntent.ResponseMode = "run"
+            $invalidModeIntent.RequestedOutputs.Add("worksheet")
+            $mergeIntentMethod.Invoke($null, @($deterministicIntent, $invalidModeIntent)) | Out-Null
+            if ($deterministicIntent.ResponseMode -ne "execute" -or
+                $deterministicIntent.RequestedOutputs.Count -ne 1) {
+                throw "Golden case $($case.id): illegal interactionMode was accepted"
             }
             $promptMethod = [ShareRibbon.IntentRecognitionService].GetMethod(
                 "GetEnhancedExcelIntentRecognitionPrompt",
@@ -263,6 +326,62 @@ foreach ($case in $catalog.cases) {
             $buildTaskSpec = [ShareRibbon.Agent.AiNativeRuntime].GetMethod(
                 "BuildTaskSpec",
                 [Reflection.BindingFlags]::Instance -bor [Reflection.BindingFlags]::NonPublic)
+
+            # Defensive projection: even a directly constructed inconsistent IntentResult cannot
+            # turn answer verification metadata into executable TaskSpec work.
+            $routingTools = [System.Collections.Generic.List[ShareRibbon.Agent.ToolDescriptor]]::new()
+            $routingSkills = [System.Collections.Generic.List[ShareRibbon.SkillFileDefinition]]::new()
+            $answerArtifactRequest = [ShareRibbon.Agent.AiNativeRequest]::new()
+            $answerArtifactRequest.UserInput = "请直接回答这个问题"
+            $answerArtifactRequest.AppType = "Excel"
+            $answerArtifactIntent = [ShareRibbon.IntentResult]::new()
+            $answerArtifactIntent.Confidence = 0.95
+            $answerArtifactIntent.ResponseMode = "answer"
+            $answerArtifactIntent.RequestedOutputs.Add("worksheet")
+            $answerArtifactSpec = [ShareRibbon.Agent.AgentTaskSpec]$buildTaskSpec.Invoke(
+                $runtime,
+                @($answerArtifactRequest, $answerArtifactIntent, $routingTools, $routingSkills, "Excel"))
+            if ($answerArtifactSpec.ExpectedOutputs.Count -ne 0 -or
+                $answerArtifactSpec.RequiredTools.Count -ne 0 -or
+                [ShareRibbon.IntentAcceptancePolicy]::HasExecutableToolRequirement($answerArtifactSpec)) {
+                throw "Golden case $($case.id): answer requestedOutputs still create executable TaskSpec work"
+            }
+            $answerArtifactDecision = [ShareRibbon.ChatRoutingOrchestrator]::DecidePostAnalysisRoute(
+                $false,
+                $answerArtifactIntent,
+                [ShareRibbon.IntentAcceptancePolicy]::HasExecutableToolRequirement($answerArtifactSpec))
+            if ($answerArtifactDecision.ToString() -ne "PlainChat") {
+                throw "Golden case $($case.id): answer requestedOutputs still force AgentKernel"
+            }
+
+            $invalidRoutingIntent = [ShareRibbon.IntentResult]::new()
+            $invalidRoutingIntent.Confidence = 0.95
+            $invalidRoutingIntent.ResponseMode = "run"
+            $invalidRoutingIntent.RequestedOutputs.Add("worksheet")
+            $invalidRoutingSpec = [ShareRibbon.Agent.AgentTaskSpec]$buildTaskSpec.Invoke(
+                $runtime,
+                @($answerArtifactRequest, $invalidRoutingIntent, $routingTools, $routingSkills, "Excel"))
+            $invalidRoutingDecision = [ShareRibbon.ChatRoutingOrchestrator]::DecidePostAnalysisRoute(
+                $false,
+                $invalidRoutingIntent,
+                [ShareRibbon.IntentAcceptancePolicy]::HasExecutableToolRequirement($invalidRoutingSpec))
+            if ($invalidRoutingSpec.ExpectedOutputs.Count -ne 0 -or
+                $invalidRoutingSpec.RequiredTools.Count -ne 0 -or
+                $invalidRoutingDecision.ToString() -ne "PlainChat") {
+                throw "Golden case $($case.id): illegal interactionMode still fails open into AgentKernel"
+            }
+
+            # A legitimate answer can still enter AgentKernel when exact workbook evidence needs
+            # an actual read tool; the tool requirement, not requestedOutputs, is the authority.
+            $readRequirementSpec = [ShareRibbon.Agent.AgentTaskSpec]::new()
+            $readRequirementSpec.RequiredTools.Add("ReadRange")
+            if (-not [ShareRibbon.IntentAcceptancePolicy]::HasExecutableToolRequirement($readRequirementSpec) -or
+                [ShareRibbon.ChatRoutingOrchestrator]::DecidePostAnalysisRoute(
+                    $false,
+                    $answerArtifactIntent,
+                    $true).ToString() -ne "AgentKernel") {
+                throw "Golden case $($case.id): a real read requirement can no longer support an exact answer"
+            }
             $chartRequest = [ShareRibbon.Agent.AiNativeRequest]::new()
             $chartRequest.UserInput = "根据日期和销售额生成折线图"
             $chartRequest.AppType = "Excel"
@@ -493,9 +612,13 @@ foreach ($case in $catalog.cases) {
                 throw "Golden case $($case.id): malformed LLM JSON returned a default intent and would overwrite the fallback"
             }
 
-            $routeSource = Get-Content -LiteralPath (Join-Path $repoRoot "ShareRibbon\Controls\Services\ChatRoutingOrchestrator.vb") -Raw -Encoding UTF8
-            if ($routeSource -notmatch 'taskSpecRequiresExecution' -or
-                $routeSource -notmatch 'Not\s+taskSpecRequiresExecution') {
+            $fallbackIntent = [ShareRibbon.IntentResult]::new()
+            $fallbackIntent.OfficeIntent = [ShareRibbon.OfficeIntentType]::SLIDE_CREATE
+            $fallbackDecision = [ShareRibbon.ChatRoutingOrchestrator]::DecidePostAnalysisRoute(
+                $false,
+                $fallbackIntent,
+                $true)
+            if ($fallbackDecision.ToString() -ne "AgentKernel") {
                 throw "Golden case $($case.id): TaskSpec execution fallback is missing"
             }
         }

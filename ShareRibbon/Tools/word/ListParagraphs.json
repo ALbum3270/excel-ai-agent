@@ -5,6 +5,7 @@
   "appType": "word",
   "category": "查询",
   "riskLevel": "safe",
+  "accessMode": "read",
   "isVbaFallback": false,
   "parameters": [
     {

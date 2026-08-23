@@ -212,7 +212,9 @@ Namespace Agent
     ''' </summary>
     Public Class AgentTaskSpec
         Private _rawUserRequest As String = ""
+        Private _goalCompilation As Goals.GoalCompilationResult
         Private _goalContract As Goals.GoalContract
+        Private _goalInterpretationFallbackReason As String = ""
 
         Public Property Goal As String = ""
         Public Property TargetObject As String = ""
@@ -270,6 +272,38 @@ Namespace Agent
             End Get
         End Property
 
+        ''' <summary>
+        ''' Structured but still untrusted interpretation captured at intake. It is internal so
+        ''' planners cannot mutate or replace the semantic authority before Validate -> Freeze.
+        ''' </summary>
+        Friend ReadOnly Property GoalCompilation As Goals.GoalCompilationResult
+            Get
+                Return _goalCompilation
+            End Get
+        End Property
+
+        ''' <summary>
+        ''' Observable provenance when a structured interpretation was rejected and the exact
+        ''' raw request was used instead.  This status is not part of user semantics.
+        ''' </summary>
+        Public ReadOnly Property GoalInterpretationFallbackReason As String
+            Get
+                Return _goalInterpretationFallbackReason
+            End Get
+        End Property
+
+        Friend Sub RecordGoalInterpretationFallback(reason As String)
+            Dim normalized = If(reason, "").Trim()
+            If normalized.Length = 0 Then Return
+            If _goalInterpretationFallbackReason.Length = 0 Then
+                _goalInterpretationFallbackReason = normalized
+                Return
+            End If
+            If Not String.Equals(_goalInterpretationFallbackReason, normalized, StringComparison.Ordinal) Then
+                Throw New InvalidOperationException("Goal interpretation fallback provenance has already been recorded.")
+            End If
+        End Sub
+
         Friend Sub CaptureRawUserRequest(value As String)
             Dim candidate = If(value, "")
             If String.IsNullOrWhiteSpace(candidate) Then
@@ -282,6 +316,27 @@ Namespace Agent
             If Not String.Equals(_rawUserRequest, candidate, StringComparison.Ordinal) Then
                 Throw New InvalidOperationException("RawUserRequest has already been captured and cannot be replaced.")
             End If
+        End Sub
+
+        Friend Sub SetGoalCompilationOnce(value As Goals.GoalCompilationResult)
+            If value Is Nothing Then Throw New ArgumentNullException(NameOf(value))
+            If String.IsNullOrEmpty(_rawUserRequest) Then
+                Throw New InvalidOperationException("RawUserRequest must be captured before GoalCompilation is attached.")
+            End If
+            If value.Candidate Is Nothing OrElse
+               Not String.Equals(_rawUserRequest, value.Candidate.RawUserRequest, StringComparison.Ordinal) Then
+                Throw New InvalidOperationException("GoalCompilation does not represent the captured RawUserRequest.")
+            End If
+
+            If _goalCompilation IsNot Nothing Then
+                Dim existingFingerprint = Goals.GoalCoverageValidator.ComputeCompilationFingerprint(_goalCompilation)
+                Dim incomingFingerprint = Goals.GoalCoverageValidator.ComputeCompilationFingerprint(value)
+                If Not String.Equals(existingFingerprint, incomingFingerprint, StringComparison.Ordinal) Then
+                    Throw New InvalidOperationException("GoalCompilation has already been attached and cannot be replaced.")
+                End If
+                Return
+            End If
+            _goalCompilation = value
         End Sub
 
         Friend Sub SetGoalContractOnce(value As Goals.GoalContract)
@@ -314,8 +369,43 @@ Namespace Agent
     ''' policy must not collapse into the same concept.
     ''' </summary>
     Public Class OutcomeContract
+        Private _boundGoalContractHash As String = ""
+        Private _bindingMode As String = ""
+        Private _frozenOutcomeContractHash As String = ""
+
         Public Property SchemaVersion As String = "1.0"
         Public Property Requirements As New List(Of OutcomeRequirement)()
+        ''' <summary>
+        ''' Hash of the authoritative GoalContract that this verification projection was
+        ''' validated against.  The model cannot provide this value; the harness binds it
+        ''' when the initial outcome contract is frozen.
+        ''' </summary>
+        <Newtonsoft.Json.JsonIgnore>
+        Public ReadOnly Property BoundGoalContractHash As String
+            Get
+                Return _boundGoalContractHash
+            End Get
+        End Property
+        ''' <summary>
+        ''' goal-v1 for a contract projected from an immutable GoalContract; legacy-v1 only
+        ''' for persisted sessions that have no GoalContract.
+        ''' </summary>
+        <Newtonsoft.Json.JsonIgnore>
+        Public ReadOnly Property BindingMode As String
+            Get
+                Return _bindingMode
+            End Get
+        End Property
+        ''' <summary>
+        ''' Integrity seal over the normalized verification contract.  Frozen=True alone is
+        ''' not trusted because OutcomeRequirement remains mutable during the migration.
+        ''' </summary>
+        <Newtonsoft.Json.JsonIgnore>
+        Public ReadOnly Property FrozenOutcomeContractHash As String
+            Get
+                Return _frozenOutcomeContractHash
+            End Get
+        End Property
         ''' <summary>
         ''' Concrete workbook identity captured when active/short Excel references are frozen.
         ''' Evidence is bound at observation time, so switching ActiveWorkbook cannot
@@ -330,6 +420,16 @@ Namespace Agent
         <Newtonsoft.Json.JsonIgnore>
         Public Property ValidatedComputeCapabilities As New List(Of String)()
         Public Property Frozen As Boolean = False
+
+        Friend Sub BindToGoal(goalContractHash As String,
+                              bindingMode As String)
+            _boundGoalContractHash = If(goalContractHash, "")
+            _bindingMode = If(bindingMode, "")
+        End Sub
+
+        Friend Sub SealIntegrity(fingerprint As String)
+            _frozenOutcomeContractHash = If(fingerprint, "")
+        End Sub
     End Class
 
     Public Class OutcomeRequirement
@@ -342,8 +442,9 @@ Namespace Agent
         Public Property ExpectedValue As JToken
         Public Property DerivedFromCapability As String
         ''' <summary>
-        ''' Stable IDs of AgentTaskSpec.SuccessCriteria that this host-observable requirement
-        ''' helps prove. The frozen contract must cover every success criterion at least once.
+        ''' Stable IDs of required GoalContract criteria that this host-observable requirement
+        ''' helps prove. For persisted sessions without a GoalContract only, criterion-N refers
+        ''' to the legacy AgentTaskSpec.SuccessCriteria projection.
         ''' </summary>
         Public Property CriterionIds As New List(Of String)()
         Public Property Required As Boolean = True

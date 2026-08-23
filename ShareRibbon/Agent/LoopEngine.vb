@@ -69,6 +69,13 @@ Namespace Agent
                 End If
                 frozenGoalHash = session.Spec.GoalContract.ContractHash
 
+                Dim admissionError = Goals.GoalExecutionAdmission.Validate(session.Spec)
+                If Not String.IsNullOrWhiteSpace(admissionError) Then
+                    session.Status = AgentStatus.Failed
+                    OnStatusChanged?.Invoke(admissionError)
+                    Return AgentResult.Failed(session.Id, admissionError)
+                End If
+
                 session.Plan = Await GeneratePlanAsync(session, systemPrompt, skill)
                 If session.Plan Is Nothing Then
                     session.Plan = CreateFallbackPlan(session)
@@ -705,12 +712,33 @@ Namespace Agent
 
                 If session.Spec.GoalContract IsNot Nothing Then Return ""
 
-                ' Freeze only semantics derived from the exact user request. TaskSpec fields
+                ' Freeze only semantics derived from the exact captured request. TaskSpec fields
                 ' are mutable legacy projections and must never flow back into GoalContract.
-                Dim compilation = Goals.GoalCompiler.Compile(session.Spec.RawUserRequest)
+                Dim compilation = session.Spec.GoalCompilation
+                If compilation Is Nothing Then
+                    session.Spec.RecordGoalInterpretationFallback(
+                        "No intake GoalCompilation was attached; exact captured request was preserved.")
+                    compilation = New Goals.RawPreservingGoalInterpretationAdapter(
+                        "No intake GoalCompilation was attached; LoopEngine preserved the exact captured request.").
+                        Interpret(session.Spec.RawUserRequest)
+                End If
                 Dim validation = Goals.GoalCoverageValidator.Validate(compilation)
                 If Not validation.Succeeded Then
-                    Return "Goal compilation failed: " & String.Join("; ", validation.Errors)
+                    If compilation.RequiresClarification Then
+                        Return "Goal compilation requires clarification: " & String.Join("; ", validation.Errors)
+                    End If
+
+                    ' A malformed model interpretation may not block the task or import guessed
+                    ' meaning. Degrade to one opaque exact-text semantic criterion.
+                    session.Spec.RecordGoalInterpretationFallback(
+                        "Structured interpretation rejected by deterministic validation: " & String.Join("; ", validation.Errors))
+                    compilation = New Goals.RawPreservingGoalInterpretationAdapter(
+                        "Structured goal interpretation failed deterministic validation: " & String.Join("; ", validation.Errors)).
+                        Interpret(session.Spec.RawUserRequest)
+                    validation = Goals.GoalCoverageValidator.Validate(compilation)
+                    If Not validation.Succeeded Then
+                        Return "Goal compilation failed: " & String.Join("; ", validation.Errors)
+                    End If
                 End If
 
                 Dim frozenGoal = Goals.GoalContractFreezer.Freeze(compilation, validation)

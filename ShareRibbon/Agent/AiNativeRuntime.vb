@@ -161,10 +161,12 @@ Namespace Agent
             Dim priorTask = If(isDestinationCorrection, request.PreviousTaskSpec, Nothing)
             Dim semanticInput = input & vbCrLf & intentDescription
             If priorTask IsNot Nothing Then semanticInput &= vbCrLf & priorTask.Goal
-            Dim interactionMode = If(intent?.ResponseMode, "").Trim().ToLowerInvariant()
+            Dim interactionModeKind = IntentAcceptancePolicy.ParseMode(intent?.ResponseMode)
+            Dim interactionMode = IntentAcceptancePolicy.CanonicalMode(interactionModeKind)
             Dim isReadOnlyDataAnswer = IsReadOnlyExcelDataAnswer(intent, request.OfficeContext, appType)
-            Dim isNonExecution = interactionMode = "clarify" OrElse
-                (interactionMode = "answer" AndAlso Not isReadOnlyDataAnswer)
+            Dim isNonExecution = interactionModeKind = InteractionModeKind.Invalid OrElse
+                interactionModeKind = InteractionModeKind.Clarify OrElse
+                (interactionModeKind = InteractionModeKind.Answer AndAlso Not isReadOnlyDataAnswer)
             Dim isPlainWorksheetCreation = IsOnlyWorksheetCreationRequest(input, appType)
             Dim isExplicitPythonCompute = NormalizeAppType(appType) = "excel" AndAlso
                 (IsExplicitPythonComputeRequest(semanticInput) OrElse TaskRequiresTool(priorTask, "PythonCompute"))
@@ -188,6 +190,7 @@ Namespace Agent
             End If
             If String.IsNullOrWhiteSpace(authoritativeRawRequest) Then authoritativeRawRequest = spec.Goal
             spec.CaptureRawUserRequest(authoritativeRawRequest)
+            AttachGoalInterpretation(spec, intent, authoritativeRawRequest, isDestinationCorrection)
 
             If isNonExecution Then
                 spec.TargetObject = "用户问题"
@@ -231,7 +234,8 @@ Namespace Agent
                 For Each kv In intent.ExtractedEntities
                     spec.Constraints.Add($"{kv.Key}: {kv.Value}")
                 Next
-                If intent.RequestedOutputs IsNot Nothing AndAlso Not isReadOnlyDataAnswer Then
+                If interactionModeKind = InteractionModeKind.Execute AndAlso
+                   intent.RequestedOutputs IsNot Nothing Then
                     For Each output In intent.RequestedOutputs
                         AddExpectedOutput(spec, output)
                     Next
@@ -325,6 +329,38 @@ Namespace Agent
             Return spec
         End Function
 
+        ''' <summary>
+        ''' Goal Interpretation Seam. Normal tasks reuse the structured interpretation from the
+        ''' existing intent-model call; continuation corrections fail closed to exact raw text
+        ''' until a verified cross-turn merge Adapter is introduced.
+        ''' </summary>
+        Private Shared Sub AttachGoalInterpretation(spec As AgentTaskSpec,
+                                                    intent As IntentResult,
+                                                    authoritativeRawRequest As String,
+                                                    isDestinationCorrection As Boolean)
+            If spec Is Nothing Then Return
+
+            Dim adapter As Goals.IGoalInterpretationAdapter
+            If Not isDestinationCorrection AndAlso intent?.GoalInterpretation?.Candidate IsNot Nothing Then
+                adapter = New Goals.ModelGoalInterpretationAdapter(intent.GoalInterpretation)
+            Else
+                Dim reason = If(isDestinationCorrection,
+                    "A cross-turn destination correction was preserved as exact combined user text; no legacy TaskSpec projection was imported.",
+                    "The intent-model response had no usable structured goal interpretation; exact user text was preserved.")
+                spec.RecordGoalInterpretationFallback(reason)
+                adapter = New Goals.RawPreservingGoalInterpretationAdapter(reason)
+            End If
+
+            Try
+                spec.SetGoalCompilationOnce(adapter.Interpret(authoritativeRawRequest))
+            Catch ex As Exception
+                Dim reason = "Structured goal interpretation could not be compiled and exact user text was preserved: " & ex.Message
+                spec.RecordGoalInterpretationFallback(reason)
+                Dim fallback As New Goals.RawPreservingGoalInterpretationAdapter(reason)
+                spec.SetGoalCompilationOnce(fallback.Interpret(authoritativeRawRequest))
+            End Try
+        End Sub
+
         Private Shared Function IsReadOnlyExcelDataAnswer(intent As IntentResult,
                                                            officeContext As Context.OfficeContext,
                                                            appType As String) As Boolean
@@ -375,14 +411,7 @@ Namespace Agent
         End Function
 
         Friend Shared Function IsExplicitPythonComputeRequest(input As String) As Boolean
-            If String.IsNullOrWhiteSpace(input) Then Return False
-            Const engine As String = "(?:PythonCompute|Python)"
-            Dim explicitInvocation = $"(?:(?:use|using|via|run|execute|with)\s+|(?:使用|用|通过|调用|运行|执行|基于)\s*){engine}(?![A-Za-z0-9_])"
-            Dim explicitOperation = $"{engine}\s*(?:(?:to|for)\s+|(?:来|进行|用于)?\s*)(?:calculate|analyze|process|summarize|aggregate|compute|计算|分析|处理|汇总|统计|运行|执行)"
-            Return System.Text.RegularExpressions.Regex.IsMatch(
-                input,
-                $"(?:{explicitInvocation})|(?:{explicitOperation})",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            Return Goals.GoalCapabilityEvidenceResolver.IsExplicitPythonComputeRequest(input)
         End Function
 
         Private Shared Function RequestsNewWorksheet(input As String) As Boolean
@@ -551,8 +580,8 @@ Namespace Agent
 
         Private Function InferComplexity(intent As IntentResult) As String
             If intent Is Nothing Then Return "exploratory"
-            Dim interactionMode = If(intent.ResponseMode, "").Trim().ToLowerInvariant()
-            If interactionMode = "answer" OrElse interactionMode = "clarify" Then Return "simple"
+            Dim interactionMode = IntentAcceptancePolicy.ParseMode(intent.ResponseMode)
+            If IntentAcceptancePolicy.IsNonExecutionMode(interactionMode) Then Return "simple"
             If intent.Confidence < 0.4 Then Return "exploratory"
             If intent.CanUseDirectCommand AndAlso Not intent.RequiresVBA Then Return "simple"
             Return "medium"
@@ -560,8 +589,8 @@ Namespace Agent
 
         Private Function InferRiskLevel(intent As IntentResult) As String
             If intent Is Nothing Then Return "safe"
-            Dim interactionMode = If(intent.ResponseMode, "").Trim().ToLowerInvariant()
-            If interactionMode = "answer" OrElse interactionMode = "clarify" Then Return "safe"
+            Dim interactionMode = IntentAcceptancePolicy.ParseMode(intent.ResponseMode)
+            If IntentAcceptancePolicy.IsNonExecutionMode(interactionMode) Then Return "safe"
             If intent.RequiresVBA Then Return "medium"
             Return "safe"
         End Function
@@ -594,7 +623,8 @@ Namespace Agent
                     .RiskLevel = taskSpec.RiskLevel,
                     .Constraints = taskSpec.Constraints,
                     .SuccessCriteria = taskSpec.SuccessCriteria,
-                    .RequiredTools = taskSpec.RequiredTools
+                    .RequiredTools = taskSpec.RequiredTools,
+                    .GoalInterpretationFallbackReason = taskSpec.GoalInterpretationFallbackReason
                 }
             End If
 

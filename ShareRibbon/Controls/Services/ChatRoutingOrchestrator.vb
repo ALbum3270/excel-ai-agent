@@ -170,11 +170,11 @@ Public Class ChatRoutingOrchestrator
                 _host.SetCurrentIntentResult(intent)
             End If
 
-            Dim taskSpecRequiresExecution = aiNativeResult?.TaskSpec IsNot Nothing AndAlso
-                ((aiNativeResult.TaskSpec.RequiredTools IsNot Nothing AndAlso aiNativeResult.TaskSpec.RequiredTools.Count > 0) OrElse
-                 aiNativeResult.TaskSpec.ExpectedSlideCount > 0 OrElse
-                 (aiNativeResult.TaskSpec.ExpectedOutputs IsNot Nothing AndAlso
-                   aiNativeResult.TaskSpec.ExpectedOutputs.Count > 0))
+            ' Completion assertions describe what a successful execution must prove; they do
+            ' not authorize execution.  Only a real tool requirement participates in the
+            ' answer-mode exception (for example ReadRange before an exact workbook answer).
+            Dim taskSpecRequiresExecution = IntentAcceptancePolicy.HasExecutableToolRequirement(
+                aiNativeResult?.TaskSpec)
             Dim routeDecision = DecidePostAnalysisRoute(isFollowUp, intent, taskSpecRequiresExecution)
             AppLogger.Info("ChatRoutingOrchestrator", $"Route decision={routeDecision} appType={appType} elapsedMs={routeClock.ElapsedMilliseconds}")
             If routeDecision = ChatRouteDecision.PlainChat OrElse routeDecision = ChatRouteDecision.FollowUpChat Then
@@ -229,16 +229,29 @@ Public Class ChatRoutingOrchestrator
                                                     intent As IntentResult,
                                                     taskSpecRequiresExecution As Boolean) As ChatRouteDecision
         Dim resolvedIntent = If(intent, New IntentResult())
-        Dim interactionMode = If(resolvedIntent.ResponseMode, "").Trim().ToLowerInvariant()
-        If taskSpecRequiresExecution Then Return ChatRouteDecision.AgentKernel
+        Dim interactionMode = IntentAcceptancePolicy.ParseMode(resolvedIntent.ResponseMode)
+        Dim chatDecision = If(isFollowUp,
+                              ChatRouteDecision.FollowUpChat,
+                              ChatRouteDecision.PlainChat)
 
-        Dim shouldUsePlainChat = interactionMode = "answer" OrElse interactionMode = "clarify" OrElse
-            (String.IsNullOrWhiteSpace(interactionMode) AndAlso
-             resolvedIntent.OfficeIntent = OfficeIntentType.GENERAL_QUERY AndAlso
-             Not taskSpecRequiresExecution)
-
-        If Not shouldUsePlainChat Then Return ChatRouteDecision.AgentKernel
-        Return If(isFollowUp, ChatRouteDecision.FollowUpChat, ChatRouteDecision.PlainChat)
+        Select Case interactionMode
+            Case InteractionModeKind.Invalid, InteractionModeKind.Clarify
+                ' Invalid model values and clarification requests must never fail open into an
+                ' Office mutation, even if inconsistent verification metadata survived upstream.
+                Return chatDecision
+            Case InteractionModeKind.Execute
+                Return ChatRouteDecision.AgentKernel
+            Case InteractionModeKind.Answer
+                ' Exact workbook answers may need a read tool.  Expected outputs alone never
+                ' satisfy this exception.
+                Return If(taskSpecRequiresExecution, ChatRouteDecision.AgentKernel, chatDecision)
+            Case Else
+                ' Compatibility for deterministic intent recognition when the model candidate
+                ' was absent or atomically rejected.
+                If taskSpecRequiresExecution Then Return ChatRouteDecision.AgentKernel
+                If resolvedIntent.OfficeIntent = OfficeIntentType.GENERAL_QUERY Then Return chatDecision
+                Return ChatRouteDecision.AgentKernel
+        End Select
     End Function
 
     ''' <summary>

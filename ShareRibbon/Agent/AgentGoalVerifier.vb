@@ -22,12 +22,6 @@ Namespace Agent
                 Return "任务未完成：缺少可验收的任务规格。"
             End If
 
-            Dim capabilityError = AgentExecutionContract.ValidateOutcome(session)
-            If Not String.IsNullOrWhiteSpace(capabilityError) Then Return capabilityError
-
-            Dim outputError = ValidateExpectedOutputs(session)
-            If Not String.IsNullOrWhiteSpace(outputError) Then Return outputError
-
             Dim contract = session.Spec.OutcomeContract
             If contract Is Nothing OrElse contract.Requirements Is Nothing OrElse
                Not contract.Requirements.Any(Function(item) item IsNot Nothing AndAlso item.Required) Then
@@ -36,7 +30,19 @@ Namespace Agent
                 End If
                 Return ValidateLegacyNonExcelOutcome(session)
             End If
-            If Not contract.Frozen Then Return "任务未完成：结果合同尚未冻结。"
+            Dim integrityError = Goals.GoalOutcomeProjection.ValidateIntegrity(session.Spec, contract)
+            If Not String.IsNullOrWhiteSpace(integrityError) Then Return integrityError
+
+            Dim capabilityError = AgentExecutionContract.ValidateOutcome(session)
+            If Not String.IsNullOrWhiteSpace(capabilityError) Then Return capabilityError
+
+            ' ExpectedOutputs is a mutable legacy projection. Once GoalContract exists its
+            ' semantics are already represented by Goal criteria and cannot be reintroduced
+            ' as an independent completion authority.
+            If session.Spec.GoalContract Is Nothing Then
+                Dim outputError = ValidateExpectedOutputs(session)
+                If Not String.IsNullOrWhiteSpace(outputError) Then Return outputError
+            End If
 
             If String.Equals(session.AppType, "Excel", StringComparison.OrdinalIgnoreCase) AndAlso
                Not String.IsNullOrWhiteSpace(contract.BoundWorkbook) Then

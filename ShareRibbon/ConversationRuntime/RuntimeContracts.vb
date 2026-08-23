@@ -119,4 +119,5 @@ Public Class ChatContextTaskSpecTrace
     Public Property Constraints As New List(Of String)()
     Public Property SuccessCriteria As New List(Of String)()
     Public Property RequiredTools As New List(Of String)()
+    Public Property GoalInterpretationFallbackReason As String
 End Class

@@ -214,11 +214,15 @@ Namespace Agent
 
             If session.Spec IsNot Nothing Then
                 sb.AppendLine()
-                If session.Spec.GoalContract IsNot Nothing Then
+                Dim hasFrozenGoal = session.Spec.GoalContract IsNot Nothing
+                If hasFrozenGoal Then
                     sb.AppendLine("【冻结目标合同（唯一语义权威）】")
                     sb.AppendLine("[Planner/Replan may choose or replace strategy, but MUST NOT relax or replace this GoalContract]")
-                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}")
+                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}; SemanticHash: {session.Spec.GoalContract.SemanticHash}")
                     sb.AppendLine($"Raw user request: {session.Spec.GoalContract.RawUserRequest}")
+                    If Not String.IsNullOrWhiteSpace(session.Spec.GoalInterpretationFallbackReason) Then
+                        sb.AppendLine("Interpretation provenance: exact-text fallback; " & session.Spec.GoalInterpretationFallbackReason)
+                    End If
                     sb.AppendLine("Source clauses:")
                     For Each sourceClause In session.Spec.GoalContract.SourceClauses
                         sb.AppendLine($"- {sourceClause.Id}: {sourceClause.Text}")
@@ -236,25 +240,27 @@ Namespace Agent
                     If session.Spec.GoalContract.RequiredCapabilities.Count > 0 Then
                         sb.AppendLine("Required capabilities: " & String.Join(", ", session.Spec.GoalContract.RequiredCapabilities))
                     End If
-                End If
-                sb.AppendLine()
-                sb.AppendLine("【任务规格投影（非权威规划提示）】")
-                sb.AppendLine("[This projection and the legacy OutcomeContract may guide planning/verification, but MUST NOT redefine the frozen goal]")
-                sb.AppendLine($"目标: {If(session.Spec.GoalContract?.RawUserRequest, session.Spec.Goal)}")
-                sb.AppendLine($"目标对象: {session.Spec.TargetObject}")
-                sb.AppendLine($"复杂度: {session.Spec.Complexity}; 风险: {session.Spec.RiskLevel}")
-                sb.AppendLine($"文档修改策略: {session.Spec.MutationPolicy}")
-                If session.Spec.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
-                    sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
-                End If
-                If session.Spec.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
-                    sb.AppendLine("成功标准（outcomeContract 必须用 criterionIds 全量映射）:")
-                    For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
-                        sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
-                    Next
-                End If
-                If session.Spec.ExpectedOutputs IsNot Nothing AndAlso session.Spec.ExpectedOutputs.Count > 0 Then
-                    sb.AppendLine("必须实际产出并验证: " & String.Join(", ", session.Spec.ExpectedOutputs))
+                    sb.AppendLine()
+                    sb.AppendLine("【运行时策略（不构成用户目标）】")
+                    sb.AppendLine($"宿主: {session.AppType}; 修改策略: {session.Spec.MutationPolicy}; 风险: {session.Spec.RiskLevel}")
+                Else
+                    sb.AppendLine("【Legacy 任务规格（仅兼容无 GoalContract 的旧会话）】")
+                    sb.AppendLine($"目标: {session.Spec.Goal}")
+                    sb.AppendLine($"目标对象: {session.Spec.TargetObject}")
+                    sb.AppendLine($"复杂度: {session.Spec.Complexity}; 风险: {session.Spec.RiskLevel}")
+                    sb.AppendLine($"文档修改策略: {session.Spec.MutationPolicy}")
+                    If session.Spec.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
+                        sb.AppendLine("约束: " & String.Join("; ", session.Spec.Constraints))
+                    End If
+                    If session.Spec.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
+                        sb.AppendLine("Legacy 成功标准（outcomeContract 必须用 criterionIds 全量映射）:")
+                        For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
+                            sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
+                        Next
+                    End If
+                    If session.Spec.ExpectedOutputs IsNot Nothing AndAlso session.Spec.ExpectedOutputs.Count > 0 Then
+                        sb.AppendLine("必须实际产出并验证: " & String.Join(", ", session.Spec.ExpectedOutputs))
+                    End If
                 End If
             End If
 
@@ -271,15 +277,23 @@ Namespace Agent
             If skill IsNot Nothing Then
                 sb.AppendLine()
                 sb.AppendLine($"【匹配技能】{skill.Name}: {skill.Description}")
-                Dim taskTools = If(session.Spec?.RequiredTools, skill.RequiredTools)
+                Dim taskTools = If(session.Spec?.GoalContract IsNot Nothing,
+                                   skill.RequiredTools,
+                                   If(session.Spec?.RequiredTools, skill.RequiredTools))
                 If taskTools IsNot Nothing AndAlso taskTools.Count > 0 Then
                     sb.AppendLine($"【本任务建议工具】{String.Join(", ", taskTools)}")
                 End If
-                Dim hasCapabilityPolicy = session.Spec?.RequiredCapabilities IsNot Nothing AndAlso
+                Dim authoritativeCapabilities = session.Spec?.GoalContract?.RequiredCapabilities
+                Dim hasAuthoritativeCapabilityPolicy = authoritativeCapabilities IsNot Nothing AndAlso
+                    authoritativeCapabilities.Count > 0
+                Dim hasLegacyCapabilityProjection = session.Spec?.GoalContract Is Nothing AndAlso
+                    session.Spec?.RequiredCapabilities IsNot Nothing AndAlso
                     session.Spec.RequiredCapabilities.Count > 0
-                If hasCapabilityPolicy Then
-                    sb.AppendLine($"【用户要求的能力策略】必须真实使用: {String.Join(", ", session.Spec.RequiredCapabilities)}")
+                If hasAuthoritativeCapabilityPolicy Then
+                    sb.AppendLine($"【GoalContract能力约束】必须真实使用: {String.Join(", ", authoritativeCapabilities)}")
                     sb.AppendLine("工具是否存在以已注册工具清单为准；不得根据旧经验声称缺少清单中已列出的工具。")
+                ElseIf hasLegacyCapabilityProjection Then
+                    sb.AppendLine($"【旧能力执行投影（非用户语义权威）】{String.Join(", ", session.Spec.RequiredCapabilities)}")
                 ElseIf Not String.IsNullOrWhiteSpace(skill.PromptTemplate) Then
                     sb.AppendLine()
                     sb.AppendLine("【技能详细说明】")
@@ -295,12 +309,16 @@ Namespace Agent
             End If
             sb.AppendLine("每个步骤必须能被已注册工具覆盖。toolHint 必须原样照抄【已注册工具】中的 ID；不要在规划阶段生成未来工具参数。")
             sb.AppendLine("兼容意图标签不是能力边界。应以开放式任务规格、命中的 Skill 和当前工具组合完成用户目标；若确实缺少原子能力，明确报告 capability gap，不得编造工具或宣称完成。")
-            sb.AppendLine("计划必须覆盖所有成功标准。要求图片时，高层步骤只需用 toolHint 声明真实图片能力；可访问的 imagePath 应在执行轮根据当时事实决定。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
-            sb.AppendLine("首次规划还必须把最终目标编译成 outcomeContract。它描述最终可观察状态，不描述步骤或工具顺序。每条 requirement 的 effectType 必须取自【已注册工具】列出的可验证结果；targetRef 必须使用 ContextPack 中稳定的工作簿/工作表/完整范围引用，不能只写一个相交的单元格。每条 requirement 最多映射一个 criterionId；复合目标必须拆成多条独立的宿主断言，禁止把多个成功标准挂到一个弱断言上。")
+            sb.AppendLine("计划必须覆盖冻结 GoalContract 中的全部 required criteria；只有无 GoalContract 的旧会话才使用 legacy SuccessCriteria。要求图片时，高层步骤只需用 toolHint 声明真实图片能力；可访问的 imagePath 应在执行轮根据当时事实决定。没有图片来源时返回 capabilityGap，禁止用占位形状或省略配图后宣称完成。")
+            sb.AppendLine("首次规划还必须生成 outcomeContract 验证投影。它描述如何观察冻结目标，不是新的用户目标，也不能添加未绑定 criterionId 的写入目标。每条 requirement 的 effectType 必须取自【已注册工具】列出的可验证结果；targetRef 必须使用 ContextPack 中稳定的工作簿/工作表/完整范围引用，不能只写一个相交的单元格。每条 requirement 最多映射一个真实 GoalCriterion.Id；复合目标必须拆成多条独立宿主断言。只有服务于已绑定计算产物的 read_coverage/compute_artifact 可以不映射 criterionId。")
             sb.AppendLine("operator=equals 表示完整精确相等；contains 表示对象字段子集或有序数组子序列；covers 只用于 read_coverage 的范围覆盖；exists 只验证对象/产物存在。object_exists/object_absent 只能表达对象生命周期，property 留空且 expectedValue 为 null；对象属性必须单独使用 property_state。若 expectedValue 只是工具参数的一部分，必须用 contains；property_state 必须同时填写 property 和该属性的 expectedValue。")
             sb.AppendLine("如果最终数据必须来自某个用户明确要求的计算能力（例如 PythonCompute），在最终 data_state requirement 的 derivedFromCapability 中写该能力，并另外声明该计算输入完整范围的 read_coverage requirement。不得用 changed=true 代替目标状态，也不得把无关读取、计算、建表或任意一次写入当成整个任务完成。")
             sb.AppendLine("如果任务是生成可编辑文书模板，缺少具体字段时不要停在澄清问题；先用占位符生成模板草稿。")
             sb.AppendLine("返回 JSON 格式：")
+            Dim exampleCriterionId = If(
+                session.Spec?.GoalContract?.Criteria?.FirstOrDefault(
+                    Function(item) item.Required AndAlso Not String.Equals(item.Kind, "capability", StringComparison.OrdinalIgnoreCase))?.Id,
+                "criterion-1")
             sb.AppendLine("```json")
             sb.AppendLine("{")
             sb.AppendLine("  ""understanding"": ""对用户需求的理解"",")
@@ -314,7 +332,7 @@ Namespace Agent
             sb.AppendLine("  ""outcomeContract"": {")
             sb.AppendLine("    ""schemaVersion"": ""1.0"",")
             sb.AppendLine("    ""requirements"": [")
-            sb.AppendLine("      { ""id"": ""goal-1"", ""appType"": ""Excel"", ""targetRef"": ""稳定对象或完整范围引用"", ""effectType"": ""从已注册工具的可验证结果中原样选择"", ""property"": ""可选属性"", ""operator"": ""equals|contains|covers|exists"", ""expectedValue"": {}, ""derivedFromCapability"": ""可选"", ""criterionIds"": [""criterion-1""], ""required"": true, ""description"": ""对应哪条最终成功标准"" }")
+            sb.AppendLine($"      {{ ""id"": ""goal-1"", ""appType"": ""Excel"", ""targetRef"": ""稳定对象或完整范围引用"", ""effectType"": ""从已注册工具的可验证结果中原样选择"", ""property"": ""可选属性"", ""operator"": ""equals|contains|covers|exists"", ""expectedValue"": {{}}, ""derivedFromCapability"": ""可选"", ""criterionIds"": [""{exampleCriterionId}""], ""required"": true, ""description"": ""对应哪条冻结 Goal criterion"" }}")
             sb.AppendLine("    ]")
             sb.AppendLine("  },")
             sb.AppendLine("  ""summary"": ""预期结果"",")
@@ -345,7 +363,7 @@ Namespace Agent
             If session IsNot Nothing Then
                 sb.AppendLine("【最终目标】")
                 If session.Spec?.GoalContract IsNot Nothing Then
-                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}")
+                    sb.AppendLine($"GoalId: {session.Spec.GoalContract.GoalId}; ContractHash: {session.Spec.GoalContract.ContractHash}; SemanticHash: {session.Spec.GoalContract.SemanticHash}")
                     sb.AppendLine(session.Spec.GoalContract.RawUserRequest)
                     For Each criterion In session.Spec.GoalContract.Criteria.Where(Function(item) item.Required)
                         sb.AppendLine($"- {criterion.Id} [{criterion.Kind}]: {criterion.Statement}")
@@ -360,30 +378,38 @@ Namespace Agent
                         Next
                     End If
                     sb.AppendLine("This frozen goal is authoritative and cannot be relaxed or replaced by ReAct or Replan.")
+                    If session.Spec.OutcomeContract?.Frozen AndAlso
+                       String.Equals(session.Spec.OutcomeContract.BoundGoalContractHash,
+                                     session.Spec.GoalContract.ContractHash,
+                                     StringComparison.Ordinal) Then
+                        sb.AppendLine("冻结的 Goal 验证投影（仅用于宿主证据验收）:")
+                        For Each requirement In session.Spec.OutcomeContract.Requirements
+                            sb.AppendLine($"- {requirement.Id}: effect={requirement.EffectType}; target={requirement.TargetRef}; property={requirement.PropertyName}; operator={requirement.Operator}; derivedFrom={requirement.DerivedFromCapability}; criteria=[{String.Join(",", If(requirement.CriterionIds, New List(Of String)()))}]; expected={If(requirement.ExpectedValue?.ToString(Formatting.None), "null")}")
+                        Next
+                    End If
                 Else
                     sb.AppendLine(If(session.Spec?.Goal, session.UserRequest))
-                End If
-                sb.AppendLine()
-                sb.AppendLine("【旧任务规格投影（非权威执行提示）】")
-                sb.AppendLine("[The following mutable fields may guide routing and host verification, but cannot add, remove, or redefine user-goal semantics]")
-                If session.Spec?.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
-                    sb.AppendLine("执行/路由提示: " & String.Join("; ", session.Spec.Constraints))
-                End If
-                If session.Spec?.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
-                    sb.AppendLine("成功标准:")
-                    For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
-                        sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
-                    Next
-                End If
-                If session.Spec?.RequiredCapabilities IsNot Nothing AndAlso session.Spec.RequiredCapabilities.Count > 0 Then
-                    sb.AppendLine("旧能力投影: " & String.Join(", ", session.Spec.RequiredCapabilities))
-                End If
-                If session.Spec?.OutcomeContract?.Requirements IsNot Nothing AndAlso
-                   session.Spec.OutcomeContract.Requirements.Count > 0 Then
-                    sb.AppendLine("冻结的旧验证合同（仅用于证据验收，不得改写冻结目标）:")
-                    For Each requirement In session.Spec.OutcomeContract.Requirements
-                        sb.AppendLine($"- {requirement.Id}: effect={requirement.EffectType}; target={requirement.TargetRef}; property={requirement.PropertyName}; operator={requirement.Operator}; derivedFrom={requirement.DerivedFromCapability}; criteria=[{String.Join(",", If(requirement.CriterionIds, New List(Of String)()))}]; expected={If(requirement.ExpectedValue?.ToString(Formatting.None), "null")}")
-                    Next
+                    sb.AppendLine()
+                    sb.AppendLine("【Legacy 任务规格（仅兼容无 GoalContract 的旧会话）】")
+                    If session.Spec?.Constraints IsNot Nothing AndAlso session.Spec.Constraints.Count > 0 Then
+                        sb.AppendLine("执行/路由提示: " & String.Join("; ", session.Spec.Constraints))
+                    End If
+                    If session.Spec?.SuccessCriteria IsNot Nothing AndAlso session.Spec.SuccessCriteria.Count > 0 Then
+                        sb.AppendLine("成功标准:")
+                        For criterionIndex = 0 To session.Spec.SuccessCriteria.Count - 1
+                            sb.AppendLine($"- criterion-{criterionIndex + 1}: {session.Spec.SuccessCriteria(criterionIndex)}")
+                        Next
+                    End If
+                    If session.Spec?.RequiredCapabilities IsNot Nothing AndAlso session.Spec.RequiredCapabilities.Count > 0 Then
+                        sb.AppendLine("旧能力投影: " & String.Join(", ", session.Spec.RequiredCapabilities))
+                    End If
+                    If session.Spec?.OutcomeContract?.Requirements IsNot Nothing AndAlso
+                       session.Spec.OutcomeContract.Requirements.Count > 0 Then
+                        sb.AppendLine("冻结的 Legacy 验证合同:")
+                        For Each requirement In session.Spec.OutcomeContract.Requirements
+                            sb.AppendLine($"- {requirement.Id}: effect={requirement.EffectType}; target={requirement.TargetRef}; property={requirement.PropertyName}; operator={requirement.Operator}; derivedFrom={requirement.DerivedFromCapability}; criteria=[{String.Join(",", If(requirement.CriterionIds, New List(Of String)()))}]; expected={If(requirement.ExpectedValue?.ToString(Formatting.None), "null")}")
+                        Next
+                    End If
                 End If
                 sb.AppendLine()
 

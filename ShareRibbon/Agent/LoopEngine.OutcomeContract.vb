@@ -21,7 +21,13 @@ Namespace Agent
                                                       plan As ExecutionPlan,
                                                       executionAppType As String) As String
             If session?.Spec Is Nothing Then Return "任务规格缺失，无法冻结结果合同。"
-            If session.Spec.OutcomeContract Is Nothing AndAlso plan?.OutcomeContract IsNot Nothing Then
+            If session.Spec.GoalContract IsNot Nothing Then
+                ' A mutable legacy projection must never outrank the proposal generated for
+                ' the current frozen goal.  Preserve only an already sealed resume contract.
+                If session.Spec.OutcomeContract Is Nothing OrElse Not session.Spec.OutcomeContract.Frozen Then
+                    session.Spec.OutcomeContract = plan?.OutcomeContract
+                End If
+            ElseIf session.Spec.OutcomeContract Is Nothing AndAlso plan?.OutcomeContract IsNot Nothing Then
                 session.Spec.OutcomeContract = plan.OutcomeContract
             End If
             Dim contract = session.Spec.OutcomeContract
@@ -30,6 +36,9 @@ Namespace Agent
                     Return "规划失败：模型未生成结构化结果合同；为避免局部成功被误报为任务完成，未执行任何 Office 写入。"
                 End If
                 Return ""
+            End If
+            If contract.Frozen Then
+                Return Goals.GoalOutcomeProjection.ValidateIntegrity(session.Spec, contract)
             End If
             contract.ValidatedComputeCapabilities.Clear()
 
@@ -132,23 +141,20 @@ Namespace Agent
                 End If
             Next
 
-            Dim expectedCriterionIds As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
-            For criterionIndex = 0 To If(session.Spec.SuccessCriteria, New List(Of String)()).Count - 1
-                expectedCriterionIds.Add($"criterion-{criterionIndex + 1}")
-            Next
+            Dim bindingError = Goals.GoalOutcomeProjection.ValidateBinding(
+                session.Spec,
+                contract,
+                requireFrozenGoalBinding:=False)
+            If Not String.IsNullOrWhiteSpace(bindingError) Then
+                Return "规划失败：" & bindingError
+            End If
+
+            Dim expectedCriterionIds = New HashSet(Of String)(
+                Goals.GoalOutcomeProjection.RequiredHostCriterionIds(session.Spec),
+                StringComparer.OrdinalIgnoreCase)
             If expectedCriterionIds.Count > 0 Then
-                Dim mappedCriterionIds As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
                 Dim assertionSlotOwners As New Dictionary(Of String, String)(StringComparer.Ordinal)
                 For Each requirement In contract.Requirements.Where(Function(item) item IsNot Nothing AndAlso item.Required)
-                    If requirement.CriterionIds IsNot Nothing AndAlso requirement.CriterionIds.Count > 1 Then
-                        Return $"规划失败：结果合同 {requirement.Id} 把多个独立成功标准折叠成同一条宿主断言。每条 requirement 最多映射一个 criterionId。"
-                    End If
-                    For Each criterionId In If(requirement.CriterionIds, New List(Of String)())
-                        If Not expectedCriterionIds.Contains(criterionId) Then
-                            Return $"规划失败：结果合同 {requirement.Id} 引用了未知成功标准 {criterionId}。"
-                        End If
-                        mappedCriterionIds.Add(criterionId)
-                    Next
                     If requirement.CriterionIds IsNot Nothing AndAlso requirement.CriterionIds.Count = 1 Then
                         Dim assertionSignature = BuildOutcomeAssertionSlot(requirement, executionAppType)
                         Dim existingOwner As String = Nothing
@@ -158,13 +164,6 @@ Namespace Agent
                         assertionSlotOwners(assertionSignature) = requirement.CriterionIds(0)
                     End If
                 Next
-                Dim omitted = expectedCriterionIds.Where(Function(id) Not mappedCriterionIds.Contains(id)).ToList()
-                If omitted.Count > 0 Then
-                    Return $"规划失败：结果合同未覆盖全部成功标准：{String.Join(", ", omitted)}。"
-                End If
-                If contract.Requirements.Where(Function(item) item IsNot Nothing AndAlso item.Required).Count() < expectedCriterionIds.Count Then
-                    Return "规划失败：结果合同的可观察断言数量少于独立成功标准数量，可能遗漏复合目标。"
-                End If
             End If
 
             Dim isReadOnly = String.Equals(session.Spec.MutationPolicy, "read_only", StringComparison.OrdinalIgnoreCase)
@@ -179,7 +178,7 @@ Namespace Agent
                 Return "规划失败：修改任务的结果合同没有声明最终可观察状态。"
             End If
 
-            For Each capability In If(session.Spec.RequiredCapabilities, New List(Of String)())
+            For Each capability In AgentExecutionContract.ResolveRequiredCapabilities(session.Spec)
                 Dim descriptor = _toolRegistry.GetTool(capability)
                 If descriptor Is Nothing OrElse
                    Not String.Equals(descriptor.AccessMode, "compute", StringComparison.OrdinalIgnoreCase) OrElse isReadOnly Then Continue For
@@ -196,7 +195,7 @@ Namespace Agent
                 End If
             Next
 
-            contract.Frozen = True
+            Goals.GoalOutcomeProjection.Seal(session.Spec, contract)
             Return ""
         End Function
 
