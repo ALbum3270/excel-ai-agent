@@ -45,6 +45,16 @@ Public Class ExcelDirectOperationService
 
             Debug.WriteLine($"执行命令: {command}")
 
+            ' Stable object-model tools are compatibility interfaces only. Their
+            ' Implementation is the catalogued/observed OfficeOperationBatch runtime.
+            Dim standardResult As ShareRibbon.Agent.ToolResult = Nothing
+            If OfficeRuntime.ExcelStandardToolAdapter.TryExecute(_excelApp,
+                                                                 command,
+                                                                 TryCast(params, JObject),
+                                                                 standardResult) Then
+                Return standardResult IsNot Nothing AndAlso standardResult.Success
+            End If
+
             Select Case command.ToLower()
                 ' === 基础操作 ===
                 Case "writedata", "write", "setvalue", "setvalues"
@@ -52,7 +62,7 @@ Public Class ExcelDirectOperationService
                 Case "applyformula", "formula", "calculatesum", "calculate", "range_operations"
                     Return ExecuteApplyFormulaFlexible(commandJson)
                 Case "formatrange", "format", "style"
-                    Return ExecuteFormatRange(params)
+                    Return OfficeRuntime.ExcelFormatRangeAdapter.Execute(_excelApp, TryCast(params, JObject)).Success
                 Case "createchart", "chart"
                     Return ExecuteCreateChart(params)
                 Case "cleandata", "clean"
@@ -323,8 +333,11 @@ Public Class ExcelDirectOperationService
     End Function
 
     ''' <summary>
-    ''' 执行格式化范围命令
+    ''' Legacy implementation retained temporarily for source-history comparison only.
+    ''' All callers must use ExcelFormatRangeAdapter so execution and verification share
+    ''' the same operation contract.
     ''' </summary>
+    <Obsolete("Use OfficeRuntime.ExcelFormatRangeAdapter; legacy formatting is not observable", True)>
     Private Function ExecuteFormatRange(params As JToken) As Boolean
         Try
             Dim targetRange = params("range")?.ToString()
@@ -1079,6 +1092,7 @@ Public Class ExcelDirectOperationService
     ''' 执行条件格式命令
     ''' </summary>
     Private Function ExecuteConditionalFormat(params As JToken) As Boolean
+        Dim dataRange As Range = Nothing
         Try
             Dim range = params("range")?.ToString()
             Dim rule = params("rule")?.ToString()?.ToLower()
@@ -1089,17 +1103,22 @@ Public Class ExcelDirectOperationService
                 Return False
             End If
 
-            Dim ws As Worksheet = _excelApp.ActiveSheet
-            Dim dataRange As Range = ws.Range(range)
+            dataRange = ResolveExcelRange(range, fallbackToSelection:=False)
+            If dataRange Is Nothing Then
+                ShareRibbon.GlobalStatusStrip.ShowWarning($"条件格式失败: 无法解析范围 {range}")
+                Return False
+            End If
 
             Select Case rule
                 Case "highlight"
-                    ' 突出显示单元格规则
+                    Dim normalizedCondition = ExcelConditionalFormatContract.ParseHighlightCondition(condition)
+                    Dim fillColor = ExcelConditionalFormatContract.ParseColor(
+                        If(String.IsNullOrWhiteSpace(color), "#FFC7CE", color))
                     Dim fc = dataRange.FormatConditions.Add(
                         Type:=XlFormatConditionType.xlCellValue,
-                        Operator:=XlFormatConditionOperator.xlGreater,
-                        Formula1:=If(String.IsNullOrEmpty(condition), "0", condition))
-                    fc.Interior.Color = If(String.IsNullOrEmpty(color), RGB(255, 199, 206), ParseColor(color))
+                        Operator:=normalizedCondition.ExcelOperator,
+                        Formula1:=normalizedCondition.FormulaOperand)
+                    fc.Interior.Color = fillColor
 
                 Case "databar"
                     ' 数据条
@@ -1112,6 +1131,10 @@ Public Class ExcelDirectOperationService
                 Case "iconset"
                     ' 图标集
                     dataRange.FormatConditions.AddIconSetCondition()
+
+                Case Else
+                    ShareRibbon.GlobalStatusStrip.ShowWarning($"条件格式失败: 不支持的规则 {rule}")
+                    Return False
             End Select
 
             ShareRibbon.GlobalStatusStrip.ShowInfo($"条件格式已应用: {range}")
@@ -1302,7 +1325,7 @@ Public Class ExcelDirectOperationService
     ''' </summary>
     Private Function ExecuteCreateSheet(params As JToken) As Boolean
         Try
-            Dim name = params("name")?.ToString()
+            Dim name = If(params("name")?.ToString(), params("sheetName")?.ToString())
             Dim position = params("position")?.ToString()?.ToLower()
             Dim referenceSheet = params("referenceSheet")?.ToString()
 
@@ -1695,21 +1718,7 @@ Public Class ExcelDirectOperationService
     ''' 解析颜色字符串
     ''' </summary>
     Private Function ParseColor(colorStr As String) As Integer
-        Try
-            If colorStr.StartsWith("#") Then
-                colorStr = colorStr.Substring(1)
-            End If
-
-            If colorStr.Length = 6 Then
-                Dim r = Convert.ToInt32(colorStr.Substring(0, 2), 16)
-                Dim g = Convert.ToInt32(colorStr.Substring(2, 2), 16)
-                Dim b = Convert.ToInt32(colorStr.Substring(4, 2), 16)
-                Return RGB(r, g, b)
-            End If
-        Catch
-        End Try
-
-        Return RGB(255, 255, 255)
+        Return ExcelConditionalFormatContract.ParseColor(colorStr)
     End Function
 
     ''' <summary>

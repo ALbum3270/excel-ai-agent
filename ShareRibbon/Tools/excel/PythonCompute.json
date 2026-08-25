@@ -4,20 +4,21 @@
   "description": "使用受控 Python 对 JSON 表格数据执行复杂清洗、统计或转换；只返回 JSON，不直接操作 Excel。代码从 input_data 读取输入并必须给 result 赋值",
   "appType": "excel",
   "category": "数据操作",
-  "riskLevel": "risky",
+  "riskLevel": "medium",
+  "accessMode": "compute",
   "isVbaFallback": false,
   "parameters": [
     {
       "name": "code",
       "type": "string",
       "required": true,
-      "description": "Python 代码。输入变量为 input_data，输出必须赋给 result；禁止文件、网络、进程及 Excel COM 操作"
+      "description": "有效的多行 Python 源码。输入变量为 input_data，输出必须赋给 result；for/if/try 等复合语句必须换行并缩进，不能用分号拼成一行。仅可导入标准库 math、statistics、datetime、decimal、collections、re、functools、itertools、json；pandas/numpy 等第三方库不可用；禁止文件、网络、进程及 Excel COM 操作"
     },
     {
       "name": "input",
       "type": "object",
       "required": true,
-      "description": "JSON 输入数据，建议包含 headers 和 rows"
+      "description": "JSON 输入数据。多步执行时使用 {\"$from\":\"ReadRange\"}，执行器会原样绑定最近一次 ReadRange 的完整结果（表格矩阵位于 input_data['values']，并保留 workbook/sheet/address/rowCount/columnCount）；禁止复制截断预览或臆造样本"
     },
     {
       "name": "timeoutSeconds",

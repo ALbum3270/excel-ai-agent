@@ -1157,7 +1157,31 @@ Public Class ChatControl
             commandEnvelope = ParseExcelCommandEnvelope(jsonCode)
             toolId = GetEnvelopeToolId(commandEnvelope, "ExcelCommands")
             If String.Equals(toolId, "ReadRange", StringComparison.OrdinalIgnoreCase) Then
-                Return ReadExcelRangeAsToolResult(commandEnvelope)
+                Return OfficeRuntime.ExcelReadRangeAdapter.Execute(
+                    Globals.ThisAddIn.Application,
+                    TryCast(commandEnvelope?("params"), JObject))
+            End If
+            If String.Equals(toolId, "DiscoverOfficeCapability", StringComparison.OrdinalIgnoreCase) Then
+                Return OfficeRuntime.ExcelApiCatalogProvider.SearchAsToolResult(
+                    TryCast(commandEnvelope?("params"), JObject))
+            End If
+            If String.Equals(toolId, "OfficeObjectOperation", StringComparison.OrdinalIgnoreCase) Then
+                Return OfficeRuntime.ExcelOperationExecutor.Execute(
+                    Globals.ThisAddIn.Application,
+                    TryCast(commandEnvelope?("params"), JObject))
+            End If
+            Dim standardResult As Agent.ToolResult = Nothing
+            If OfficeRuntime.ExcelStandardToolAdapter.TryExecute(
+                    Globals.ThisAddIn.Application,
+                    toolId,
+                    TryCast(commandEnvelope?("params"), JObject),
+                    standardResult) Then
+                Return standardResult
+            End If
+            If String.Equals(toolId, "FormatRange", StringComparison.OrdinalIgnoreCase) Then
+                Return OfficeRuntime.ExcelFormatRangeAdapter.Execute(
+                    Globals.ThisAddIn.Application,
+                    TryCast(commandEnvelope?("params"), JObject))
             End If
             Dim beforeSnapshot = CaptureExcelCommandSnapshot(commandEnvelope)
             Dim success = ExecuteJsonCommandCore(jsonCode, preview)
@@ -1197,142 +1221,6 @@ Public Class ChatControl
         End Try
     End Function
 
-    Private Function ReadExcelRangeAsToolResult(envelope As JObject) As Agent.ToolResult
-        Dim workbook As Object = Nothing
-        Dim worksheet As Object = Nothing
-        Dim worksheets As Object = Nothing
-        Dim target As Object = Nothing
-        Dim targetRows As Object = Nothing
-        Dim targetColumns As Object = Nothing
-        Try
-            Dim params = TryCast(envelope?("params"), JObject)
-            Dim rangeSpec = If(params?("range")?.ToString(), "").Trim()
-            If String.IsNullOrWhiteSpace(rangeSpec) Then
-                Return Agent.ToolResult.Failed("ReadRange",
-                                               "ReadRange 缺少 range 参数",
-                                               errorCode:=ExceptionClassifier.CodeArgument,
-                                               userMessage:="请指定要读取的 Excel 范围",
-                                               recoverable:=True)
-            End If
-
-            Dim app As Object = Globals.ThisAddIn.Application
-            workbook = app.ActiveWorkbook
-            worksheet = app.ActiveSheet
-            If workbook Is Nothing OrElse worksheet Is Nothing Then
-                Return Agent.ToolResult.Failed("ReadRange",
-                                               "当前没有活动工作簿或工作表",
-                                               errorCode:=ExceptionClassifier.CodeDocMissing,
-                                               userMessage:="请先打开一个 Excel 工作簿",
-                                               recoverable:=False)
-            End If
-
-            Dim address = rangeSpec
-            Dim bangIndex = rangeSpec.LastIndexOf("!"c)
-            If bangIndex > 0 Then
-                Dim sheetName = rangeSpec.Substring(0, bangIndex).Trim()
-                If sheetName.Length >= 2 AndAlso sheetName.StartsWith("'", StringComparison.Ordinal) AndAlso sheetName.EndsWith("'", StringComparison.Ordinal) Then
-                    sheetName = sheetName.Substring(1, sheetName.Length - 2).Replace("''", "'")
-                End If
-                address = rangeSpec.Substring(bangIndex + 1).Trim()
-                ComObjectHelper.ReleaseComObject(worksheet)
-                worksheet = Nothing
-                worksheets = workbook.Worksheets
-                worksheet = worksheets(sheetName)
-            End If
-
-            target = worksheet.Range(address)
-            targetRows = target.Rows
-            targetColumns = target.Columns
-            Dim rowCount = CInt(targetRows.Count)
-            Dim columnCount = CInt(targetColumns.Count)
-            Dim cellCount = CLng(rowCount) * CLng(columnCount)
-            Dim maxCells = 5000
-            If params?("maxCells") IsNot Nothing Then
-                Dim parsedMaxCells As Integer
-                If Integer.TryParse(params("maxCells").ToString(), parsedMaxCells) Then maxCells = parsedMaxCells
-            End If
-            maxCells = Math.Max(1, Math.Min(20000, maxCells))
-            If cellCount > maxCells Then
-                Return Agent.ToolResult.Failed("ReadRange",
-                                               $"范围包含 {cellCount} 个单元格，超过当前 {maxCells} 个限制",
-                                               data:=New With {.address = rangeSpec, .cellCount = cellCount, .maxCells = maxCells},
-                                               errorCode:=ExceptionClassifier.CodeArgument,
-                                               userMessage:="读取范围过大，请缩小范围或分块读取",
-                                               recoverable:=True)
-            End If
-
-            Dim includeFormulas = params?("includeFormulas")?.Value(Of Boolean)() = True
-            Dim valueMatrix = target.Value2
-            Dim formulaMatrix As Object = Nothing
-            If includeFormulas Then formulaMatrix = target.Formula
-            Dim values = ExcelMatrixToJson(valueMatrix, rowCount, columnCount)
-            Dim formulas = If(includeFormulas, ExcelMatrixToJson(formulaMatrix, rowCount, columnCount), Nothing)
-            Dim actualAddress = CStr(target.Address(False, False))
-            Dim sheetNameActual = CStr(worksheet.Name)
-
-            Dim data As New JObject From {
-                {"workbook", CStr(workbook.Name)},
-                {"sheet", sheetNameActual},
-                {"address", actualAddress},
-                {"rowCount", rowCount},
-                {"columnCount", columnCount},
-                {"values", values}
-            }
-            If includeFormulas Then data("formulas") = formulas
-
-            Dim observation As New JObject From {
-                {"kind", "read"},
-                {"summary", $"已读取 {sheetNameActual}!{actualAddress}（{rowCount} 行 x {columnCount} 列）"},
-                {"changed", False},
-                {"targetRefs", New JArray($"Excel:{sheetNameActual}!{actualAddress}")},
-                {"warnings", New JArray()}
-            }
-            Return Agent.ToolResult.Succeed("ReadRange", observation("summary").ToString(), data:=data, observation:=observation)
-        Catch ex As Exception
-            Return Agent.ToolResult.FromException("ReadRange", ex)
-        Finally
-            ComObjectHelper.ReleaseComObject(targetColumns)
-            ComObjectHelper.ReleaseComObject(targetRows)
-            ComObjectHelper.ReleaseComObject(target)
-            ComObjectHelper.ReleaseComObject(worksheet)
-            ComObjectHelper.ReleaseComObject(worksheets)
-            ComObjectHelper.ReleaseComObject(workbook)
-        End Try
-    End Function
-
-    Private Shared Function ExcelMatrixToJson(matrix As Object,
-                                              rowCount As Integer,
-                                              columnCount As Integer) As JArray
-        Dim rows As New JArray()
-        If rowCount <= 0 OrElse columnCount <= 0 Then Return rows
-
-        For rowIndex = 1 To rowCount
-            Dim row As New JArray()
-            For columnIndex = 1 To columnCount
-                Dim value As Object = Nothing
-                If TypeOf matrix Is Object(,) Then
-                    Dim values = DirectCast(matrix, Object(,))
-                    value = values(values.GetLowerBound(0) + rowIndex - 1,
-                                   values.GetLowerBound(1) + columnIndex - 1)
-                ElseIf rowIndex = 1 AndAlso columnIndex = 1 Then
-                    value = matrix
-                End If
-
-                If value Is Nothing Then
-                    row.Add(JValue.CreateNull())
-                Else
-                    Try
-                        row.Add(JToken.FromObject(value))
-                    Catch
-                        row.Add(value.ToString())
-                    End Try
-                End If
-            Next
-            rows.Add(row)
-        Next
-        Return rows
-    End Function
-
     Private Function ParseExcelCommandEnvelope(jsonCode As String) As JObject
         If String.IsNullOrWhiteSpace(jsonCode) Then Return Nothing
 
@@ -1366,6 +1254,7 @@ Public Class ChatControl
         Dim worksheets As Object = Nothing
         Dim chartObjects As Object = Nothing
         Dim selectedRange As Object = Nothing
+        Dim targetWorksheet As Object = Nothing
         Dim target As Object = Nothing
         Try
             ' Keep observer COM values late-bound. WPS/部分 Excel 兼容层可以通过
@@ -1375,8 +1264,10 @@ Public Class ChatControl
             worksheet = app.ActiveSheet
             If workbook Is Nothing OrElse worksheet Is Nothing Then Return snapshot
 
-            snapshot("workbook") = If(workbook.Name, "")
-            snapshot("worksheet") = If(worksheet.Name, "")
+            ' Late-bound COM properties are typed as Object. Convert them to String
+            ' before assigning to JObject, otherwise VB attempts Object -> JToken cast.
+            snapshot("workbook") = CStr(If(workbook.Name, ""))
+            snapshot("worksheet") = CStr(If(worksheet.Name, ""))
             usedRange = worksheet.UsedRange
             If usedRange IsNot Nothing Then
                 usedRows = usedRange.Rows
@@ -1400,19 +1291,57 @@ Public Class ChatControl
                 End If
             End If
 
-            snapshot("targetAddress") = If(targetAddress, "")
-            If Not String.IsNullOrWhiteSpace(targetAddress) Then
-                target = worksheet.Range(targetAddress)
-                snapshot("targetValueHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Value2))
-                snapshot("targetFormulaHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Formula))
-                snapshot("targetPreview") = BuildExcelRangePreview(target, 3, 4)
-                snapshot("formulaErrorCount") = CountExcelFormulaErrors(target, 5000)
+            Dim targetReference = ParseExcelRangeReference(targetAddress)
+            Dim targetSheetName = targetReference("sheet")?.ToString()
+            Dim targetCellAddress = targetReference("address")?.ToString()
+            If String.IsNullOrWhiteSpace(targetCellAddress) Then targetCellAddress = targetAddress
+
+            If Not String.IsNullOrWhiteSpace(targetSheetName) Then
+                snapshot("targetWorksheet") = targetSheetName
+                Try
+                    targetWorksheet = worksheets(targetSheetName)
+                Catch
+                    ' The target sheet may legitimately be created by this command. Missing
+                    ' before-state target is not an observation failure by itself.
+                    targetWorksheet = Nothing
+                End Try
+            Else
+                snapshot("targetWorksheet") = CStr(If(worksheet.Name, ""))
+            End If
+
+            snapshot("targetAddress") = If(targetCellAddress, "")
+            If Not String.IsNullOrWhiteSpace(targetCellAddress) Then
+                If targetWorksheet IsNot Nothing Then
+                    target = targetWorksheet.Range(targetCellAddress)
+                ElseIf String.IsNullOrWhiteSpace(targetSheetName) Then
+                    target = worksheet.Range(targetCellAddress)
+                Else
+                    snapshot("targetMissing") = True
+                End If
+                If target IsNot Nothing Then
+                    Dim expandedTarget = ExpandExcelObservationTarget(target, envelope)
+                    If expandedTarget IsNot Nothing Then
+                        ComObjectHelper.ReleaseComObject(target)
+                        target = expandedTarget
+                    End If
+                    snapshot("targetValueHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Value2))
+                    snapshot("targetFormulaHash") = ComputeObservationHash(SerializeExcelRangeValue(target.Formula))
+                    snapshot("targetPreview") = BuildExcelRangePreview(target, 3, 4)
+                    snapshot("formulaErrorCount") = CountExcelFormulaErrors(target, 5000)
+                    Dim command = GetPrimaryExcelCommand(envelope)
+                    If String.Equals(command?("command")?.ToString(), "ConditionalFormat", StringComparison.OrdinalIgnoreCase) Then
+                        Dim conditionalFormats = CaptureExcelConditionalFormats(target)
+                        snapshot("targetConditionalFormats") = conditionalFormats
+                        snapshot("conditionalFormatCount") = conditionalFormats.Count
+                    End If
+                End If
             End If
         Catch ex As Exception
             snapshot("captureError") = AppLogger.Redact(ex.Message)
             AppLogger.Warn("ExcelObserver", $"Capture snapshot failed: {AppLogger.Redact(ex.Message)}")
         Finally
             ComObjectHelper.ReleaseComObject(target)
+            ComObjectHelper.ReleaseComObject(targetWorksheet)
             ComObjectHelper.ReleaseComObject(selectedRange)
             ComObjectHelper.ReleaseComObject(chartObjects)
             ComObjectHelper.ReleaseComObject(worksheets)
@@ -1425,16 +1354,144 @@ Public Class ChatControl
         Return snapshot
     End Function
 
+    ''' <summary>
+    ''' Capture the real conditional-format rules applied to the target range. Values and
+    ''' formulas do not change when a rule is added, so they cannot verify this tool.
+    ''' Keep all COM access late-bound for Excel/WPS compatibility.
+    ''' </summary>
+    Private Shared Function CaptureExcelConditionalFormats(target As Object) As JArray
+        Dim result As New JArray()
+        Dim rules As Object = Nothing
+        Try
+            rules = target.FormatConditions
+            Dim count = CInt(rules.Count)
+            For index = 1 To count
+                Dim rule As Object = Nothing
+                Dim appliesTo As Object = Nothing
+                Dim interior As Object = Nothing
+                Try
+                    rule = rules.Item(index)
+                    Dim captured As New JObject()
+                    Try
+                        captured("type") = CInt(rule.Type)
+                    Catch
+                    End Try
+                    Try
+                        captured("operator") = CInt(rule.Operator)
+                    Catch
+                    End Try
+                    Try
+                        captured("formula1") = CStr(If(rule.Formula1, ""))
+                    Catch
+                    End Try
+                    Try
+                        captured("formula2") = CStr(If(rule.Formula2, ""))
+                    Catch
+                    End Try
+                    Try
+                        interior = rule.Interior
+                        captured("interiorColor") = CInt(interior.Color)
+                    Catch
+                    End Try
+                    Try
+                        appliesTo = rule.AppliesTo
+                        captured("appliesTo") = CStr(appliesTo.Address(False, False))
+                    Catch
+                    End Try
+                    result.Add(captured)
+                Finally
+                    ComObjectHelper.ReleaseComObject(interior)
+                    ComObjectHelper.ReleaseComObject(appliesTo)
+                    ComObjectHelper.ReleaseComObject(rule)
+                End Try
+            Next
+        Catch ex As Exception
+            AppLogger.Warn("ExcelObserver", $"Capture conditional formats failed: {AppLogger.Redact(ex.Message)}")
+        Finally
+            ComObjectHelper.ReleaseComObject(rules)
+        End Try
+        Return result
+    End Function
+
     Private Shared Function ResolveExcelTargetAddress(envelope As JObject) As String
-        If envelope Is Nothing Then Return ""
-        Dim command = envelope
-        If envelope("commands") IsNot Nothing AndAlso envelope("commands").Type = JTokenType.Array Then
-            command = TryCast(envelope("commands").FirstOrDefault(), JObject)
-        End If
+        Dim command = GetPrimaryExcelCommand(envelope)
         If command Is Nothing Then Return ""
         Dim params = command("params")
-        Return If(command("range")?.ToString(),
-                  If(params?("range")?.ToString(), params?("targetRange")?.ToString()))
+        Dim targetAddress = If(command("range")?.ToString(),
+                               If(params?("range")?.ToString(), params?("targetRange")?.ToString()))
+        Dim targetSheet = params?("targetSheet")?.ToString()
+        If Not String.IsNullOrWhiteSpace(targetSheet) Then
+            If String.IsNullOrWhiteSpace(targetAddress) AndAlso
+               String.Equals(command("command")?.ToString(), "GenerateReport", StringComparison.OrdinalIgnoreCase) Then
+                targetAddress = "A1"
+            End If
+            If Not String.IsNullOrWhiteSpace(targetAddress) AndAlso targetAddress.IndexOf("!"c) < 0 Then
+                targetAddress = $"'{targetSheet.Replace("'", "''")}'!{targetAddress}"
+            End If
+        End If
+        Return If(targetAddress, "")
+    End Function
+
+    Private Shared Function GetPrimaryExcelCommand(envelope As JObject) As JObject
+        If envelope Is Nothing Then Return Nothing
+        If envelope("commands") IsNot Nothing AndAlso envelope("commands").Type = JTokenType.Array Then
+            Return TryCast(envelope("commands").FirstOrDefault(), JObject)
+        End If
+        Return envelope
+    End Function
+
+    ''' <summary>
+    ''' A targetRange such as Sheet!A1 is often an output anchor, not the complete changed
+    ''' range. Expand it for observers so a table write is still detectable when A1 itself
+    ''' already contained the same header value.
+    ''' </summary>
+    Private Shared Function ExpandExcelObservationTarget(targetAnchor As Object, envelope As JObject) As Object
+        If targetAnchor Is Nothing Then Return Nothing
+        Try
+            Dim command = GetPrimaryExcelCommand(envelope)
+            Dim toolId = If(command?("command")?.ToString(), "").Trim().ToLowerInvariant()
+            Dim params = command?("params")
+
+            If toolId = "writedata" OrElse toolId = "write" OrElse toolId = "setvalue" OrElse toolId = "setvalues" Then
+                Dim data = If(params?("data"), params?("targetData"))
+                Dim rows = TryCast(data, JArray)
+                If rows IsNot Nothing AndAlso rows.Count > 0 Then
+                    Dim firstRow = TryCast(rows(0), JArray)
+                    If firstRow IsNot Nothing AndAlso firstRow.Count > 0 Then
+                        Return targetAnchor.Resize(rows.Count, firstRow.Count)
+                    End If
+                End If
+            End If
+
+            If toolId = "dataanalysis" OrElse toolId = "analyze" OrElse
+               toolId = "transformdata" OrElse toolId = "transform" OrElse
+               toolId = "generatereport" OrElse toolId = "report" Then
+                Return targetAnchor.CurrentRegion
+            End If
+        Catch ex As Exception
+            AppLogger.Warn("ExcelObserver", $"Expand target failed: {AppLogger.Redact(ex.Message)}")
+        End Try
+        Return Nothing
+    End Function
+
+    Private Shared Function ParseExcelRangeReference(rangeSpec As String) As JObject
+        Dim result As New JObject From {
+            {"sheet", ""},
+            {"address", If(rangeSpec, "").Trim()}
+        }
+        If String.IsNullOrWhiteSpace(rangeSpec) Then Return result
+
+        Dim normalized = rangeSpec.Trim()
+        Dim bangIndex = normalized.LastIndexOf("!"c)
+        If bangIndex <= 0 OrElse bangIndex >= normalized.Length - 1 Then Return result
+
+        Dim sheetName = normalized.Substring(0, bangIndex).Trim()
+        If sheetName.Length >= 2 AndAlso sheetName.StartsWith("'", StringComparison.Ordinal) AndAlso sheetName.EndsWith("'", StringComparison.Ordinal) Then
+            sheetName = sheetName.Substring(1, sheetName.Length - 2).Replace("''", "'")
+        End If
+        result("sheet") = sheetName
+        result("address") = normalized.Substring(bangIndex + 1).Trim()
+        Return result
     End Function
 
     Private Shared Function BuildExcelCommandObservation(toolId As String,
@@ -1443,10 +1500,22 @@ Public Class ChatControl
                                                          beforeSnapshot As JObject,
                                                          afterSnapshot As JObject) As JObject
         Dim changed = Not JToken.DeepEquals(beforeSnapshot, afterSnapshot)
+        Dim verification As JObject = Nothing
+        Dim command = GetPrimaryExcelCommand(envelope)
+        If String.Equals(toolId, "ConditionalFormat", StringComparison.OrdinalIgnoreCase) AndAlso command IsNot Nothing Then
+            Dim params = command("params")
+            verification = ExcelConditionalFormatContract.EvaluatePostState(
+                params?("rule")?.ToString(),
+                params?("condition")?.ToString(),
+                params?("color")?.ToString(),
+                TryCast(afterSnapshot?("targetConditionalFormats"), JArray))
+        End If
         Dim targetAddress = If(afterSnapshot?("targetAddress")?.ToString(), beforeSnapshot?("targetAddress")?.ToString())
         Dim targetRefs As New JArray()
         If Not String.IsNullOrWhiteSpace(targetAddress) Then
-            targetRefs.Add($"Excel:{afterSnapshot?("worksheet")?.ToString()}!{targetAddress}")
+            Dim targetWorksheetName = If(afterSnapshot?("targetWorksheet")?.ToString(),
+                                         If(beforeSnapshot?("targetWorksheet")?.ToString(), afterSnapshot?("worksheet")?.ToString()))
+            targetRefs.Add($"Excel:{targetWorksheetName}!{targetAddress}")
         Else
             targetRefs.Add("Excel:ActiveSheet")
         End If
@@ -1460,10 +1529,11 @@ Public Class ChatControl
             {"usedColumnsDelta", GetSnapshotInteger(afterSnapshot, "usedColumns") - GetSnapshotInteger(beforeSnapshot, "usedColumns")},
             {"sheetCountDelta", GetSnapshotInteger(afterSnapshot, "sheetCount") - GetSnapshotInteger(beforeSnapshot, "sheetCount")},
             {"chartCountDelta", GetSnapshotInteger(afterSnapshot, "chartCount") - GetSnapshotInteger(beforeSnapshot, "chartCount")},
-            {"formulaErrorDelta", GetSnapshotInteger(afterSnapshot, "formulaErrorCount") - GetSnapshotInteger(beforeSnapshot, "formulaErrorCount")}
+            {"formulaErrorDelta", GetSnapshotInteger(afterSnapshot, "formulaErrorCount") - GetSnapshotInteger(beforeSnapshot, "formulaErrorCount")},
+            {"conditionalFormatCountDelta", GetSnapshotInteger(afterSnapshot, "conditionalFormatCount") - GetSnapshotInteger(beforeSnapshot, "conditionalFormatCount")}
         }
 
-        Return New JObject From {
+        Dim observation As New JObject From {
             {"kind", "write"},
             {"summary", If(success, $"Excel 工具 {toolId} 已执行", $"Excel 工具 {toolId} 执行失败")},
             {"targetRefs", targetRefs},
@@ -1473,6 +1543,11 @@ Public Class ChatControl
             {"diff", diff},
             {"warnings", warnings}
         }
+        If verification IsNot Nothing Then
+            observation("satisfied") = verification("satisfied")
+            observation("verification") = verification
+        End If
+        Return observation
     End Function
 
     Private Shared Function GetSnapshotInteger(snapshot As JObject, name As String) As Integer

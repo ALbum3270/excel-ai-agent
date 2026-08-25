@@ -1,7 +1,7 @@
 {
   "id": "FormatRange",
   "name": "格式化范围",
-  "description": "设置单元格的样式格式，包括字体、颜色、边框等",
+  "description": "通过明确属性设置单元格格式。数字、日期、百分比或货币显示必须使用 numberFormat，不要用预设样式代替",
   "appType": "excel",
   "category": "基础操作",
   "riskLevel": "safe",
@@ -12,12 +12,6 @@
       "type": "string",
       "required": true,
       "description": "要格式化的单元格范围"
-    },
-    {
-      "name": "style",
-      "type": "string",
-      "required": false,
-      "description": "预设样式：header/total/data"
     },
     {
       "name": "bold",
@@ -53,7 +47,31 @@
       "name": "borders",
       "type": "string",
       "required": false,
-      "description": "边框样式：true/all/outline/none"
+      "description": "边框样式：all/thin/outline/none"
+    },
+    {
+      "name": "numberFormat",
+      "type": "string",
+      "required": false,
+      "description": "Excel 数字格式代码，例如 #,##0、#,##0.00、0.00%、yyyy-mm-dd"
+    },
+    {
+      "name": "horizontalAlignment",
+      "type": "string",
+      "required": false,
+      "description": "水平对齐：left/center/right/general"
+    },
+    {
+      "name": "verticalAlignment",
+      "type": "string",
+      "required": false,
+      "description": "垂直对齐：top/center/bottom"
+    },
+    {
+      "name": "wrapText",
+      "type": "boolean",
+      "required": false,
+      "description": "是否自动换行"
     }
   ]
 }

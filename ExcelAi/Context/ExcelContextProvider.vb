@@ -23,6 +23,9 @@ Namespace Context
                     If _app.ActiveWorkbook IsNot Nothing Then workbookName = _app.ActiveWorkbook.Name
                 Catch
                 End Try
+                ctx.HostData("workbook") = workbookName
+                Dim worksheetInventory = BuildWorksheetInventory()
+                ctx.HostData("worksheets") = worksheetInventory
 
                 Dim worksheet As Excel.Worksheet = TryCast(_app.ActiveSheet, Excel.Worksheet)
                 Dim usedRange As Excel.Range = Nothing
@@ -50,6 +53,7 @@ Namespace Context
 
                 Dim summary As New StringBuilder()
                 summary.AppendLine($"工作簿: {If(String.IsNullOrWhiteSpace(workbookName), "(未保存或未知)", workbookName)}")
+                AppendWorksheetInventorySummary(summary, worksheetInventory)
                 If worksheet IsNot Nothing Then summary.AppendLine($"当前工作表: {worksheet.Name}")
                 If tableRegion IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
                     summary.AppendLine(tableRegion.ToPromptSummary())
@@ -58,10 +62,20 @@ Namespace Context
                     summary.AppendLine($"使用区域: {GetRangeAddress(usedRange)}")
                     summary.AppendLine($"使用区域规模: {usedRange.Rows.Count} 行 x {usedRange.Columns.Count} 列")
                     summary.AppendLine(BuildHeaderSummary(usedRange))
+                    summary.AppendLine("识别数据区域预览（最多前 8 行 x 8 列）:")
+                    summary.AppendLine(BuildRangePreview(usedRange, 8, 8))
                     summary.AppendLine(BuildFormulaSummary(usedRange))
                     summary.AppendLine(BuildQualitySummary(usedRange))
-                    summary.AppendLine($"推荐默认工作范围: {If(selectedRange IsNot Nothing, GetRangeAddress(selectedRange), GetRangeAddress(usedRange))}")
-                    summary.AppendLine($"推荐输出位置: {GetSuggestedOutputCell(usedRange)}")
+                    Dim recommendedRange = GetRangeAddress(usedRange)
+                    If tableRegion IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
+                        recommendedRange = $"{tableRegion.Sheet}!{tableRegion.Address}"
+                    End If
+                    summary.AppendLine($"推荐默认工作范围: {recommendedRange}")
+                    If selectedRange IsNot Nothing Then
+                        summary.AppendLine($"当前选区可作为明确写入/格式目标: {GetRangeAddress(selectedRange)}")
+                    End If
+                    summary.AppendLine($"紧邻数据的新列位置（扩展原表时使用）: {GetAdjacentTableColumnCell(worksheet, tableRegion, usedRange)}")
+                    summary.AppendLine($"独立输出区域建议（生成单独结果块时使用）: {GetSuggestedOutputCell(usedRange)}")
                 End If
 
                 ctx.DocStructure = New DocumentStructure With {
@@ -73,6 +87,79 @@ Namespace Context
 
             Return ctx
         End Function
+
+        Private Function BuildWorksheetInventory() As JArray
+            Dim inventory As New JArray()
+            Dim workbook As Excel.Workbook = Nothing
+            Dim worksheets As Excel.Sheets = Nothing
+            Try
+                workbook = _app.ActiveWorkbook
+                If workbook Is Nothing Then Return inventory
+                worksheets = workbook.Worksheets
+                Dim sheetCount = Math.Min(worksheets.Count, 50)
+                For index = 1 To sheetCount
+                    Dim sheet As Excel.Worksheet = Nothing
+                    Dim usedRange As Excel.Range = Nothing
+                    Dim rows As Excel.Range = Nothing
+                    Dim columns As Excel.Range = Nothing
+                    Try
+                        sheet = TryCast(worksheets.Item(index), Excel.Worksheet)
+                        If sheet Is Nothing Then Continue For
+                        usedRange = sheet.UsedRange
+                        rows = usedRange?.Rows
+                        columns = usedRange?.Columns
+                        inventory.Add(New JObject From {
+                            {"name", sheet.Name},
+                            {"visible", sheet.Visible = Excel.XlSheetVisibility.xlSheetVisible},
+                            {"usedRange", If(usedRange Is Nothing, "", GetRangeAddress(usedRange))},
+                            {"rowCount", If(rows Is Nothing, 0, CInt(rows.Count))},
+                            {"columnCount", If(columns Is Nothing, 0, CInt(columns.Count))},
+                            {"headers", If(usedRange Is Nothing,
+                                           New JArray(),
+                                           JArray.FromObject(GetHeaders(usedRange, Math.Min(CInt(columns.Count), 12))))}
+                        })
+                    Catch ex As Exception
+                        inventory.Add(New JObject From {
+                            {"name", If(sheet?.Name, $"Sheet{index}")},
+                            {"error", ex.Message}
+                        })
+                    Finally
+                        ShareRibbon.ComObjectHelper.ReleaseComObject(columns)
+                        ShareRibbon.ComObjectHelper.ReleaseComObject(rows)
+                        ShareRibbon.ComObjectHelper.ReleaseComObject(usedRange)
+                        ShareRibbon.ComObjectHelper.ReleaseComObject(sheet)
+                    End Try
+                Next
+                If worksheets.Count > sheetCount Then
+                    inventory.Add(New JObject From {{"truncated", True}, {"totalCount", worksheets.Count}})
+                End If
+            Catch
+                Return inventory
+            Finally
+                ShareRibbon.ComObjectHelper.ReleaseComObject(worksheets)
+                ShareRibbon.ComObjectHelper.ReleaseComObject(workbook)
+            End Try
+            Return inventory
+        End Function
+
+        Private Shared Sub AppendWorksheetInventorySummary(summary As StringBuilder,
+                                                           inventory As JArray)
+            If summary Is Nothing OrElse inventory Is Nothing OrElse inventory.Count = 0 Then Return
+            summary.AppendLine("工作簿工作表索引:")
+            For Each item In inventory.OfType(Of JObject)()
+                If item("truncated")?.Value(Of Boolean)() Then
+                    summary.AppendLine($"- ...仅显示前 50 个工作表（总数 {item("totalCount")}）")
+                    Continue For
+                End If
+                Dim headers = TryCast(item("headers"), JArray)
+                Dim headerText = If(headers Is Nothing OrElse headers.Count = 0,
+                                    "未识别",
+                                    String.Join(", ", headers.Select(Function(value) value.ToString())))
+                summary.AppendLine(
+                    $"- {item("name")}: used={item("usedRange")}; " &
+                    $"{item("rowCount")} 行 x {item("columnCount")} 列; headers=[{headerText}]")
+            Next
+        End Sub
 
         Private Function GetRangeAddress(range As Excel.Range) As String
             Try
@@ -290,6 +377,37 @@ Namespace Context
                 Return addr
             Catch
                 Return "当前表右侧空白区域"
+            End Try
+        End Function
+
+        Private Function GetAdjacentColumnCell(usedRange As Excel.Range) As String
+            Try
+                Dim ws As Excel.Worksheet = TryCast(usedRange.Worksheet, Excel.Worksheet)
+                Dim row = usedRange.Row
+                Dim col = usedRange.Column + usedRange.Columns.Count
+                Dim addr = ColumnLetter(col) & row.ToString()
+                If ws IsNot Nothing Then Return $"{ws.Name}!{addr}"
+                Return addr
+            Catch
+                Return "当前数据右侧首个空列"
+            End Try
+        End Function
+
+        Private Function GetAdjacentTableColumnCell(worksheet As Excel.Worksheet,
+                                                    tableRegion As ExcelTableRegion,
+                                                    fallbackRange As Excel.Range) As String
+            Dim tableRange As Excel.Range = Nothing
+            Try
+                If worksheet IsNot Nothing AndAlso
+                   tableRegion IsNot Nothing AndAlso
+                   Not String.IsNullOrWhiteSpace(tableRegion.Address) Then
+                    tableRange = worksheet.Range(tableRegion.Address)
+                End If
+                Return GetAdjacentColumnCell(If(tableRange, fallbackRange))
+            Catch
+                Return GetAdjacentColumnCell(fallbackRange)
+            Finally
+                ShareRibbon.ComObjectHelper.ReleaseComObject(tableRange)
             End Try
         End Function
 

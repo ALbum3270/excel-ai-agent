@@ -23,7 +23,20 @@
       "name": "criteria",
       "type": "string",
       "required": false,
-      "description": "筛选条件，如 >100"
+      "description": "第一个筛选条件，如 >=1500"
+    },
+    {
+      "name": "criteria2",
+      "type": "string",
+      "required": false,
+      "description": "可选的第二个筛选条件，如 <=2500"
+    },
+    {
+      "name": "operator",
+      "type": "string",
+      "required": false,
+      "description": "两个条件的逻辑关系：and 或 or",
+      "defaultValue": "and"
     },
     {
       "name": "clearFilter",

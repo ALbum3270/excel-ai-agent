@@ -18,6 +18,30 @@
       "type": "string",
       "required": true,
       "description": "清洗操作：removeduplicates/fillempty/trim/replace"
+    },
+    {
+      "name": "fillValue",
+      "type": "object",
+      "required": false,
+      "description": "fillempty 写入空单元格的值，默认 0"
+    },
+    {
+      "name": "findText",
+      "type": "string",
+      "required": false,
+      "description": "replace 要查找的文本"
+    },
+    {
+      "name": "replaceText",
+      "type": "string",
+      "required": false,
+      "description": "replace 的替换文本"
+    },
+    {
+      "name": "hasHeader",
+      "type": "boolean",
+      "required": false,
+      "description": "removeduplicates 的范围是否包含表头，默认 true"
     }
   ]
 }
