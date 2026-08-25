@@ -1,11 +1,13 @@
 Imports System.IO
 Imports System.Diagnostics
+Imports System.Text
 
 Public Class ResourceExtractor
     Private Shared _lastError As String = String.Empty
 
     ''' <summary>
-    ''' 资源版本号 — 更新此值可强制刷新所有前端资源文件
+    ''' 资源版本号仅用于诊断/兼容旧缓存。资源是否需要刷新由逐文件内容决定，
+    ''' 不再依赖开发者手工修改这个共享版本号。
     ''' </summary>
     Private Shared _resourceVersion As String = "2026.07.18.2"
 
@@ -18,7 +20,7 @@ Public Class ResourceExtractor
         End Get
     End Property
 
-    Public Shared Function ExtractResources() As String
+    Public Shared Function ExtractResources(Optional appDataPathOverride As String = Nothing) As String
         _lastError = String.Empty
 
 #If DEBUG Then
@@ -26,26 +28,19 @@ Public Class ResourceExtractor
 #End If
 
         Try
-            ' 获取用户本地应用程序数据目录
-            Dim appDataPath As String = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OfficeAI",
-                "www"
-            )
+            ' 获取用户本地应用程序数据目录。测试可传入隔离目录验证同步行为，
+            ' 产品调用仍使用原来的默认路径。
+            Dim appDataPath As String = If(
+                String.IsNullOrWhiteSpace(appDataPathOverride),
+                Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OfficeAI",
+                    "www"),
+                appDataPathOverride)
 
-            ' 检查版本标记文件，匹配则跳过提取
+            ' 旧实现看到共享版本号相同便直接返回，导致任意一个 JS/CSS 改动都可能
+            ' 永久留在旧缓存中。现在始终走逐文件内容比较；匹配的文件不会被重写。
             Dim versionFile = Path.Combine(appDataPath, ".version")
-            If File.Exists(versionFile) Then
-                Try
-                    Dim savedVersion = File.ReadAllText(versionFile).Trim()
-                    If savedVersion = _resourceVersion Then
-                        Debug.WriteLine("[ResourceExtractor] 资源版本匹配，跳过提取")
-                        Return appDataPath
-                    End If
-                Catch
-                    ' 读取失败，继续执行提取
-                End Try
-            End If
 
             ' 确保目录存在
             Directory.CreateDirectory(appDataPath)
@@ -124,7 +119,7 @@ Public Class ResourceExtractor
             ' 写入版本标记文件，下次启动时跳过提取
             Try
                 Directory.CreateDirectory(appDataPath)
-                File.WriteAllText(Path.Combine(appDataPath, ".version"), _resourceVersion)
+                WriteTextFileIfChanged(versionFile, _resourceVersion)
             Catch
                 ' 写入失败不影响功能
             End Try
@@ -147,11 +142,9 @@ Public Class ResourceExtractor
 
                 ' 根据资源类型处理
                 If TypeOf resourceObj Is Byte() Then
-                    ' 如果是字节数组，直接写入
-                    File.WriteAllBytes(targetPath, DirectCast(resourceObj, Byte()))
+                    WriteBytesIfChanged(targetPath, DirectCast(resourceObj, Byte()))
                 ElseIf TypeOf resourceObj Is String Then
-                    ' 如果是字符串，转换为字节后写入
-                    File.WriteAllText(targetPath, DirectCast(resourceObj, String))
+                    WriteTextFileIfChanged(targetPath, DirectCast(resourceObj, String))
                 Else
                     Dim errMsg = $"Unsupported resource type for {resourceName}: {resourceObj.GetType().Name}"
                     Debug.WriteLine(errMsg)
@@ -180,6 +173,66 @@ Public Class ResourceExtractor
             Debug.WriteLine(errMsg)
             Return errMsg
         End Try
+    End Function
+
+    ''' <summary>
+    ''' Content-addressed resource synchronisation. A matching file is left untouched;
+    ''' a stale file is replaced through a same-directory temporary file so WebView never
+    ''' observes a partially written JavaScript or stylesheet.
+    ''' </summary>
+    Private Shared Function WriteBytesIfChanged(targetPath As String, expectedBytes As Byte()) As Boolean
+        If expectedBytes Is Nothing Then expectedBytes = Array.Empty(Of Byte)()
+
+        If File.Exists(targetPath) Then
+            Try
+                Dim currentBytes = File.ReadAllBytes(targetPath)
+                If ByteArraysEqual(currentBytes, expectedBytes) Then Return False
+            Catch
+                ' A locked or unreadable cache entry is treated as stale and replaced below.
+            End Try
+        End If
+
+        Dim targetDirectory = Path.GetDirectoryName(targetPath)
+        If Not String.IsNullOrEmpty(targetDirectory) Then Directory.CreateDirectory(targetDirectory)
+
+        Dim tempPath = targetPath & "." & Guid.NewGuid().ToString("N") & ".tmp"
+        Try
+            File.WriteAllBytes(tempPath, expectedBytes)
+            If File.Exists(targetPath) Then
+                Try
+                    File.Replace(tempPath, targetPath, Nothing)
+                Catch ex As IOException
+                    File.Copy(tempPath, targetPath, True)
+                Catch ex As PlatformNotSupportedException
+                    File.Copy(tempPath, targetPath, True)
+                End Try
+            Else
+                File.Move(tempPath, targetPath)
+            End If
+        Finally
+            If File.Exists(tempPath) Then
+                Try
+                    File.Delete(tempPath)
+                Catch
+                End Try
+            End If
+        End Try
+
+        Return True
+    End Function
+
+    Private Shared Function WriteTextFileIfChanged(targetPath As String, expectedText As String) As Boolean
+        Dim utf8WithoutBom As New UTF8Encoding(False)
+        Return WriteBytesIfChanged(targetPath, utf8WithoutBom.GetBytes(If(expectedText, String.Empty)))
+    End Function
+
+    Private Shared Function ByteArraysEqual(left As Byte(), right As Byte()) As Boolean
+        If Object.ReferenceEquals(left, right) Then Return True
+        If left Is Nothing OrElse right Is Nothing OrElse left.Length <> right.Length Then Return False
+        For i = 0 To left.Length - 1
+            If left(i) <> right(i) Then Return False
+        Next
+        Return True
     End Function
 
     ' 调试方法 - 列出所有资源

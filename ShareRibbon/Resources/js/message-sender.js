@@ -649,11 +649,13 @@ function showContextHints(options) {
                 const target = taskSpec.TargetObject || taskSpec.targetObject || '';
                 const complexity = taskSpec.Complexity || taskSpec.complexity || '';
                 const risk = taskSpec.RiskLevel || taskSpec.riskLevel || '';
+                const goalFallback = taskSpec.GoalInterpretationFallbackReason || taskSpec.goalInterpretationFallbackReason || '';
                 const criteria = Array.isArray(taskSpec.SuccessCriteria) ? taskSpec.SuccessCriteria : (Array.isArray(taskSpec.successCriteria) ? taskSpec.successCriteria : []);
                 rows.push('<li><strong>任务规格</strong>' +
                     (goal ? '<div>目标：' + escapeHtml(goal) + '</div>' : '') +
                     (target ? '<div>对象：' + escapeHtml(target) + '</div>' : '') +
                     ((complexity || risk) ? '<div>复杂度/风险：' + escapeHtml([complexity, risk].filter(Boolean).join(' / ')) + '</div>' : '') +
+                    (goalFallback ? '<div>目标解释：结构化解释未采用，已按用户原文保留</div>' : '') +
                     (criteria.length ? '<ul class="context-plan-steps">' + criteria.slice(0, 4).map(c => '<li>' + escapeHtml(c) + '</li>').join('') + '</ul>' : '') +
                     '</li>');
             }

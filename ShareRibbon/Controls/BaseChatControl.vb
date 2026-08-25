@@ -35,6 +35,8 @@ Public MustInherit Class BaseChatControl
     Private _systemPromptResolver As ChatSystemPromptResolver = Nothing
     Private _sendValidator As ChatSendValidator = Nothing
     Private _memoryTurnRecorder As MemoryTurnRecorder = Nothing
+    Private _runtimeToolRegistry As Agent.ToolRegistry = Nothing
+    Private _chatToolCallRuntime As ChatToolCallRuntime = Nothing
     Private _aiNativeRuntime As Agent.IAiNativeRuntime = Nothing
     Private _chatRequestOrchestrator As ChatRequestOrchestrator = Nothing
     Private _chatRoutingOrchestrator As ChatRoutingOrchestrator = Nothing
@@ -88,12 +90,33 @@ Public MustInherit Class BaseChatControl
     Protected ReadOnly Property AiNativeRuntime As Agent.IAiNativeRuntime
         Get
             If _aiNativeRuntime Is Nothing Then
-                Dim toolRegistry As New Agent.ToolRegistry()
-                toolRegistry.LoadFromRuntimeDirectories()
-                toolRegistry.LoadSkillScriptsAsTools()
-                _aiNativeRuntime = New Agent.AiNativeRuntime(toolRegistry)
+                _aiNativeRuntime = New Agent.AiNativeRuntime(RuntimeToolRegistry)
             End If
             Return _aiNativeRuntime
+        End Get
+    End Property
+
+    Private ReadOnly Property RuntimeToolRegistry As Agent.ToolRegistry
+        Get
+            If _runtimeToolRegistry Is Nothing Then
+                _runtimeToolRegistry = New Agent.ToolRegistry()
+                _runtimeToolRegistry.LoadFromRuntimeDirectories()
+                _runtimeToolRegistry.LoadSkillScriptsAsTools()
+                _runtimeToolRegistry.ExecuteCodeWithToolResult =
+                    Function(code, language, preview)
+                        Return CodeExecutionService.ExecuteCodeWithToolResult(code, language, preview)
+                    End Function
+            End If
+            Return _runtimeToolRegistry
+        End Get
+    End Property
+
+    Private ReadOnly Property ChatToolRuntime As ChatToolCallRuntime
+        Get
+            If _chatToolCallRuntime Is Nothing Then
+                _chatToolCallRuntime = New ChatToolCallRuntime(RuntimeToolRegistry)
+            End If
+            Return _chatToolCallRuntime
         End Get
     End Property
 
@@ -102,7 +125,9 @@ Public MustInherit Class BaseChatControl
             If _conversationRuntime Is Nothing Then
                 _conversationRuntime = New DefaultConversationRuntime(
                     New DefaultContextComposer(),
-                    New McpToolBroker())
+                    New CompositeToolBroker(
+                        New OfficeToolBroker(RuntimeToolRegistry),
+                        New McpToolBroker()))
             End If
             Return _conversationRuntime
         End Get
@@ -158,12 +183,14 @@ Public MustInherit Class BaseChatControl
                 _agentKernelService = New AgentKernelService(
                     AddressOf ExecuteJavaScriptAsyncJS,
                     AddressOf EscapeJavaScriptString,
-                    AddressOf SendAndGetResponseAsync,
+                    AddressOf SendAndGetStreamingResponseAsync,
                     Function(c, l, p) CodeExecutionService.ExecuteCodeWithToolResult(c, l, p),
                     _chatStateService,
                     systemHistoryMessageData,
                     AddressOf ManageHistoryMessageSize,
-                    AddressOf GetOfficeAppType)
+                    AddressOf GetOfficeAppType,
+                    AddressOf CaptureOfficeContextForAgent,
+                    AddressOf GetCurrentOfficeContentForAgent)
             End If
             Return _agentKernelService
         End Get
@@ -257,7 +284,13 @@ Public MustInherit Class BaseChatControl
                     AddressOf WaitForRendererMapAsync,
                     Sub(uuid, plainBuf) CheckAndCompleteProcessingHook(uuid, plainBuf),
                     Nothing,
-                    Nothing)
+                    Nothing,
+                    Function()
+                        Return OfficeToolBroker.BuildTools(RuntimeToolRegistry, GetOfficeAppType())
+                    End Function,
+                    Function(toolId, parameters)
+                        Return ChatToolRuntime.ExecuteAsync(GetOfficeAppType(), toolId, parameters)
+                    End Function)
             End If
             Return _httpStreamService
         End Get
@@ -716,13 +749,13 @@ Public MustInherit Class BaseChatControl
         router.Register("acceptCompletion", Sub(jsonDoc) HandleAcceptCompletion(jsonDoc))
         router.Register("startAgent", Sub(jsonDoc) HandleStartAgent(jsonDoc))
         router.Register("startAgentExecution", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
-        router.Register("abortAgent", Sub(jsonDoc) HandleAbortAgent())
+        router.Register("abortAgent", Sub(jsonDoc) HandleAbortAgent(jsonDoc))
         router.Register("refineAgentPlan", Sub(jsonDoc) HandleRefineAgentPlan(jsonDoc))
         ' Legacy Ralph protocol → AgentKernel compatibility shims (do not add new features here).
         router.Register("startLoop", Sub(jsonDoc) HandleLegacyStartLoop(jsonDoc))
         router.Register("continueLoop", Sub(jsonDoc) HandleStartAgentExecution(jsonDoc))
         router.Register("replanLoop", Sub(jsonDoc) HandleAgentRefinePlan(jsonDoc))
-        router.Register("cancelLoop", Sub(jsonDoc) HandleAbortAgent())
+        router.Register("cancelLoop", Sub(jsonDoc) HandleAbortAgent(jsonDoc))
         router.Register("agent:approvePlan", Sub(jsonDoc) HandleAgentApprovePlan(jsonDoc))
         router.Register("agent:rejectPlan", Sub(jsonDoc) HandleAgentRejectPlan(jsonDoc))
         router.Register("agent:approveStep", Sub(jsonDoc) HandleAgentApproveStep(jsonDoc))
@@ -770,6 +803,11 @@ Public MustInherit Class BaseChatControl
         End Try
 
         HttpStreamSvc.CancelRequest(requestUuid)
+        ' The bottom stop button is shared by ordinary chat and Agent mode.  Cancelling
+        ' only the HTTP stream leaves the ReAct loop alive, so always forward the same
+        ' user intent to the active Agent request as well.
+        Dim agentService = _agentKernelService
+        If agentService IsNot Nothing Then agentService.AbortAgent()
     End Sub
 
     Protected Sub WebView2_WebMessageReceived(sender As Object, e As CoreWebView2WebMessageReceivedEventArgs)
@@ -1507,16 +1545,17 @@ Public MustInherit Class BaseChatControl
         GlobalStatusStrip.ShowWarning(message)
     End Sub
 
+    Private Sub IChatRoutingHost_CompleteBlockedRequest(message As String) Implements IChatRoutingHost.CompleteBlockedRequest
+        Dim uuid = Guid.NewGuid().ToString()
+        Dim timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+        Dim safeMessage = EscapeJavaScriptString(If(message, "请求未执行"))
+        ExecuteJavaScriptAsyncJS(
+            $"createChatSection('AI', '{timestamp}', '{uuid}'); appendRenderer('{uuid}', '❌ {safeMessage}'); " &
+            "if(typeof restoreAgentRequestUi==='function') restoreAgentRequestUi(); else if(typeof changeSendButton==='function') changeSendButton();")
+    End Sub
+
     Private Sub IChatRoutingHost_ShowIdentifyingStatus() Implements IChatRoutingHost.ShowIdentifyingStatus
         ExecuteJavaScriptAsyncJS("showIdentifyingStatus()")
-    End Sub
-
-    Private Sub IChatRoutingHost_SendChatMessage(message As String) Implements IChatRoutingHost.SendChatMessage
-        SendChatMessage(message)
-    End Sub
-
-    Private Sub IChatRoutingHost_SendChatMessageWithIntent(message As String, intent As IntentResult) Implements IChatRoutingHost.SendChatMessageWithIntent
-        SendChatMessageWithIntent(message, intent)
     End Sub
 
     Private Sub IChatRoutingHost_StartAgentPlanningFlow(message As String,
@@ -1548,7 +1587,7 @@ Public MustInherit Class BaseChatControl
 
                          GlobalStatusStrip.ShowInfo("正在规划任务...")
 
-                         Dim currentContent = GetCurrentOfficeContent()
+                         Dim currentContent = GetCurrentOfficeContentForAgent()
                          Dim historyMessages As New List(Of Tuple(Of String, String))()
                          For Each msg In systemHistoryMessageData
                              If msg.role = "user" OrElse msg.role = "assistant" Then
@@ -1561,7 +1600,7 @@ Public MustInherit Class BaseChatControl
                              appType,
                              currentContent,
                              historyMessages,
-                             CaptureOfficeContext(appType),
+                             CaptureOfficeContextForAgent(appType),
                              analysis?.TaskSpec,
                              analysis?.SelectedSkills)
 
@@ -1580,6 +1619,22 @@ Public MustInherit Class BaseChatControl
 
     Protected Overridable Function CaptureOfficeContext(appType As String) As Agent.Context.OfficeContext
         Return New Agent.Context.OfficeContext With {.AppType = appType}
+    End Function
+
+    Private Function CaptureOfficeContextForAgent(appType As String) As Agent.Context.OfficeContext
+        If Me.IsHandleCreated AndAlso Me.InvokeRequired Then
+            Return DirectCast(Me.Invoke(New Func(Of Agent.Context.OfficeContext)(
+                Function() CaptureOfficeContext(appType))), Agent.Context.OfficeContext)
+        End If
+        Return CaptureOfficeContext(appType)
+    End Function
+
+    Private Function GetCurrentOfficeContentForAgent() As String
+        If Me.IsHandleCreated AndAlso Me.InvokeRequired Then
+            Return DirectCast(Me.Invoke(New Func(Of String)(
+                Function() GetCurrentOfficeContent())), String)
+        End If
+        Return GetCurrentOfficeContent()
     End Function
 
     ''' <summary>
@@ -1806,7 +1861,7 @@ Public MustInherit Class BaseChatControl
         Task.Run(Async Function()
                      Try
                          Dim appType = GetApplicationType()
-                         Dim currentContent = GetCurrentOfficeContent()
+                         Dim currentContent = GetCurrentOfficeContentForAgent()
 
                          Dim historyMessages As New List(Of Tuple(Of String, String))()
                          For Each msg In systemHistoryMessageData
@@ -1816,7 +1871,7 @@ Public MustInherit Class BaseChatControl
                          Next
 
                          GlobalStatusStrip.ShowInfo("正在分析您的需求...")
-                         Dim success = Await AgentKernelSvc.StartAgentAsync(finalMessageToLLM, appType, currentContent, historyMessages, CaptureOfficeContext(appType))
+                         Dim success = Await AgentKernelSvc.StartAgentAsync(finalMessageToLLM, appType, currentContent, historyMessages, CaptureOfficeContextForAgent(appType))
 
                          If Not success Then
                              GlobalStatusStrip.ShowWarning("无法分析您的需求，请重试")
@@ -1841,8 +1896,9 @@ Public MustInherit Class BaseChatControl
     ''' <summary>
     ''' 处理终止Agent（兼容新旧架构）
     ''' </summary>
-    Protected Sub HandleAbortAgent()
-        AgentKernelSvc.AbortAgent()
+    Protected Sub HandleAbortAgent(jsonDoc As JObject)
+        Dim expectedSessionId = If(jsonDoc?("payload")?("sessionId")?.ToString(), "")
+        AgentKernelSvc.AbortAgent(expectedSessionId)
     End Sub
 
     ''' <summary>
@@ -1850,7 +1906,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleStartAgentExecution(jsonDoc As JObject)
         ' 新架构中，用户点击"开始执行"相当于批准计划
-        AgentKernelSvc.Approve()
+        AgentKernelSvc.Approve(jsonDoc("payload")?("sessionId")?.ToString())
     End Sub
 
 #Region "AgentKernel 统一消息处理"
@@ -1860,7 +1916,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentApprovePlan(jsonDoc As JObject)
         Try
-            AgentKernelSvc.Approve()
+            AgentKernelSvc.Approve(jsonDoc("payload")?("sessionId")?.ToString())
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentApprovePlan 出错: {ex.Message}")
         End Try
@@ -1871,7 +1927,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentRejectPlan(jsonDoc As JObject)
         Try
-            AgentKernelSvc.Reject()
+            AgentKernelSvc.Reject(jsonDoc("payload")?("sessionId")?.ToString())
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentRejectPlan 出错: {ex.Message}")
         End Try
@@ -1882,7 +1938,7 @@ Public MustInherit Class BaseChatControl
     ''' </summary>
     Protected Sub HandleAgentApproveStep(jsonDoc As JObject)
         Try
-            AgentKernelSvc.Approve()
+            AgentKernelSvc.Approve(jsonDoc("payload")?("sessionId")?.ToString())
         Catch ex As Exception
             Debug.WriteLine($"HandleAgentApproveStep 出错: {ex.Message}")
         End Try
@@ -2001,7 +2057,161 @@ Public MustInherit Class BaseChatControl
     End Function
 
     ''' <summary>
-    ''' 非流式 AI 请求，直接获取完整响应（供 AgentKernel 使用）
+    ''' Agent 专用流式请求。模型的结构化正文会完整累积后返回给 Agent，
+    ''' 同时把 reasoning/content 增量送到进度 UI，避免规划期间长时间无反馈。
+    ''' </summary>
+    Private Async Function SendAndGetStreamingResponseAsync(
+        prompt As String,
+        systemPrompt As String,
+        historyMessages As List(Of HistoryMessage),
+        onDelta As Action(Of AgentStreamDelta),
+        cancellationToken As CancellationToken) As Task(Of String)
+
+        Try
+            Dim messagesArray As New JArray()
+            If Not String.IsNullOrEmpty(systemPrompt) Then
+                messagesArray.Add(New JObject From {{"role", "system"}, {"content", systemPrompt}})
+            End If
+            If historyMessages IsNot Nothing Then
+                For Each msg In historyMessages
+                    If Not String.IsNullOrEmpty(msg.content) Then
+                        messagesArray.Add(New JObject From {{"role", msg.role}, {"content", msg.content}})
+                    End If
+                Next
+            End If
+            messagesArray.Add(New JObject From {{"role", "user"}, {"content", prompt}})
+
+            Dim apiUrl = ConfigSettings.ApiUrl
+            Dim apiKey = ConfigSettings.ApiKey
+            Dim isAnthropic = apiUrl.IndexOf("anthropic.com", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+                              apiUrl.IndexOf("/v1/messages", StringComparison.OrdinalIgnoreCase) >= 0
+            Dim requestObj = AiGateway.BuildProviderRequest(New AiRequestOptions With {
+                .ApiUrl = apiUrl,
+                .ApiKey = apiKey,
+                .ModelName = ConfigSettings.ModelName,
+                .Platform = ConfigSettings.platform,
+                .ReasoningMode = AgentInternalRequestPolicy.ReasoningMode,
+                .Messages = messagesArray,
+                .MaxTokens = AgentInternalRequestPolicy.MaxTokens
+            })
+            requestObj("stream") = True
+            Dim requestText = requestObj.ToString(Formatting.None)
+
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
+            Dim client = HttpClientPool.GetClient(apiUrl)
+            Dim streamClock = Stopwatch.StartNew()
+            AppLogger.Info("AgentStream",
+                           $"Request started provider={ConfigSettings.platform} model={ConfigSettings.ModelName} " &
+                           $"messages={messagesArray.Count} requestChars={requestText.Length} " &
+                           $"maxTokens=provider-default reasoning={AgentInternalRequestPolicy.ReasoningMode} " &
+                           $"timeoutSeconds=none")
+            Using request As New HttpRequestMessage(HttpMethod.Post, apiUrl)
+                If isAnthropic Then
+                    request.Headers.Add("x-api-key", apiKey)
+                    request.Headers.Add("anthropic-version", "2023-06-01")
+                Else
+                    request.Headers.Authorization = New AuthenticationHeaderValue("Bearer", apiKey)
+                End If
+                request.Content = New StringContent(requestText, Encoding.UTF8, "application/json")
+
+                Using requestCts = AgentInternalRequestPolicy.CreateCancellationSource(cancellationToken)
+                    Using response = Await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
+                        Await AiGateway.EnsureSuccessOrThrowAsync(response)
+                        AppLogger.Info("AgentStream", $"Response headers received elapsedMs={streamClock.ElapsedMilliseconds}")
+
+                        Dim contentBuffer As New StringBuilder()
+                        Dim reasoningChars As Integer = 0
+                        Dim rawResponse As New StringBuilder()
+                        Dim pendingReasoning As New StringBuilder()
+                        Dim pendingContent As New StringBuilder()
+                        Dim emitClock = Stopwatch.StartNew()
+                        Dim firstDeltaObserved = False
+
+                        Using responseStream = Await response.Content.ReadAsStreamAsync()
+                            Using cancelRegistration = requestCts.Token.Register(
+                                Sub()
+                                    Try
+                                        responseStream.Dispose()
+                                    Catch
+                                    End Try
+                                End Sub)
+                                Using reader As New StreamReader(responseStream, Encoding.UTF8)
+                                    While True
+                                        Dim line = Await reader.ReadLineAsync()
+                                        If line Is Nothing Then Exit While
+                                        If line.Length = 0 OrElse line.StartsWith(":", StringComparison.Ordinal) OrElse
+                                           line.StartsWith("event:", StringComparison.OrdinalIgnoreCase) Then Continue While
+
+                                        rawResponse.AppendLine(line)
+                                        Dim delta = AgentStreamChunkParser.ParseDataLine(line)
+                                        If delta.Done Then Exit While
+
+                                        If Not firstDeltaObserved AndAlso
+                                           (Not String.IsNullOrEmpty(delta.ReasoningDelta) OrElse Not String.IsNullOrEmpty(delta.ContentDelta)) Then
+                                            firstDeltaObserved = True
+                                            AppLogger.Info("AgentStream", $"First delta received elapsedMs={streamClock.ElapsedMilliseconds}")
+                                        End If
+
+                                        If Not String.IsNullOrEmpty(delta.ReasoningDelta) Then
+                                            reasoningChars += delta.ReasoningDelta.Length
+                                            pendingReasoning.Append(delta.ReasoningDelta)
+                                        End If
+                                        If Not String.IsNullOrEmpty(delta.ContentDelta) Then
+                                            contentBuffer.Append(delta.ContentDelta)
+                                            pendingContent.Append(delta.ContentDelta)
+                                        End If
+
+                                        If pendingReasoning.Length + pendingContent.Length >= 48 OrElse emitClock.ElapsedMilliseconds >= 100 Then
+                                            EmitAgentStreamDelta(onDelta, pendingReasoning, pendingContent)
+                                            emitClock.Restart()
+                                        End If
+                                    End While
+                                End Using
+                            End Using
+                        End Using
+
+                        EmitAgentStreamDelta(onDelta, pendingReasoning, pendingContent)
+                        onDelta?.Invoke(New AgentStreamDelta With {.Done = True})
+                        AppLogger.Info("AgentStream",
+                                       $"Stream completed elapsedMs={streamClock.ElapsedMilliseconds} " &
+                                       $"contentChars={contentBuffer.Length} reasoningChars={reasoningChars}")
+
+                        If contentBuffer.Length > 0 Then Return contentBuffer.ToString()
+
+                        ' A few compatible gateways ignore stream=true and return one JSON response.
+                        Dim fallback = AiGateway.ExtractAssistantContent(rawResponse.ToString().Trim(), isAnthropic)
+                        If Not String.IsNullOrWhiteSpace(fallback) Then Return fallback
+                        Return ""
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            Debug.WriteLine($"[SendAndGetStreamingResponseAsync] 请求失败: {ex.Message}")
+            Throw
+        End Try
+    End Function
+
+    Private Shared Sub EmitAgentStreamDelta(
+        onDelta As Action(Of AgentStreamDelta),
+        pendingReasoning As StringBuilder,
+        pendingContent As StringBuilder)
+
+        If onDelta Is Nothing OrElse (pendingReasoning.Length = 0 AndAlso pendingContent.Length = 0) Then Return
+        Dim delta As New AgentStreamDelta With {
+            .ReasoningDelta = pendingReasoning.ToString(),
+            .ContentDelta = pendingContent.ToString()
+        }
+        pendingReasoning.Clear()
+        pendingContent.Clear()
+        Try
+            onDelta(delta)
+        Catch ex As Exception
+            Debug.WriteLine($"[SendAndGetStreamingResponseAsync] 增量回调失败: {ex.Message}")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' 非流式 AI 请求，直接获取完整响应（仅供需要一次性文本的内部格式化流程使用）
     ''' </summary>
     Private Async Function SendAndGetResponseAsync(prompt As String, systemPrompt As String, historyMessages As List(Of HistoryMessage)) As Task(Of String)
         Try
@@ -2045,7 +2255,7 @@ Public MustInherit Class BaseChatControl
 
                 Using timeoutCts As New System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(2))
                     Using response As HttpResponseMessage = Await client.SendAsync(request, timeoutCts.Token)
-                        response.EnsureSuccessStatusCode()
+                        Await AiGateway.EnsureSuccessOrThrowAsync(response)
                         Dim jsonContent As String = Await response.Content.ReadAsStringAsync()
 
                     ' 提取 content
@@ -2641,21 +2851,22 @@ Public MustInherit Class BaseChatControl
             Dim capturedQuestion = question
             Dim capturedAddHistory = addHistory
             HttpStreamSvc.FinalizeCallback = Sub(ah, oq)
-                                                 Dim answerContent = _chatStateService.MarkdownBuffer.ToString()
-                                                 Dim answer = New HistoryMessage() With {
-                                                     .role = "assistant",
-                                                     .content = answerContent
+                                                  Dim answerContent = _chatStateService.MarkdownBuffer.ToString()
+                                                  Dim memoryQuestion = ChatQuestionText.ExtractUserQuestion(oq)
+                                                  Dim answer = New HistoryMessage() With {
+                                                      .role = "assistant",
+                                                      .content = answerContent
                                                  }
                                                  If ah Then
-                                                     systemHistoryMessageData.Add(answer)
-                                                     ManageHistoryMessageSize()
-                                                     _chatStateService.AddMessage("assistant", answer.content)
-                                                     MemoryService.SaveConversationTurnAsync(oq, answer.content, _chatStateService.CurrentSessionId, GetOfficeAppType())
-                                                     MemoryTurnRecorder.RecordConversationTurn(oq, answer.content, _chatStateService.CurrentSessionId, responseMode, ah, GetOfficeAppType())
-                                                     If systemHistoryMessageData.Count = 3 Then
-                                                         Dim sid = _chatStateService.CurrentSessionId
-                                                         Dim title = If(oq?.Length > 80, oq.Substring(0, 80) & "...", If(oq, ""))
-                                                         Dim snippet = If(oq?.Length > 200, oq.Substring(0, 200) & "...", If(oq, ""))
+                                                      systemHistoryMessageData.Add(answer)
+                                                      ManageHistoryMessageSize()
+                                                      _chatStateService.AddMessage("assistant", answer.content)
+                                                      MemoryService.SaveConversationTurnAsync(memoryQuestion, answer.content, _chatStateService.CurrentSessionId, GetOfficeAppType())
+                                                      MemoryTurnRecorder.RecordConversationTurn(memoryQuestion, answer.content, _chatStateService.CurrentSessionId, responseMode, ah, GetOfficeAppType())
+                                                      If systemHistoryMessageData.Count = 3 Then
+                                                          Dim sid = _chatStateService.CurrentSessionId
+                                                          Dim title = If(memoryQuestion?.Length > 80, memoryQuestion.Substring(0, 80) & "...", If(memoryQuestion, ""))
+                                                          Dim snippet = If(memoryQuestion?.Length > 200, memoryQuestion.Substring(0, 200) & "...", If(memoryQuestion, ""))
                                                          If Not String.IsNullOrWhiteSpace(sid) AndAlso Not String.IsNullOrWhiteSpace(title) Then
                                                              Try
                                                                  MemoryService.SaveSessionSummary(sid, title, snippet)

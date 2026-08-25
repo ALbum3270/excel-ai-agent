@@ -22,11 +22,46 @@ Public Class AiRequestOptions
     Public Property Temperature As Double?
     Public Property MaxTokens As Integer?
     Public Property TimeoutSeconds As Integer
+    Public Property CancellationToken As CancellationToken
 
     Public Sub New()
         ReasoningMode = ReasoningRequestHelper.ReasoningDefault
         TimeoutSeconds = 60
     End Sub
+End Class
+
+''' <summary>
+''' A provider returned a valid HTTP response that rejected the AI request. This is distinct
+''' from transport failure: status and provider error metadata must survive to user-facing
+''' classification without retaining the full response body.
+''' </summary>
+Public NotInheritable Class AiProviderHttpException
+    Inherits HttpRequestException
+
+    Public Sub New(statusCode As Integer,
+                   reasonPhrase As String,
+                   providerErrorCode As String,
+                   providerErrorMessage As String)
+        MyBase.New(BuildExceptionMessage(statusCode, reasonPhrase, providerErrorCode, providerErrorMessage))
+        Me.StatusCode = statusCode
+        Me.ReasonPhrase = If(reasonPhrase, "")
+        Me.ProviderErrorCode = If(providerErrorCode, "")
+        Me.ProviderErrorMessage = If(providerErrorMessage, "")
+    End Sub
+
+    Public ReadOnly Property StatusCode As Integer
+    Public ReadOnly Property ReasonPhrase As String
+    Public ReadOnly Property ProviderErrorCode As String
+    Public ReadOnly Property ProviderErrorMessage As String
+
+    Private Shared Function BuildExceptionMessage(statusCode As Integer,
+                                                  reasonPhrase As String,
+                                                  providerErrorCode As String,
+                                                  providerErrorMessage As String) As String
+        Dim codeText = If(String.IsNullOrWhiteSpace(providerErrorCode), "", $" code={providerErrorCode}")
+        Dim detailText = If(String.IsNullOrWhiteSpace(providerErrorMessage), "", $": {providerErrorMessage}")
+        Return $"AI provider HTTP {statusCode} {If(reasonPhrase, "")}{codeText}{detailText}".Trim()
+    End Function
 End Class
 
 Public Class AiGatewayResponse
@@ -35,6 +70,8 @@ Public Class AiGatewayResponse
     Public Property RawResponse As String
     Public Property ErrorMessage As String
     Public Property StatusCode As Integer
+    Public Property ProviderErrorCode As String
+    Public Property ProviderErrorMessage As String
 End Class
 
 Public Class AiGateway
@@ -61,29 +98,40 @@ Public Class AiGateway
                 ApplyHeaders(request, options.ApiKey, isAnthropic)
                 request.Content = New StringContent(requestBody.ToString(Formatting.None), Encoding.UTF8, "application/json")
 
-                Using cts As New CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds))
-                    Using response = Await _httpClient.SendAsync(request, cts.Token)
-                        Dim responseText = Await response.Content.ReadAsStringAsync()
-                        If Not response.IsSuccessStatusCode Then
-                            Dim errorMessage = $"HTTP {CInt(response.StatusCode)} {response.ReasonPhrase}: {Truncate(responseText, 1000)}"
-                            Debug.WriteLine($"[AiGateway] Request failed: {errorMessage}")
+                Using timeoutCts As New CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds))
+                    Using requestCts = CancellationTokenSource.CreateLinkedTokenSource(
+                        timeoutCts.Token,
+                        options.CancellationToken)
+                        Using response = Await _httpClient.SendAsync(request, requestCts.Token)
+                            Dim responseText = Await response.Content.ReadAsStringAsync()
+                            If Not response.IsSuccessStatusCode Then
+                                Dim providerException = CreateProviderHttpException(
+                                    CInt(response.StatusCode),
+                                    response.ReasonPhrase,
+                                    responseText)
+                                Debug.WriteLine($"[AiGateway] Request failed: {providerException.Message}")
+                                Return New AiGatewayResponse With {
+                                    .Success = False,
+                                    .RawResponse = responseText,
+                                    .ErrorMessage = providerException.Message,
+                                    .StatusCode = CInt(response.StatusCode),
+                                    .ProviderErrorCode = providerException.ProviderErrorCode,
+                                    .ProviderErrorMessage = providerException.ProviderErrorMessage
+                                }
+                            End If
+
                             Return New AiGatewayResponse With {
-                                .Success = False,
+                                .Success = True,
+                                .Content = ExtractAssistantContent(responseText, isAnthropic),
                                 .RawResponse = responseText,
-                                .ErrorMessage = errorMessage,
                                 .StatusCode = CInt(response.StatusCode)
                             }
-                        End If
-
-                        Return New AiGatewayResponse With {
-                            .Success = True,
-                            .Content = ExtractAssistantContent(responseText, isAnthropic),
-                            .RawResponse = responseText,
-                            .StatusCode = CInt(response.StatusCode)
-                        }
+                        End Using
                     End Using
                 End Using
             End Using
+        Catch ex As OperationCanceledException When options.CancellationToken.IsCancellationRequested
+            Throw
         Catch ex As TaskCanceledException
             Dim errorMessage = $"Request timed out after {timeoutSeconds} seconds."
             Debug.WriteLine($"[AiGateway] {errorMessage} {ex.Message}")
@@ -122,6 +170,57 @@ Public Class AiGateway
         End If
 
         Return requestObj
+    End Function
+
+    Public Shared Async Function EnsureSuccessOrThrowAsync(response As HttpResponseMessage) As Task
+        If response Is Nothing Then Throw New HttpRequestException("AI provider returned no HTTP response.")
+        If response.IsSuccessStatusCode Then Return
+
+        Dim responseText = ""
+        If response.Content IsNot Nothing Then responseText = Await response.Content.ReadAsStringAsync()
+        Throw CreateProviderHttpException(CInt(response.StatusCode), response.ReasonPhrase, responseText)
+    End Function
+
+    Public Shared Sub ThrowIfFailed(response As AiGatewayResponse)
+        If response Is Nothing Then Throw New HttpRequestException("AI provider returned no response.")
+        If response.Success Then Return
+        If response.StatusCode > 0 Then
+            Throw CreateProviderHttpException(
+                response.StatusCode,
+                "",
+                response.RawResponse)
+        End If
+        Throw New HttpRequestException(If(response.ErrorMessage, "AI provider request failed."))
+    End Sub
+
+    Public Shared Function CreateProviderHttpException(statusCode As Integer,
+                                                       reasonPhrase As String,
+                                                       responseText As String) As AiProviderHttpException
+        Dim providerErrorCode = ""
+        Dim providerErrorMessage = ""
+        Try
+            Dim root = JObject.Parse(If(responseText, ""))
+            Dim errorObject = TryCast(root("error"), JObject)
+            If errorObject IsNot Nothing Then
+                providerErrorCode = FirstNonBlank(
+                    TokenToString(errorObject("code")),
+                    TokenToString(errorObject("type")))
+                providerErrorMessage = FirstNonBlank(
+                    TokenToString(errorObject("message")),
+                    TokenToString(errorObject("detail")))
+            Else
+                providerErrorCode = FirstNonBlank(TokenToString(root("code")), TokenToString(root("type")))
+                providerErrorMessage = FirstNonBlank(TokenToString(root("message")), TokenToString(root("detail")))
+            End If
+        Catch
+            providerErrorMessage = responseText
+        End Try
+
+        Return New AiProviderHttpException(
+            statusCode,
+            SanitizeProviderText(reasonPhrase, 120),
+            SanitizeProviderText(providerErrorCode, 120),
+            SanitizeProviderText(providerErrorMessage, 600))
     End Function
 
     Public Shared Function ExtractAssistantContent(responseText As String, Optional isAnthropic As Boolean = False) As String
@@ -420,6 +519,18 @@ Public Class AiGateway
         If token Is Nothing Then Return ""
         If token.Type = JTokenType.Null Then Return ""
         Return token.ToString()
+    End Function
+
+    Private Shared Function FirstNonBlank(ParamArray values As String()) As String
+        For Each value In If(values, New String() {})
+            If Not String.IsNullOrWhiteSpace(value) Then Return value.Trim()
+        Next
+        Return ""
+    End Function
+
+    Private Shared Function SanitizeProviderText(value As String, maxLength As Integer) As String
+        Dim sanitized = AppLogger.Redact(If(value, "")).Replace(vbCr, " ").Replace(vbLf, " ").Trim()
+        Return Truncate(sanitized, maxLength)
     End Function
 
     Private Shared Function Fail(errorMessage As String) As AiGatewayResponse

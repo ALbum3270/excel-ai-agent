@@ -10,6 +10,107 @@ window.agentCardState = {
     session: null,
     locked: false
 };
+window.agentProgressTimers = window.agentProgressTimers || {};
+
+/**
+ * Create the visible Agent heartbeat before the first model byte arrives.
+ * This panel survives all streaming updates; status updates never replace it.
+ */
+function startAgentProgress(uuid, initialStatus) {
+    if (!uuid) return false;
+
+    const host = document.getElementById('content-' + uuid) ||
+        document.getElementById('agent-stream-host-' + uuid);
+    if (!host) return false;
+
+    let panel = document.getElementById('agent-progress-' + uuid);
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'agent-live-progress';
+        panel.id = 'agent-progress-' + uuid;
+        panel.dataset.startedAt = String(Date.now());
+        panel.dataset.receivedChars = '0';
+        panel.innerHTML = `
+            <div class="agent-progress-line">
+                <span class="agent-progress-spinner" aria-hidden="true"></span>
+                <span class="agent-progress-status" id="agent-progress-status-${uuid}"></span>
+                <span class="agent-progress-elapsed" id="agent-progress-elapsed-${uuid}">0 秒</span>
+            </div>
+            <div class="agent-progress-receipt" id="agent-progress-receipt-${uuid}">等待模型返回首个数据块...</div>
+            <details class="agent-stream-reasoning" id="agent-stream-reasoning-box-${uuid}" open style="display:none;">
+                <summary>💭 思考过程（实时）</summary>
+                <pre id="agent-stream-reasoning-${uuid}"></pre>
+            </details>
+        `;
+        host.appendChild(panel);
+    }
+
+    updateAgentProgressStatus(uuid, initialStatus || '正在处理...');
+    stopAgentProgress(uuid);
+    const startedAt = Number(panel.dataset.startedAt || Date.now());
+    window.agentProgressTimers[uuid] = window.setInterval(() => {
+        const elapsed = document.getElementById('agent-progress-elapsed-' + uuid);
+        if (!elapsed) {
+            stopAgentProgress(uuid);
+            return;
+        }
+        const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        elapsed.textContent = `${seconds} 秒`;
+    }, 1000);
+    return true;
+}
+
+function updateAgentProgressStatus(uuid, status) {
+    if (!uuid) return false;
+    let statusEl = document.getElementById('agent-progress-status-' + uuid);
+    if (!statusEl) {
+        if (!startAgentProgress(uuid, status)) return false;
+        statusEl = document.getElementById('agent-progress-status-' + uuid);
+    }
+    if (statusEl) statusEl.textContent = status || '正在处理...';
+    return !!statusEl;
+}
+
+/**
+ * Append provider deltas without exposing the structured JSON as a chat answer.
+ * reasoning is rendered verbatim; content updates a live receive counter while the
+ * complete content is retained by the backend for safe JSON parsing.
+ */
+function appendAgentStreamDelta(uuid, kind, text) {
+    if (!uuid) return false;
+    let panel = document.getElementById('agent-progress-' + uuid);
+    if (!panel) {
+        if (!startAgentProgress(uuid, '正在接收模型输出...')) return false;
+        panel = document.getElementById('agent-progress-' + uuid);
+    }
+
+    if (kind === 'reasoning' && text) {
+        const box = document.getElementById('agent-stream-reasoning-box-' + uuid);
+        const reasoning = document.getElementById('agent-stream-reasoning-' + uuid);
+        if (box) box.style.display = 'block';
+        if (reasoning) {
+            reasoning.textContent += text;
+            reasoning.scrollTop = reasoning.scrollHeight;
+        }
+    } else if (kind === 'content' && text) {
+        const received = Number(panel.dataset.receivedChars || 0) + text.length;
+        panel.dataset.receivedChars = String(received);
+        const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+        if (receipt) receipt.textContent = `已流式接收 ${received} 字，正在解析执行指令...`;
+    } else if (kind === 'done') {
+        const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+        if (receipt) receipt.textContent = '本轮模型输出接收完成，正在解析并继续执行...';
+    }
+
+    if (typeof contentScroll === 'function') contentScroll();
+    return true;
+}
+
+function stopAgentProgress(uuid) {
+    const timer = window.agentProgressTimers[uuid];
+    if (timer) window.clearInterval(timer);
+    delete window.agentProgressTimers[uuid];
+}
 
 /**
  * 锁定聊天输入（Agent 执行期间）
@@ -89,10 +190,17 @@ function showAgentPlanCard(planData) {
         const timestamp = formatDateTime(new Date());
 
         let chatContainer;
+        let previousReasoning = '';
+        let previousReceived = 0;
         if (planData.replaceThinkingUuid) {
             const thinkingDiv = document.getElementById('content-' + planData.replaceThinkingUuid);
             const parentContainer = thinkingDiv ? thinkingDiv.closest('.chat-container') : null;
             if (parentContainer) {
+                const oldReasoning = document.getElementById('agent-stream-reasoning-' + planData.replaceThinkingUuid);
+                const oldProgress = document.getElementById('agent-progress-' + planData.replaceThinkingUuid);
+                previousReasoning = oldReasoning ? oldReasoning.textContent : '';
+                previousReceived = oldProgress ? Number(oldProgress.dataset.receivedChars || 0) : 0;
+                stopAgentProgress(planData.replaceThinkingUuid);
                 chatContainer = parentContainer;
                 chatContainer.className = 'chat-container agent-card-container';
                 chatContainer.id = 'agent-plan-' + uuid;
@@ -106,7 +214,8 @@ function showAgentPlanCard(planData) {
             chatContainer.id = 'agent-plan-' + uuid;
         }
 
-        const stepsHtml = planData.steps ? planData.steps.map((step, idx) => `
+        const isAdaptive = !Array.isArray(planData.steps) || planData.steps.length === 0;
+        const stepsHtml = !isAdaptive ? planData.steps.map((step, idx) => `
             <div class="agent-step" id="agent-step-${uuid}-${idx}" data-status="pending">
                 <div class="agent-step-header">
                     <span class="agent-step-icon" id="step-icon-${uuid}-${idx}">⏳</span>
@@ -118,7 +227,24 @@ function showAgentPlanCard(planData) {
                 </div>
                 <div class="agent-iteration-area" id="iteration-area-${uuid}-${idx}"></div>
             </div>
-        `).join('') : '';
+        `).join('') : `
+            <div class="agent-live-trace" id="agent-live-trace-${uuid}">
+                <div class="agent-live-waiting">正在根据最新 Office 上下文决定第一个动作...</div>
+            </div>
+        `;
+
+        const actionHtml = isAdaptive ? `
+            <button class="agent-btn agent-btn-abort" onclick="abortAgent('${uuid}')">
+                ⏹ 终止执行
+            </button>
+        ` : `
+            <button class="agent-btn agent-btn-execute" onclick="confirmAgentExecution('${uuid}')">
+                ▶ 开始执行
+            </button>
+            <button class="agent-btn agent-btn-abort" onclick="abortAgent('${uuid}')">
+                ✖ 取消
+            </button>
+        `;
 
         chatContainer.innerHTML = `
             <div class="message-header">
@@ -132,31 +258,26 @@ function showAgentPlanCard(planData) {
                 <div class="agent-understanding">
                     <strong>📋 理解：</strong>${escapeHtml(planData.understanding || '')}
                 </div>
+                <div class="agent-stream-host" id="agent-stream-host-${uuid}"></div>
                 <div class="agent-steps-container">
                     <div class="agent-steps-header">
-                        <span>📝 执行计划</span>
-                        <span class="agent-step-count">${planData.steps ? planData.steps.length : 0} 个步骤</span>
+                        <span>${isAdaptive ? '🔄 实时执行过程' : '📝 执行计划'}</span>
+                        <span class="agent-step-count" id="agent-step-count-${uuid}">${isAdaptive ? '等待首个动作' : planData.steps.length + ' 个步骤'}</span>
                     </div>
                     <div class="agent-steps-list" id="agent-steps-${uuid}">
                         ${stepsHtml}
                     </div>
                 </div>
                 <div class="agent-summary">
-                    <strong>🎯 预期结果：</strong>${escapeHtml(planData.summary || '')}
+                    <strong>🎯 目标：</strong>${escapeHtml(planData.summary || '')}
                 </div>
                 <div class="agent-actions" id="agent-actions-${uuid}">
-                    <button class="agent-btn agent-btn-execute" onclick="confirmAgentExecution('${uuid}')">
-                        ▶ 开始执行
-                    </button>
-                    <button class="agent-btn agent-btn-refine" onclick="refineAgentPlan('${uuid}')">🔄 修改计划</button>
-                    <button class="agent-btn agent-btn-abort" onclick="abortAgent('${uuid}')">
-                        ✖ 取消
-                    </button>
+                    ${actionHtml}
                 </div>
             </div>
             <div class="agent-status-bar" id="agent-status-${uuid}">
-                <span class="status-icon">⏸</span>
-                <span class="status-text">等待确认执行</span>
+                <span class="status-icon">${isAdaptive ? '🔄' : '⏸'}</span>
+                <span class="status-text">${isAdaptive ? '正在根据最新观察选择下一动作...' : '等待确认执行'}</span>
             </div>
         `;
 
@@ -168,7 +289,16 @@ function showAgentPlanCard(planData) {
             }
         }
 
-        chatContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        startAgentProgress(uuid, isAdaptive ? '已确认目标，正在进行第一轮决策...' : '规划完成，正在准备执行...');
+        if (previousReasoning) appendAgentStreamDelta(uuid, 'reasoning', previousReasoning);
+        if (previousReceived > 0) {
+            const progressPanel = document.getElementById('agent-progress-' + uuid);
+            const receipt = document.getElementById('agent-progress-receipt-' + uuid);
+            if (progressPanel) progressPanel.dataset.receivedChars = String(previousReceived);
+            if (receipt) receipt.textContent = `已流式接收 ${previousReceived} 字，正在继续执行...`;
+        }
+
+        if (typeof contentScroll === 'function') contentScroll();
 
         window.agentCardState.session.uuid = uuid;
 
@@ -245,6 +375,32 @@ function updateAgentIteration(sessionId, iteration) {
 
         const areaEl = document.getElementById(`iteration-area-${sessionId}-${iteration.index}`);
         if (!areaEl) {
+            const liveTrace = document.getElementById(`agent-live-trace-${sessionId}`);
+            if (liveTrace) {
+                const waiting = liveTrace.querySelector('.agent-live-waiting');
+                if (waiting) waiting.remove();
+
+                let iterationEl = document.getElementById(`agent-live-iteration-${sessionId}-${iteration.index}`);
+                if (!iterationEl) {
+                    iterationEl = document.createElement('div');
+                    iterationEl.className = 'agent-step agent-live-iteration';
+                    iterationEl.id = `agent-live-iteration-${sessionId}-${iteration.index}`;
+                    liveTrace.appendChild(iterationEl);
+                }
+                iterationEl.innerHTML = `
+                    <div class="agent-step-header">
+                        <span class="agent-step-icon">✅</span>
+                        <span class="agent-step-num">${Number(iteration.index) + 1}</span>
+                        <span class="agent-step-desc">本轮决策与宿主观察</span>
+                    </div>
+                    <div class="agent-iteration-area">${buildIterationHtml(iteration)}</div>
+                `;
+                const countEl = document.getElementById(`agent-step-count-${sessionId}`);
+                if (countEl) countEl.textContent = `${liveTrace.querySelectorAll('.agent-live-iteration').length} 轮已观察`;
+                if (typeof contentScroll === 'function') contentScroll();
+                return;
+            }
+
             // 如果没有精确匹配的步骤区域，放到当前运行的步骤下
             const runningStep = document.querySelector(`#agent-steps-${sessionId} .step-running`);
             if (runningStep) {
@@ -410,6 +566,7 @@ function confirmAgentExecution(uuid) {
  * 用户批准当前审批项
  */
 function agentApprove(sessionId) {
+    markAgentApprovalSubmitted(sessionId, true);
     requestApprove(sessionId);
 }
 
@@ -417,7 +574,27 @@ function agentApprove(sessionId) {
  * 用户拒绝当前审批项
  */
 function agentReject(sessionId) {
+    markAgentApprovalSubmitted(sessionId, false);
     requestReject(sessionId);
+}
+
+/**
+ * 审批点击后立即给出可见回执，避免后端恢复执行期间看起来像“点了没反应”。
+ */
+function markAgentApprovalSubmitted(sessionId, approved) {
+    const actionsEl = document.getElementById(`agent-actions-${sessionId}`);
+    if (actionsEl) {
+        actionsEl.innerHTML = `
+            <div class="agent-approval-request agent-approval-submitted">
+                <span class="approval-msg">${approved ? '✅ 已确认，正在继续执行...' : '⏭ 已跳过，正在收敛任务...'}</span>
+            </div>
+        `;
+    }
+    updateAgentStatus(sessionId, 'running', approved ? '审批已提交，正在继续执行...' : '跳过请求已提交...');
+}
+
+function markAgentApprovalQueued(sessionId) {
+    updateAgentStatus(sessionId, 'running', '审批已收到，正在连接当前执行任务...');
 }
 
 /**
@@ -434,13 +611,13 @@ function refineAgentPlan(uuid) {
  * 终止 Agent
  */
 function abortAgent(uuid) {
-    updateAgentStatus(uuid, 'aborted', '已终止');
+    stopAgentProgress(uuid);
+    updateAgentStatus(uuid, 'aborted', '正在安全终止...');
     const actions = document.getElementById('agent-actions-' + uuid);
     if (actions) {
-        actions.innerHTML = '<span class="agent-terminated">已终止</span>';
+        actions.innerHTML = '<span class="agent-terminated">正在终止...</span>';
     }
-    requestAbortAgent();
-    restoreAgentRequestUi();
+    requestAbortAgent(uuid);
 }
 
 /**
@@ -469,40 +646,72 @@ function updateAgentStatus(uuid, status, text) {
 }
 
 /**
+ * Render the model's terminal answer as a normal assistant message.
+ *
+ * The Agent card is an execution trace, not the conversational answer.  Keep
+ * this renderer idempotent because a terminal event can be observed through
+ * both the kernel and harness completion paths.
+ */
+function renderAgentFinalAnswer(agentUuid, message) {
+    if (!agentUuid || !message || !String(message).trim()) return false;
+    if (typeof createChatSection !== 'function') return false;
+
+    const answerUuid = 'agent-final-' + agentUuid;
+    if (document.getElementById('chat-' + answerUuid)) return true;
+
+    const timestamp = new Date().toLocaleString('zh-CN', { hour12: false });
+    createChatSection('AI', timestamp, answerUuid);
+    if (typeof appendRenderer === 'function') {
+        appendRenderer(answerUuid, String(message));
+    } else {
+        const content = document.getElementById('content-' + answerUuid);
+        if (content) content.textContent = String(message);
+    }
+    return true;
+}
+
+/**
  * 完成 Agent（成功或失败）
  * @param {string} uuid - 会话 UUID
  * @param {boolean} success - 是否成功
  * @param {string} message - 完成消息
+ * @param {string} terminalStatus - succeeded, failed, or cancelled
  */
-function completeAgent(uuid, success, message, thinkingUuid) {
+function completeAgent(uuid, success, message, thinkingUuid, terminalStatus) {
     try {
+        stopAgentProgress(uuid);
+        if (thinkingUuid) stopAgentProgress(thinkingUuid);
+        const cancelled = terminalStatus === 'cancelled';
+        const icon = cancelled ? '⏹' : (success ? '✅' : '❌');
+        const text = cancelled ? '已终止' : (success ? '任务完成' : '任务失败');
+        const detail = !success && !cancelled && message ? ': ' + escapeHtml(message) : '';
         const statusBar = document.getElementById('agent-status-' + uuid);
         if (statusBar) {
-            const icon = success ? '✅' : '❌';
-            const text = success ? '任务完成' : '任务失败';
             statusBar.innerHTML = `
                 <span class="status-icon">${icon}</span>
-                <span class="status-text">${text}${message ? ': ' + escapeHtml(message) : ''}</span>
+                <span class="status-text">${text}${detail}</span>
             `;
         }
 
         const actions = document.getElementById('agent-actions-' + uuid);
         if (actions) {
-            actions.innerHTML = `<span class="agent-finished">${success ? '✅ 已完成' : '❌ 已失败'}</span>`;
+            const actionText = cancelled ? '⏹ 已终止' : (success ? '✅ 已完成' : '❌ 已失败');
+            actions.innerHTML = `<span class="agent-finished">${actionText}</span>`;
         }
 
         // 没有生成 plan card 时，状态仍显示在最初的 thinking 消息中。
         if (thinkingUuid) {
             const thinkingDiv = document.getElementById('content-' + thinkingUuid);
             if (thinkingDiv) {
-                const icon = success ? '✅' : '❌';
-                const text = success ? '任务完成' : '任务失败';
-                thinkingDiv.innerHTML = `<div class="agent-terminal-message ${success ? 'success' : 'failed'}">` +
+                const terminalClass = cancelled ? 'cancelled' : (success ? 'success' : 'failed');
+                thinkingDiv.innerHTML = `<div class="agent-terminal-message ${terminalClass}">` +
                     `<span class="status-icon">${icon}</span>` +
-                    `<span class="status-text">${text}${message ? ': ' + escapeHtml(message) : ''}</span>` +
+                    `<span class="status-text">${text}${detail}</span>` +
                     `</div>`;
             }
         }
+
+        if (success) renderAgentFinalAnswer(uuid, message);
 
         window.agentCardState.active = false;
         window.agentCardState.session = null;
@@ -537,10 +746,17 @@ window.showAgentApproval = showAgentApproval;
 window.confirmAgentExecution = confirmAgentExecution;
 window.agentApprove = agentApprove;
 window.agentReject = agentReject;
+window.markAgentApprovalSubmitted = markAgentApprovalSubmitted;
+window.markAgentApprovalQueued = markAgentApprovalQueued;
 window.refineAgentPlan = refineAgentPlan;
 window.abortAgent = abortAgent;
 window.updateAgentStatus = updateAgentStatus;
 window.completeAgent = completeAgent;
+window.renderAgentFinalAnswer = renderAgentFinalAnswer;
+window.startAgentProgress = startAgentProgress;
+window.updateAgentProgressStatus = updateAgentProgressStatus;
+window.appendAgentStreamDelta = appendAgentStreamDelta;
+window.stopAgentProgress = stopAgentProgress;
 window.lockChatInput = lockChatInput;
 window.unlockChatInput = unlockChatInput;
 window.restoreAgentRequestUi = restoreAgentRequestUi;

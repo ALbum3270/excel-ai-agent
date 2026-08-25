@@ -122,6 +122,12 @@ Public Class IntentResult
     Public Property IsFollowUp As Boolean = False
 
     Public Property RequestedOutputs As List(Of String) = New List(Of String)()
+
+    ''' <summary>
+    ''' Untrusted structured goal interpretation produced by the same model call as intent
+    ''' routing. The captured user request remains authoritative and replaces any model raw text.
+    ''' </summary>
+    Public Property GoalInterpretation As Agent.Goals.GoalInterpretationPayload
 End Class
 
 ''' <summary>
@@ -472,21 +478,12 @@ Public Class IntentRecognitionService
             Try
                 Dim llmResult = Await IdentifyIntentWithLLMAsync(question, context)
                 If llmResult IsNot Nothing Then
-                    ' 使用LLM的置信度（这是核心改动）
-                    result.Confidence = llmResult.Confidence
-
-                    ' 如果LLM的意图类型判断更可信，也使用LLM的意图
-                    If llmResult.Confidence > 0.3 Then
-                        ' OfficeIntent 才是跨宿主路由的权威字段。IntentType 仅保留给旧版 Excel
-                        ' 调用方兼容；只覆盖 IntentType 会把 Word/PPT 的 LLM 结果悄悄退回
-                        ' GENERAL_QUERY。
-                        result.OfficeIntent = llmResult.OfficeIntent
-                        result.IntentType = llmResult.IntentType
-                        result.UserFriendlyDescription = llmResult.UserFriendlyDescription
-                    End If
+                    MergeLlmIntentResult(result, llmResult)
 
                     Debug.WriteLine($"LLM意图识别结果: {result.OfficeIntent}, 置信度: {result.Confidence:F2}")
                 End If
+            Catch ex As AiProviderHttpException
+                Throw
             Catch ex As Exception
                 Debug.WriteLine($"LLM意图识别失败，使用默认置信度0.5: {ex.Message}")
                 ' 如果LLM调用失败，使用默认中等置信度
@@ -496,6 +493,15 @@ Public Class IntentRecognitionService
 
         Return result
     End Function
+
+    ''' <summary>
+    ''' Pure merge seam shared by production and offline regression tests. Model-owned routing
+    ''' facts are accepted as one coherent snapshot; a rejected candidate leaves the deterministic
+    ''' fallback completely unchanged.
+    ''' </summary>
+    Private Shared Sub MergeLlmIntentResult(target As IntentResult, modelResult As IntentResult)
+        IntentAcceptancePolicy.TryAcceptModelCandidate(target, modelResult)
+    End Sub
 
     ''' <summary>
     ''' 调用大模型识别意图 - 增强版，包含记忆上下文
@@ -517,26 +523,9 @@ Public Class IntentRecognitionService
             Dim apiKey = cfg.key
             Dim modelName = selectedModel.modelName
 
-            ' 构建上下文信息
-            Dim contextInfo As String = ""
-            If context IsNot Nothing Then
-                If context("sheetName") IsNot Nothing Then
-                    contextInfo &= $"当前工作表: {context("sheetName")}" & vbCrLf
-                End If
-                If context("selectionAddress") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selectionAddress").ToString()) Then
-                    contextInfo &= $"选中区域: {context("selectionAddress")}" & vbCrLf
-                End If
-                If context("selection") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selection").ToString()) Then
-                    contextInfo &= $"选中内容预览:" & vbCrLf & context("selection").ToString() & vbCrLf
-                End If
-                ' 阶段四：内容区引用摘要与 RAG 记忆
-                If context("referenceSummary") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("referenceSummary").ToString()) Then
-                    contextInfo &= "用户引用: " & context("referenceSummary").ToString() & vbCrLf
-                End If
-                If context("ragSnippets") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("ragSnippets").ToString()) Then
-                    contextInfo &= "相关记忆:" & vbCrLf & context("ragSnippets").ToString() & vbCrLf
-                End If
-            End If
+            ' BuildContextSnapshot 已经把宿主读取到的完整 OfficeContext 放入
+            ' officeContext。这里必须继续传给意图模型，不能只保留当前单元格。
+            Dim contextInfo = BuildIntentContextInfo(context)
 
             ' 增强版提示词：构建更智能的意图识别系统提示词
             Dim systemPrompt = GetEnhancedIntentRecognitionSystemPrompt()
@@ -573,35 +562,146 @@ Public Class IntentRecognitionService
                 .Platform = cfg.platform,
                 .Messages = messages,
                 .Temperature = 0.3R,
-                .MaxTokens = 500,
                 .TimeoutSeconds = 30
             })
 
             If gatewayResponse IsNot Nothing AndAlso gatewayResponse.Success Then
                 result = ParseLLMIntentResponse(gatewayResponse.Content, question)
             Else
-                Debug.WriteLine($"IdentifyIntentWithLLMAsync API失败: {If(gatewayResponse Is Nothing, "empty response", gatewayResponse.ErrorMessage)}")
+                AiGateway.ThrowIfFailed(gatewayResponse)
             End If
 
+        Catch ex As AiProviderHttpException
+            Throw
         Catch ex As Exception
             Debug.WriteLine($"IdentifyIntentWithLLMAsync 出错: {ex.Message}")
         End Try
 
         Return result
-    End Function
+        End Function
+
+        ''' <summary>
+        ''' 将用于路由的结构化上下文压平成意图模型可读文本。
+        ''' 保持为纯函数，便于回归测试“宿主已观察到数据但意图层看不到”的问题。
+        ''' </summary>
+        Private Shared Function BuildIntentContextInfo(context As JObject) As String
+            If context Is Nothing Then Return ""
+
+            Dim sb As New System.Text.StringBuilder()
+            If context("sheetName") IsNot Nothing Then
+                sb.AppendLine($"当前工作表: {context("sheetName")}")
+            End If
+            If context("selectionAddress") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selectionAddress").ToString()) Then
+                sb.AppendLine($"选中区域: {context("selectionAddress")}")
+            End If
+            If context("selection") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("selection").ToString()) Then
+                sb.AppendLine("选中内容预览:")
+                sb.AppendLine(context("selection").ToString())
+            End If
+            If context("officeContext") IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(context("officeContext").ToString()) Then
+                sb.AppendLine("插件实时读取的结构化 Office 上下文:")
+                sb.AppendLine(context("officeContext").ToString())
+            End If
+            If context("referenceSummary") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("referenceSummary").ToString()) Then
+                sb.AppendLine("用户引用: " & context("referenceSummary").ToString())
+            End If
+            If context("ragSnippets") IsNot Nothing AndAlso Not String.IsNullOrEmpty(context("ragSnippets").ToString()) Then
+                sb.AppendLine("相关记忆:")
+                sb.AppendLine(context("ragSnippets").ToString())
+            End If
+            Dim availableTools = TryCast(context("availableTools"), JArray)
+            If availableTools IsNot Nothing AndAlso availableTools.Count > 0 Then
+                sb.AppendLine("当前运行时已注册工具（能力判断以此清单为准）:")
+                For Each tool In availableTools
+                    sb.Append("- ").Append(tool?("id")?.ToString())
+                    Dim toolName = tool?("name")?.ToString()
+                    If Not String.IsNullOrWhiteSpace(toolName) Then sb.Append("（").Append(toolName).Append("）")
+                    Dim availability = tool?("availability")?.ToString()
+                    If Not String.IsNullOrWhiteSpace(availability) Then sb.Append(" [").Append(availability).Append("]")
+                    sb.AppendLine()
+                Next
+                sb.AppendLine("不得声称上述 available 工具不存在；工具是否执行由后续统一工具运行时决定。")
+            End If
+            Return sb.ToString().TrimEnd()
+        End Function
 
     ''' <summary>
     ''' 获取增强版意图识别系统提示词 - 根据AppType返回不同的提示词
     ''' </summary>
     Private Function GetEnhancedIntentRecognitionSystemPrompt() As String
+        Dim applicationPrompt As String
         Select Case AppType
             Case OfficeApplicationType.Word
-                Return GetEnhancedWordIntentRecognitionPrompt()
+                applicationPrompt = GetEnhancedWordIntentRecognitionPrompt()
             Case OfficeApplicationType.PowerPoint
-                Return GetEnhancedPowerPointIntentRecognitionPrompt()
+                applicationPrompt = GetEnhancedPowerPointIntentRecognitionPrompt()
             Case Else ' Excel
-                Return GetEnhancedExcelIntentRecognitionPrompt()
+                applicationPrompt = GetEnhancedExcelIntentRecognitionPrompt()
         End Select
+        Return applicationPrompt & vbCrLf & vbCrLf & GetUnifiedIntentContractPrompt()
+    End Function
+
+    Private Function GetUnifiedIntentContractPrompt() As String
+        Dim exampleIntent As String
+        Dim exampleDescription As String
+        Dim exampleOutputs As String
+        Select Case AppType
+            Case OfficeApplicationType.Word
+                exampleIntent = "DOCUMENT_EDIT"
+                exampleDescription = "用户要求修改当前文档"
+                exampleOutputs = "[""formatted_content""]"
+            Case OfficeApplicationType.PowerPoint
+                exampleIntent = "SLIDE_CREATE"
+                exampleDescription = "用户要求创建幻灯片"
+                exampleOutputs = "[""slides""]"
+            Case Else
+                exampleIntent = "DATA_ANALYSIS"
+                exampleDescription = "用户要求分析当前工作簿数据"
+                exampleOutputs = "[""table""]"
+        End Select
+
+        Return "【唯一返回JSON契约】
+只返回下面这一个根JSON对象，不要输出Markdown代码围栏、说明文字、第二个JSON对象或独立的goalInterpretation片段：
+```json
+{
+  ""intentType"": """ & exampleIntent & """,
+  ""confidence"": 0.92,
+  ""description"": """ & exampleDescription & """,
+  ""interactionMode"": ""execute"",
+  ""requestedOutputs"": " & exampleOutputs & ",
+  ""requiresConfirmation"": false,
+  ""suggestedAction"": ""下一步建议"",
+  ""executionPriority"": ""medium"",
+  ""suggestedSteps"": [],
+  ""goalInterpretation"": {
+    ""sourceClauses"": [
+      {""id"": ""clause-1"", ""text"": ""用户原话中的完整语义片段"", ""isExplicit"": true, ""sourceStart"": 0}
+    ],
+    ""criteria"": [
+      {""id"": ""criterion-1"", ""statement"": ""用户原话中的连续原文"", ""kind"": ""semantic|capability|compute|state|visual"", ""sourceClauseIds"": [""clause-1""], ""required"": true, ""verificationCapability"": """", ""capabilityId"": """"}
+    ],
+    ""constraints"": [
+      {""id"": ""constraint-1"", ""statement"": ""用户明确约束的连续原文"", ""kind"": ""policy"", ""sourceClauseIds"": [""clause-1""], ""required"": true}
+    ],
+    ""requiredCapabilities"": [],
+    ""unresolvedClauses"": [],
+    ""assumptions"": [],
+    ""requiresClarification"": false
+  }
+}
+```
+规则：
+1. goalInterpretation是根对象中的一个字段，不是第二份返回结果。
+2. 纯聊天、问候或无需读取/修改Office内容即可回答的问题，goalInterpretation必须为null。
+3. interactionMode=execute，或回答必须读取Office数据才能准确完成时，goalInterpretation必须填写为上面的完整对象，不得为null。只读数据问答即使interactionMode=answer，也属于此类。
+4. sourceClauses.text必须逐字复制当前用户问题中的连续子串，不得改写；每项显式要求单独成条。
+5. sourceStart是该连续原文在当前用户问题中的零基UTF-16起始位置；唯一出现的原文可省略，插件会确定性定位；重复原文必须给出正确位置。
+6. 每个显式sourceClause都必须有一条required=true、kind=semantic、statement与sourceClauses.text逐字相同的criterion。任何改写、归纳或结构化提示只能required=false，不能成为强制语义。
+7. 用户明确指定Python、VBA或其他实现能力时可填写候选能力ID；插件会根据原文和注册别名独立验证，模型声明本身不构成授权。
+8. 每条required criterion/constraint必须通过sourceClauseIds追溯到显式原文，并且statement必须逐字等于至少一条被引用的sourceClause.text。
+9. 推测只能写入assumptions；assumptions不得成为required criterion或constraint。
+10. 不确定但仍可保留原意时，把clause id放入unresolvedClauses；只有确实缺少阻塞执行的信息时requiresClarification=true。
+11. 不要输出模型生成的RawUserRequest字段；插件会使用捕获到的用户原话。"
     End Function
 
     ''' <summary>
@@ -616,24 +716,6 @@ Public Class IntentRecognitionService
 3. 操作复杂度：评估是否需要多步骤执行
 4. 风险评估：判断操作是否安全，是否需要用户确认
 
-【返回JSON格式】
-```json
-{
-  ""intentType"": ""DATA_ANALYSIS"",
-  ""confidence"": 0.92,
-  ""description"": ""用户想要对选中区域进行统计分析，计算平均值和总和"",
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""直接执行统计计算"",
-  ""executionPriority"": ""high"",
-  ""suggestedSteps"": [
-    ""识别数据范围"",
-    ""计算平均值"",
-    ""计算总和"",
-    ""输出结果""
-  ]
-}
-```
-
 【intentType可选值】
 - DATA_ANALYSIS: 数据分析（统计、汇总、透视表）
 - FORMULA_CALC: 公式计算
@@ -645,6 +727,17 @@ Public Class IntentRecognitionService
 - GENERAL_QUERY: 一般问答（不需要操作Excel）
 - UNCLEAR: 意图不明确，需要进一步询问
 - MULTI_STEP_TASK: 多步骤复杂任务（需使用Ralph Loop）
+
+【交互模式 - 必填】
+- interactionMode必须是 execute、answer、clarify 之一，并且独立于intentType。
+- 用户要求修改当前Excel（包括格式、公式、图表、工作表、数据写入）时用execute。
+- 用户询问原因、能力或操作方法时用answer；只有缺少阻塞执行的信息时才用clarify。
+- 用户要求基于当前工作簿数据进行统计、查询或比较，即使同时说【只回答】【不写入】，intentType仍为DATA_ANALYSIS；interactionMode可为answer，但这只禁止修改，不禁止后续只读工具获取精确数据。
+- 当前Office上下文若已经包含表区域、使用区域、表头或数据预览，表示插件已经观察到这些数据；不得因为光标位于表外或单个空白单元格就要求用户重复提供列范围。
+- 用户明确要求生成图表，且上下文已有可识别的表区域和对应表头时，必须用execute并从已观察区域推断源范围。
+- requestedOutputs列出执行后必须验证的产物，例如table、chart、formatted_content、worksheet。
+- 如果操作没有精确匹配的intentType，可以保留GENERAL_QUERY，但interactionMode仍必须为execute。
+- 例如【新增一个名为汇总的工作表】 → GENERAL_QUERY, interactionMode=execute, requestedOutputs=[""worksheet""]。
 
 【智能判断规则】
 1. **置信度评估**：
@@ -679,22 +772,6 @@ Public Class IntentRecognitionService
     Private Function GetEnhancedWordIntentRecognitionPrompt() As String
         Return "你是一个智能Word意图识别专家。深度分析用户的问题、上下文和相关记忆，精准识别用户的真实意图。
 
-【返回JSON格式】
-```json
-{
-  ""intentType"": ""DOCUMENT_EDIT"",
-  ""confidence"": 0.88,
-  ""description"": ""用户想要在光标位置插入文本"",
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""直接插入文本"",
-  ""executionPriority"": ""medium"",
-  ""suggestedSteps"": [
-    ""确认插入位置"",
-    ""插入指定文本""
-  ]
-}
-```
-
 【intentType可选值】
 - DOCUMENT_EDIT: 文档编辑（插入、删除、替换文本）
 - TEXT_FORMAT: 文本格式化（字体、段落、样式）
@@ -724,26 +801,6 @@ Public Class IntentRecognitionService
     ''' </summary>
     Private Function GetEnhancedPowerPointIntentRecognitionPrompt() As String
         Return "你是一个智能PowerPoint意图识别专家。深度分析用户的问题、上下文和相关记忆，精准识别用户的真实意图。
-
-【返回JSON格式】
-```json
-{
-  ""intentType"": ""SLIDE_CREATE"",
-  ""confidence"": 0.90,
-  ""description"": ""用户想要创建3页演示文稿"",
-  ""interactionMode"": ""execute"",
-  ""requestedOutputs"": [""slides"", ""images""],
-  ""requiresConfirmation"": false,
-  ""suggestedAction"": ""批量创建幻灯片"",
-  ""executionPriority"": ""high"",
-  ""suggestedSteps"": [
-    ""确定幻灯片数量"",
-    ""创建第1页标题"",
-    ""创建第2页内容"",
-    ""创建第3页总结""
-  ]
-}
-```
 
 【intentType可选值】
 - SLIDE_CREATE: 创建幻灯片
@@ -807,6 +864,13 @@ Public Class IntentRecognitionService
                 result.RequestedOutputs = requestedOutputs.Select(Function(item) item.ToString().Trim().ToLowerInvariant()).Where(Function(item) Not String.IsNullOrWhiteSpace(item)).Distinct().ToList()
             End If
 
+            Try
+                result.GoalInterpretation = ParseGoalInterpretation(intentJson("goalInterpretation"), originalQuestion)
+            Catch goalEx As Exception
+                Debug.WriteLine($"ParseGoalInterpretation ignored invalid payload: {goalEx.Message}")
+                result.GoalInterpretation = Nothing
+            End Try
+
             ' 解析是否需要确认
             If intentJson("requiresConfirmation") IsNot Nothing Then
                 Dim needsConfirm = CBool(intentJson("requiresConfirmation"))
@@ -823,6 +887,99 @@ Public Class IntentRecognitionService
         End Try
 
         Return result
+    End Function
+
+    Private Shared Function ParseGoalInterpretation(token As JToken,
+                                                    originalQuestion As String) As Agent.Goals.GoalInterpretationPayload
+        Dim obj = TryCast(token, JObject)
+        If obj Is Nothing Then Return Nothing
+
+        Dim candidateToken = TryCast(obj("candidate"), JObject)
+        If candidateToken Is Nothing Then candidateToken = obj
+        Dim candidate As New Agent.Goals.CandidateGoalContract With {
+            .RawUserRequest = If(originalQuestion, "")
+        }
+
+        For Each clauseToken In TokensFromArray(candidateToken("sourceClauses"))
+            Dim clauseObj = TryCast(clauseToken, JObject)
+            If clauseObj Is Nothing Then Continue For
+            candidate.SourceClauses.Add(New Agent.Goals.CandidateGoalSourceClause With {
+                .Id = TokenText(clauseObj("id")),
+                .Text = TokenText(clauseObj("text")),
+                .IsExplicit = TokenBoolean(clauseObj("isExplicit"), False),
+                .SourceStart = TokenInteger(clauseObj("sourceStart"), -1)
+            })
+        Next
+
+        For Each criterionToken In TokensFromArray(candidateToken("criteria"))
+            Dim criterionObj = TryCast(criterionToken, JObject)
+            If criterionObj Is Nothing Then Continue For
+            candidate.Criteria.Add(New Agent.Goals.CandidateGoalCriterion With {
+                .Id = TokenText(criterionObj("id")),
+                .Statement = TokenText(criterionObj("statement")),
+                .Kind = TokenText(criterionObj("kind")),
+                .SourceClauseIds = StringList(criterionObj("sourceClauseIds")),
+                .Required = TokenBoolean(criterionObj("required"), False),
+                .VerificationCapability = TokenText(criterionObj("verificationCapability")),
+                .CapabilityId = TokenText(criterionObj("capabilityId"))
+            })
+        Next
+
+        For Each constraintToken In TokensFromArray(candidateToken("constraints"))
+            Dim constraintObj = TryCast(constraintToken, JObject)
+            If constraintObj Is Nothing Then Continue For
+            candidate.Constraints.Add(New Agent.Goals.CandidateGoalConstraint With {
+                .Id = TokenText(constraintObj("id")),
+                .Statement = TokenText(constraintObj("statement")),
+                .Kind = TokenText(constraintObj("kind")),
+                .SourceClauseIds = StringList(constraintObj("sourceClauseIds")),
+                .Required = TokenBoolean(constraintObj("required"), False)
+            })
+        Next
+        candidate.RequiredCapabilities = StringList(candidateToken("requiredCapabilities"))
+
+        Return New Agent.Goals.GoalInterpretationPayload With {
+            .Candidate = candidate,
+            .UnresolvedClauses = StringList(obj("unresolvedClauses")),
+            .Assumptions = StringList(obj("assumptions")),
+            .Diagnostics = StringList(obj("diagnostics")),
+            .RequiresClarification = TokenBoolean(obj("requiresClarification"), False)
+        }
+    End Function
+
+    Private Shared Iterator Function TokensFromArray(token As JToken) As IEnumerable(Of JToken)
+        Dim values = TryCast(token, JArray)
+        If values Is Nothing Then Return
+        For Each value In values
+            Yield value
+        Next
+    End Function
+
+    Private Shared Function StringList(token As JToken) As List(Of String)
+        Dim values As New List(Of String)()
+        For Each value In TokensFromArray(token)
+            Dim text = TokenText(value).Trim()
+            If text.Length > 0 Then values.Add(text)
+        Next
+        Return values
+    End Function
+
+    Private Shared Function TokenText(token As JToken) As String
+        Return If(token Is Nothing OrElse token.Type = JTokenType.Null, "", token.ToString())
+    End Function
+
+    Private Shared Function TokenBoolean(token As JToken, defaultValue As Boolean) As Boolean
+        If token Is Nothing OrElse token.Type = JTokenType.Null Then Return defaultValue
+        Dim parsed As Boolean
+        If Boolean.TryParse(token.ToString(), parsed) Then Return parsed
+        Return defaultValue
+    End Function
+
+    Private Shared Function TokenInteger(token As JToken, defaultValue As Integer) As Integer
+        If token Is Nothing OrElse token.Type = JTokenType.Null Then Return defaultValue
+        Dim parsed As Integer
+        If Integer.TryParse(token.ToString(), parsed) Then Return parsed
+        Return defaultValue
     End Function
 
     ''' <summary>
@@ -1286,8 +1443,10 @@ Public Class IntentRecognitionService
                 Return ParseFollowUpResponse(gatewayResponse.Content)
             End If
 
-            Debug.WriteLine($"IsFollowUpQuestionAsync API失败: {If(gatewayResponse Is Nothing, "empty response", gatewayResponse.ErrorMessage)}")
+            AiGateway.ThrowIfFailed(gatewayResponse)
 
+        Catch ex As AiProviderHttpException
+            Throw
         Catch ex As Exception
             Debug.WriteLine($"IsFollowUpQuestionAsync 出错: {ex.Message}")
         End Try

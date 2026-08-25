@@ -1,5 +1,5 @@
 ' ShareRibbon\Controls\Services\ChatRoutingOrchestrator.vb
-' Extracts smart-mode routing (analyze → precheck → agent/chat) from BaseChatControl.
+' Extracts smart-mode intake (analyze → precheck → adaptive Agent) from BaseChatControl.
 
 Imports System.Diagnostics
 Imports System.Linq
@@ -27,9 +27,8 @@ Public Interface IChatRoutingHost
     Function PreSendCheckAsync(execContext As ExecutionContext) As Task(Of ContextCheckResult)
     Sub ShowContextHints(ragCount As Integer, intentDescription As String, contextTrace As ChatContextTrace)
     Sub ShowWarning(message As String)
+    Sub CompleteBlockedRequest(message As String)
     Sub ShowIdentifyingStatus()
-    Sub SendChatMessage(message As String)
-    Sub SendChatMessageWithIntent(message As String, intent As IntentResult)
     Sub StartAgentPlanningFlow(message As String, intent As IntentResult, analysis As Agent.AiNativeRuntimeResult)
     Sub SetCurrentIntentResult(intent As IntentResult)
 End Interface
@@ -38,12 +37,9 @@ End Interface
 ''' Decision outcome of smart-mode routing (for tests / diagnostics).
 ''' </summary>
 Public Enum ChatRouteDecision
-    FollowUpChat
-    PlainChat
     BlockedByPreCheck
     AgentKernel
-    ''' <summary>Only used when agent start fails and policy allows chat fallback, or analyze throws.</summary>
-    FallbackChat
+    RoutingFailed
 End Enum
 
 ''' <summary>
@@ -52,6 +48,7 @@ End Enum
 ''' </summary>
 Public Class ChatRoutingOrchestrator
     Private ReadOnly _host As IChatRoutingHost
+    Private _lastExecutionTaskSpec As Agent.AgentTaskSpec
 
     Public Sub New(host As IChatRoutingHost)
         If host Is Nothing Then Throw New ArgumentNullException(NameOf(host))
@@ -66,6 +63,8 @@ Public Class ChatRoutingOrchestrator
                                               filePaths As List(Of String),
                                               selectedContents As List(Of SendMessageReferenceContentItem)) As Task(Of ChatRouteDecision)
 
+        Dim routeClock = Stopwatch.StartNew()
+        AppLogger.Info("ChatRoutingOrchestrator", "Smart route started")
         Try
             Dim hasReferences As Boolean =
                 (filePaths IsNot Nothing AndAlso filePaths.Count > 0) OrElse
@@ -78,13 +77,6 @@ Public Class ChatRoutingOrchestrator
             If history.Count >= 2 AndAlso Not String.IsNullOrWhiteSpace(originalQuestion) Then
                 isFollowUp = Await _host.IsFollowUpQuestionAsync(originalQuestion, history)
                 Debug.WriteLine($"[ChatRoutingOrchestrator] follow-up check: isFollowUp={isFollowUp}")
-            End If
-
-            ' Short follow-ups stay on plain chat to avoid re-planning every clarification turn.
-            If isFollowUp Then
-                Debug.WriteLine("[ChatRoutingOrchestrator] follow-up → plain chat (not a parallel product path)")
-                _host.SendChatMessage(finalMessageToLLM)
-                Return ChatRouteDecision.FollowUpChat
             End If
 
             Dim contextSnapshot = _host.GetContextSnapshot()
@@ -112,21 +104,28 @@ Public Class ChatRoutingOrchestrator
             End If
 
             Dim appType = _host.GetApplicationType()
+            Dim officeContext = _host.CaptureOfficeContext(appType)
             Dim aiNativeRequest As New Agent.AiNativeRequest With {
                 .UserInput = originalQuestion,
                 .AppType = appType,
                 .SystemPrompt = "",
                 .RequestUuid = Guid.NewGuid().ToString(),
-                .OfficeContext = _host.CaptureOfficeContext(appType),
+                .OfficeContext = officeContext,
                 .ContextSnapshot = contextSnapshot,
                 .HistoryMessages = recentHistory,
+                .PreviousTaskSpec = If(isFollowUp OrElse Agent.AiNativeRuntime.IsDestinationOnlyCorrection(originalQuestion),
+                                       _lastExecutionTaskSpec,
+                                       Nothing),
                 .EnableMemory = MemoryConfig.EnableUserProfile OrElse MemoryConfig.RagTopN > 0,
                 .UseContextBuilder = MemoryConfig.UseContextBuilder
             }
 
+            Dim analyzeClock = Stopwatch.StartNew()
             Dim aiNativeResult = Await _host.AnalyzeAiNativeAsync(aiNativeRequest)
+            AppLogger.Info("ChatRoutingOrchestrator", $"Analyze completed elapsedMs={analyzeClock.ElapsedMilliseconds}")
             Dim intent = If(aiNativeResult?.Intent, New IntentResult())
             intent.OriginalInput = originalQuestion
+            intent.IsFollowUp = isFollowUp
             _host.SetCurrentIntentResult(intent)
 
             If aiNativeResult IsNot Nothing AndAlso aiNativeResult.ContextTrace IsNot Nothing Then
@@ -136,20 +135,19 @@ Public Class ChatRoutingOrchestrator
                     aiNativeResult.ContextTrace)
             End If
 
-            Dim isFormattingOrProofreading As Boolean =
-                intent.OfficeIntent = OfficeIntentType.FORMAT_STYLE OrElse
-                intent.OfficeIntent = OfficeIntentType.TEXT_FORMAT
-
-            If isFormattingOrProofreading Then
+            If ShouldRunLegacyPreCheck(appType, intent) Then
                 Try
+                    Dim preCheckClock = Stopwatch.StartNew()
                     Dim execContext = Await _host.BuildExecutionContextAsync(originalQuestion, filePaths, selectedContents)
                     If execContext IsNot Nothing Then
                         execContext.IntentResult = intent
                         Dim preCheck = Await _host.PreSendCheckAsync(execContext)
+                        AppLogger.Info("ChatRoutingOrchestrator", $"Legacy Word pre-check completed elapsedMs={preCheckClock.ElapsedMilliseconds}")
                         If preCheck IsNot Nothing AndAlso Not preCheck.IsValid Then
                             Dim errors = String.Join(";", preCheck.Errors)
                             Debug.WriteLine($"[ChatRoutingOrchestrator] PreSendCheck blocked: {errors}")
                             _host.ShowWarning($"请求未通过预检: {errors}")
+                            _host.CompleteBlockedRequest($"请求未执行：{errors}")
                             Return ChatRouteDecision.BlockedByPreCheck
                         End If
                         If preCheck IsNot Nothing AndAlso preCheck.Warnings IsNot Nothing AndAlso preCheck.Warnings.Count > 0 Then
@@ -166,33 +164,52 @@ Public Class ChatRoutingOrchestrator
                 _host.SetCurrentIntentResult(intent)
             End If
 
-            Dim interactionMode = If(intent.ResponseMode, "").Trim().ToLowerInvariant()
-            Dim taskSpecRequiresExecution = aiNativeResult?.TaskSpec IsNot Nothing AndAlso
-                (aiNativeResult.TaskSpec.ExpectedSlideCount > 0 OrElse
-                 (aiNativeResult.TaskSpec.ExpectedOutputs IsNot Nothing AndAlso
-                  aiNativeResult.TaskSpec.ExpectedOutputs.Count > 0))
-            Dim shouldUsePlainChat = interactionMode = "answer" OrElse interactionMode = "clarify" OrElse
-                (String.IsNullOrWhiteSpace(interactionMode) AndAlso
-                 intent.OfficeIntent = OfficeIntentType.GENERAL_QUERY AndAlso
-                 Not taskSpecRequiresExecution)
-            If shouldUsePlainChat Then
-                Debug.WriteLine($"[ChatRoutingOrchestrator] interactionMode={If(interactionMode, "compat-general")} → plain chat")
-                _host.SendChatMessageWithIntent(finalMessageToLLM, intent)
-                Return ChatRouteDecision.PlainChat
-            End If
+            ' Smart mode has one execution model. The adaptive Agent decides on every turn
+            ' whether to answer, clarify, read, compute or mutate; a model-produced routing
+            ' label must never switch the request into a separate batch/chat protocol.
+            Dim routeDecision = DecidePostAnalysisRoute(
+                isFollowUp,
+                intent,
+                IntentAcceptancePolicy.HasExecutableToolRequirement(aiNativeResult?.TaskSpec))
+            AppLogger.Info("ChatRoutingOrchestrator", $"Route decision={routeDecision} appType={appType} elapsedMs={routeClock.ElapsedMilliseconds}")
 
-            ' Primary product path always uses AgentKernel.
+            ' The only smart-mode product path is AgentKernel.
             Debug.WriteLine($"[ChatRoutingOrchestrator] primary path AgentKernel intent={intent.OfficeIntent}, confidence={intent.Confidence:F2}")
+            If aiNativeResult?.TaskSpec IsNot Nothing Then _lastExecutionTaskSpec = aiNativeResult.TaskSpec
             _host.ShowIdentifyingStatus()
             _host.StartAgentPlanningFlow(finalMessageToLLM, intent, aiNativeResult)
+            AppLogger.Info("ChatRoutingOrchestrator", $"Agent planning dispatched elapsedMs={routeClock.ElapsedMilliseconds}")
             Return ChatRouteDecision.AgentKernel
 
         Catch ex As Exception
-            Debug.WriteLine($"[ChatRoutingOrchestrator] analyze/route failed, fallback chat: {ex.Message}")
-            If Agent.ExecutionPathPolicy.AllowChatFallbackOnAgentFailure Then
-                _host.SendChatMessage(finalMessageToLLM)
-            End If
-            Return ChatRouteDecision.FallbackChat
+            Debug.WriteLine($"[ChatRoutingOrchestrator] analyze/route failed: {ex.Message}")
+            AppLogger.Error("ChatRoutingOrchestrator", "Smart route failed", ex)
+            Dim routeError = ExceptionClassifier.ToUserMessage(ex)
+            _host.CompleteBlockedRequest($"请求路由失败：{routeError}")
+            Return ChatRouteDecision.RoutingFailed
         End Try
     End Function
+
+    ''' <summary>
+    ''' The legacy pre-check validates Word document selections/templates and must not gate
+    ''' native Excel/PowerPoint Agent tools. In Excel an empty active cell is common even
+    ''' when OfficeContext contains a valid table region.
+    ''' </summary>
+    Public Shared Function ShouldRunLegacyPreCheck(appType As String, intent As IntentResult) As Boolean
+        If Not String.Equals(If(appType, "").Trim(), "Word", StringComparison.OrdinalIgnoreCase) Then Return False
+        If intent Is Nothing Then Return False
+        Return intent.OfficeIntent = OfficeIntentType.FORMAT_STYLE OrElse
+               intent.OfficeIntent = OfficeIntentType.TEXT_FORMAT
+    End Function
+
+    ''' <summary>
+    ''' Smart mode deliberately has one route. Follow-up state and interaction mode remain
+    ''' input facts for the adaptive model, not selectors for a different execution engine.
+    ''' </summary>
+    Public Shared Function DecidePostAnalysisRoute(isFollowUp As Boolean,
+                                                    intent As IntentResult,
+                                                    taskSpecRequiresExecution As Boolean) As ChatRouteDecision
+        Return ChatRouteDecision.AgentKernel
+    End Function
+
 End Class

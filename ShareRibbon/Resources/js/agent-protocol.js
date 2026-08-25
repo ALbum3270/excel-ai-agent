@@ -54,9 +54,10 @@ function requestStartAgent(request, filePaths, selectedContent) {
 
 /**
  * 向后端请求终止 Agent
+ * @param {string} sessionId - 要终止的会话 ID
  */
-function requestAbortAgent() {
-    sendAgentMessage(AgentMessage.ABORT_AGENT, {});
+function requestAbortAgent(sessionId) {
+    sendAgentMessage(AgentMessage.ABORT_AGENT, { sessionId: sessionId || '' });
 }
 
 /**

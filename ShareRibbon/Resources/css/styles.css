@@ -1700,6 +1700,87 @@ input:checked + .mcp-toggle-slider:before {
     font-weight: normal;
 }
 
+/* Agent 模型调用的实时心跳和流式接收状态 */
+.agent-stream-host {
+    padding: 0 15px;
+}
+
+.agent-live-progress {
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    background: #f8fbff;
+    color: #334155;
+}
+
+.agent-progress-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+}
+
+.agent-progress-spinner {
+    width: 13px;
+    height: 13px;
+    flex: 0 0 13px;
+    border: 2px solid #bfdbfe;
+    border-top-color: #2563eb;
+    border-radius: 50%;
+    animation: agentProgressSpin 0.8s linear infinite;
+}
+
+@keyframes agentProgressSpin {
+    to { transform: rotate(360deg); }
+}
+
+.agent-progress-status {
+    flex: 1;
+    color: #2563eb;
+    font-weight: 500;
+}
+
+.agent-progress-elapsed {
+    color: #64748b;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.agent-progress-receipt {
+    margin: 5px 0 0 21px;
+    color: #64748b;
+    font-size: 11px;
+}
+
+.agent-stream-reasoning {
+    margin: 9px 0 0 21px;
+    border-top: 1px solid #dbeafe;
+    padding-top: 7px;
+}
+
+.agent-stream-reasoning summary {
+    color: #475569;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+}
+
+.agent-stream-reasoning pre {
+    max-height: 220px;
+    margin: 7px 0 0;
+    padding: 8px;
+    overflow: auto;
+    border-radius: 5px;
+    background: #f1f5f9;
+    color: #475569;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 /* Agent 规划内容 */
 .agent-plan-content {
     padding: 0 !important;
