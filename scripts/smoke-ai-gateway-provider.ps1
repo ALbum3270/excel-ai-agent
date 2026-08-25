@@ -53,11 +53,42 @@ try {
     $extracted = [ShareRibbon.AiGateway]::ExtractAssistantContent($anthropicResponse, $true)
     if ($extracted -ne "hello from claude") { throw "Anthropic response extraction mismatch." }
 
+    $arrearageBody = '{"error":{"message":"Access denied because the account is in arrears.","type":"Arrearage","code":"Arrearage"},"request_id":"smoke-request"}'
+    $providerException = [ShareRibbon.AiGateway]::CreateProviderHttpException(
+        400,
+        "Bad Request",
+        $arrearageBody)
+    $classifiedProviderError = [ShareRibbon.ExceptionClassifier]::Classify($providerException)
+    if ($providerException.ProviderErrorCode -ne "Arrearage") { throw "Provider error code was discarded." }
+    if ($classifiedProviderError.ErrorCode -ne ([ShareRibbon.ExceptionClassifier]::CodeProviderAccount)) { throw "Provider account error was misclassified: $($classifiedProviderError.ErrorCode)" }
+    if ($classifiedProviderError.ErrorCode -eq ([ShareRibbon.ExceptionClassifier]::CodeNetwork)) { throw "Provider account error was flattened into NETWORK_ERROR." }
+    if ($classifiedProviderError.Retryable) { throw "Provider account error was marked retryable." }
+    if ([string]::IsNullOrWhiteSpace($classifiedProviderError.UserMessage) -or $classifiedProviderError.UserMessage.Length -lt 20) { throw "Provider account error lost its actionable user message." }
+
+    $authException = [ShareRibbon.AiGateway]::CreateProviderHttpException(
+        401,
+        "Unauthorized",
+        '{"error":{"message":"Invalid API key","code":"invalid_api_key"}}')
+    $authError = [ShareRibbon.ExceptionClassifier]::Classify($authException)
+    if ($authError.ErrorCode -ne ([ShareRibbon.ExceptionClassifier]::CodeProviderAuth) -or $authError.Retryable) {
+        throw "Provider authentication failure classification is incorrect."
+    }
+
+    $rateException = [ShareRibbon.AiGateway]::CreateProviderHttpException(
+        429,
+        "Too Many Requests",
+        '{"error":{"message":"Rate limit reached","code":"rate_limit_exceeded"}}')
+    $rateError = [ShareRibbon.ExceptionClassifier]::Classify($rateException)
+    if ($rateError.ErrorCode -ne ([ShareRibbon.ExceptionClassifier]::CodeProviderRateLimited) -or -not $rateError.Retryable) {
+        throw "Provider rate-limit classification is incorrect."
+    }
+
     [pscustomobject]@{
         OpenAiMessages = $openAiRequest["messages"].Count
         AnthropicMessages = $anthropicRequest["messages"].Count
         AnthropicSystem = $anthropicRequest["system"].ToString()
         Extracted = $extracted
+        ProviderError = $classifiedProviderError.ErrorCode
     } | Format-List
 }
 finally {
