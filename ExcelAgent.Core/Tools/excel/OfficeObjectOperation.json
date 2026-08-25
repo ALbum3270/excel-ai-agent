@@ -1,0 +1,17 @@
+{
+  "id": "OfficeObjectOperation",
+  "name": "执行 Office 对象操作",
+  "description": "执行经过对象目录、参数绑定和 SafetyGate 校验的声明式 Office 操作。写操作必须声明可观察的预期结果，并由当前宿主 Adapter 验证真实文档状态；禁止任意反射、宏和外部进程。",
+  "appType": "excel",
+  "category": "Office 对象能力",
+  "riskLevel": "medium",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "batch",
+      "type": "object",
+      "required": true,
+      "description": "schemaVersion=1.0 的 OfficeOperationBatch；appType、canonical targetRef 与当前宿主一致。"
+    }
+  ]
+}

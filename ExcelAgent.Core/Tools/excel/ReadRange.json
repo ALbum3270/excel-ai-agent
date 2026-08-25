@@ -1,0 +1,32 @@
+{
+  "id": "ReadRange",
+  "name": "读取单元格范围",
+  "description": "读取当前工作簿指定范围的值和可选公式，返回结构化 JSON，供分析或 PythonCompute 使用；不会修改工作簿",
+  "appType": "excel",
+  "category": "读取操作",
+  "riskLevel": "safe",
+  "accessMode": "read",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "range",
+      "type": "string",
+      "required": true,
+      "description": "读取范围，如 A1:F100 或 Sheet1!A1:F100"
+    },
+    {
+      "name": "includeFormulas",
+      "type": "boolean",
+      "required": false,
+      "description": "是否同时返回公式矩阵，默认 false",
+      "defaultValue": false
+    },
+    {
+      "name": "maxCells",
+      "type": "integer",
+      "required": false,
+      "description": "最多读取的单元格数量，默认5000，最大20000",
+      "defaultValue": 5000
+    }
+  ]
+}

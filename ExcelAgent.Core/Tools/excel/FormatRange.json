@@ -1,0 +1,77 @@
+{
+  "id": "FormatRange",
+  "name": "格式化范围",
+  "description": "通过明确属性设置单元格格式。数字、日期、百分比或货币显示必须使用 numberFormat，不要用预设样式代替",
+  "appType": "excel",
+  "category": "基础操作",
+  "riskLevel": "safe",
+  "isVbaFallback": false,
+  "parameters": [
+    {
+      "name": "range",
+      "type": "string",
+      "required": true,
+      "description": "要格式化的单元格范围"
+    },
+    {
+      "name": "bold",
+      "type": "boolean",
+      "required": false,
+      "description": "是否加粗"
+    },
+    {
+      "name": "italic",
+      "type": "boolean",
+      "required": false,
+      "description": "是否斜体"
+    },
+    {
+      "name": "fontSize",
+      "type": "integer",
+      "required": false,
+      "description": "字体大小"
+    },
+    {
+      "name": "backgroundColor",
+      "type": "string",
+      "required": false,
+      "description": "背景色"
+    },
+    {
+      "name": "fontColor",
+      "type": "string",
+      "required": false,
+      "description": "字体颜色"
+    },
+    {
+      "name": "borders",
+      "type": "string",
+      "required": false,
+      "description": "边框样式：all/thin/outline/none"
+    },
+    {
+      "name": "numberFormat",
+      "type": "string",
+      "required": false,
+      "description": "Excel 数字格式代码，例如 #,##0、#,##0.00、0.00%、yyyy-mm-dd"
+    },
+    {
+      "name": "horizontalAlignment",
+      "type": "string",
+      "required": false,
+      "description": "水平对齐：left/center/right/general"
+    },
+    {
+      "name": "verticalAlignment",
+      "type": "string",
+      "required": false,
+      "description": "垂直对齐：top/center/bottom"
+    },
+    {
+      "name": "wrapText",
+      "type": "boolean",
+      "required": false,
+      "description": "是否自动换行"
+    }
+  ]
+}

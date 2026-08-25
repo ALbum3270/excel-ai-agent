@@ -1,0 +1,16 @@
+.vs/
+.idea/
+.vscode/
+packages/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.pfx
+*.p12
+*.key
+*.snk
+*.log
+logs/
+TestResults/
+artifacts/

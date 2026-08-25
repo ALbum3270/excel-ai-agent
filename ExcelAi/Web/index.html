@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Excel Agent</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Excel Agent</h1>
+        <div class="status-line"><span id="statusDot" class="status-dot"></span><span id="statusText">就绪</span></div>
+      </div>
+      <button id="settingsButton" class="icon-button" type="button" title="设置" aria-label="设置">&#9881;</button>
+    </header>
+
+    <section id="activity" class="activity" aria-live="polite" hidden>
+      <div class="activity-heading">
+        <strong id="activityTitle">执行中</strong>
+        <span id="activityCount"></span>
+      </div>
+      <ol id="activitySteps" class="activity-steps"></ol>
+    </section>
+
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="empty-state" id="emptyState">等待 Excel 指令</div>
+    </section>
+
+    <section id="approval" class="approval" hidden>
+      <p id="approvalMessage"></p>
+      <div class="approval-actions">
+        <button id="rejectButton" class="button secondary" type="button">拒绝</button>
+        <button id="approveButton" class="button warning" type="button">确认执行</button>
+      </div>
+    </section>
+
+    <form id="composer" class="composer">
+      <div class="mode-selector" role="radiogroup" aria-label="执行模式">
+        <button class="mode-option selected" type="button" role="radio" aria-checked="true" data-mode="execute">执行</button>
+        <button class="mode-option" type="button" role="radio" aria-checked="false" data-mode="read_only">只读</button>
+      </div>
+      <textarea id="promptInput" rows="2" placeholder="输入 Excel 操作目标" aria-label="Excel 操作目标"></textarea>
+      <button id="sendButton" class="button primary" type="submit">发送</button>
+      <button id="cancelButton" class="icon-button stop-button" type="button" title="停止" aria-label="停止" hidden>&#9632;</button>
+    </form>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
