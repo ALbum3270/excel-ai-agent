@@ -1,20 +1,54 @@
+Imports System.Collections.Generic
 Imports System.Text
 Imports System.Linq
 Imports System.Threading.Tasks
 Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
-
 Namespace Agent
-
     Public Partial Class LoopEngine
+        #Region "Planning, Observation, And Explanation Helpers"
+        Private Const MaxReadOnlyEvidenceChars As Integer = 250000
 
-        #Region "Planning, Repair, And Explanation Helpers"
+        Private Shared Function IsReadOnlyAnswerSpec(spec As AgentTaskSpec) As Boolean
+            Return spec IsNot Nothing AndAlso
+                String.Equals(If(spec.MutationPolicy, ""), "read_only", StringComparison.OrdinalIgnoreCase)
+        End Function
+
+        Private Shared Function IsConversationOnlySpec(spec As AgentTaskSpec) As Boolean
+            Return IsReadOnlyAnswerSpec(spec) AndAlso Not spec.RequiresHostExecution
+        End Function
+
+        Private Shared Function AppendReadOnlyEvidence(evidence As JArray,
+                                                       toolCall As ToolCall,
+                                                       toolResult As ToolResult) As String
+            If evidence Is Nothing OrElse toolResult Is Nothing OrElse Not toolResult.Success Then Return ""
+            If toolResult.Data Is Nothing Then
+                Return "只读工具没有返回可供验证的数据；已停止作答，未对工作簿作任何修改"
+            End If
+
+            Try
+                Dim dataToken = TryCast(toolResult.Data, JToken)
+                If dataToken Is Nothing Then dataToken = JToken.FromObject(toolResult.Data)
+                Dim item As New JObject From {
+                    {"toolId", If(toolCall?.ToolId, "")},
+                    {"data", dataToken.DeepClone()}
+                }
+                Dim projectedSize = evidence.ToString(Formatting.None).Length + item.ToString(Formatting.None).Length
+                If projectedSize > MaxReadOnlyEvidenceChars Then
+                    Return $"精确读取结果超过当前回答证据上限（{MaxReadOnlyEvidenceChars} 字符）；已停止作答，未截断数据或进行估算"
+                End If
+                evidence.Add(item)
+                Return ""
+            Catch ex As Exception
+                AppLogger.Warn("LoopEngine", $"Read-only evidence capture failed: {AppLogger.Redact(ex.Message)}")
+                Return "无法保存只读工具返回的结构化证据；已停止作答，未对工作簿作任何修改"
+            End Try
+        End Function
 
         Private Function BuildExecutionExplanation(stepIndex As Integer,
                                                    planStep As PlanStep,
                                                    toolCall As ToolCall,
                                                    toolResult As ToolResult,
-                                                   fixAttempts As Integer,
                                                    undoPoint As Core.UndoManager.UndoPoint,
                                                    observation As String,
                                                    startedAt As DateTime,
@@ -34,7 +68,6 @@ Namespace Agent
             Dim failureReason = If(success, "", ExtractResultDataValue(toolResult, "failureReason"))
             If String.IsNullOrWhiteSpace(failureReason) AndAlso Not success Then failureReason = message
             Dim verb = If(success, "已完成", "未完成")
-            Dim fixText = If(fixAttempts > 0, $"，期间自动修复 {fixAttempts} 次", "")
             Dim skillText = If(String.IsNullOrWhiteSpace(skillName), "", $"，Skill: {skillName}")
             Dim scriptText = If(String.IsNullOrWhiteSpace(scriptFileName), "", $"，脚本: {scriptFileName}")
             Dim mcpText = If(String.IsNullOrWhiteSpace(mcpToolName), "", $"，MCP: {mcpToolName}")
@@ -47,10 +80,7 @@ Namespace Agent
             Dim afterSummary = If(observation, message)
             Dim observationJson = SerializeCompactJson(If(toolResult?.Observation, Nothing), 8192)
             Dim dataSummaryJson = SerializeCompactJson(BuildDataSummary(toolResult), 4096)
-            Dim repairSummary = If(fixAttempts > 0,
-                                   If(success, $"AI 自动修复 {fixAttempts} 次后成功", $"AI 自动修复 {fixAttempts} 次后仍失败"),
-                                   "")
-            Dim text = $"步骤 {stepIndex + 1} {verb}：调用 {toolName}（{toolId}）{skillText}{scriptText}{mcpText}{fixText}。{message}"
+            Dim text = $"步骤 {stepIndex + 1} {verb}：调用 {toolName}（{toolId}）{skillText}{scriptText}{mcpText}。{message}"
 
             Return New ExecutionExplanation With {
                 .StepIndex = stepIndex,
@@ -77,8 +107,8 @@ Namespace Agent
                 .UndoPointName = undoPointName,
                 .UndoHint = undoHint,
                 .CanUndo = canUndo,
-                .AutoRepairSummary = repairSummary,
-                .FixAttempts = fixAttempts,
+                .AutoRepairSummary = "",
+                .FixAttempts = 0,
                 .ExplanationText = text
             }
         End Function
@@ -162,7 +192,10 @@ Namespace Agent
             If toolResult Is Nothing OrElse toolResult.Data Is Nothing OrElse String.IsNullOrWhiteSpace(key) Then Return ""
 
             Try
-                Dim obj = JObject.FromObject(toolResult.Data)
+                Dim tokenValue = TryCast(toolResult.Data, JToken)
+                If tokenValue Is Nothing Then tokenValue = JToken.FromObject(toolResult.Data)
+                Dim obj = TryCast(tokenValue, JObject)
+                If obj Is Nothing Then Return ""
                 Dim token = obj.SelectToken(key)
                 If token Is Nothing Then Return ""
                 Return token.ToString()
@@ -172,9 +205,6 @@ Namespace Agent
             End Try
         End Function
 
-        ''' <summary>
-        ''' 生成任务 Spec
-        ''' </summary>
         Private Async Function GenerateSpecAsync(session As AgentSession) As Task(Of AgentTaskSpec)
             Dim spec As New AgentTaskSpec()
             Try
@@ -186,6 +216,7 @@ Namespace Agent
 ```json
 {{
   ""goal"": ""一句话描述核心目标"",
+  ""target_object"": ""需要读取或改变的 Office 对象；未知时为空"",
   ""constraints"": [""约束1""],
   ""success_criteria"": [""成功标准1""],
   ""complexity"": ""simple|medium|complex""
@@ -204,12 +235,19 @@ complexity 规则：
                 If Not String.IsNullOrEmpty(jsonStr) Then
                     Dim obj = JObject.Parse(jsonStr)
                     spec.Goal = If(obj("goal")?.ToString(), session.UserRequest)
+                    spec.TargetObject = If(obj("target_object")?.ToString(), "")
                     spec.Complexity = If(obj("complexity")?.ToString(), "medium")
-
                     Dim constraints = TryCast(obj("constraints"), JArray)
                     If constraints IsNot Nothing Then
                         For Each c In constraints
                             spec.Constraints.Add(c.ToString())
+                        Next
+                    End If
+                    Dim successCriteria = TryCast(obj("success_criteria"), JArray)
+                    If successCriteria IsNot Nothing Then
+                        For Each criterion In successCriteria
+                            Dim criterionText = If(criterion?.ToString(), "").Trim()
+                            If Not String.IsNullOrWhiteSpace(criterionText) Then spec.SuccessCriteria.Add(criterionText)
                         Next
                     End If
                 End If
@@ -219,17 +257,19 @@ complexity 规则：
             Return spec
         End Function
 
-        ''' <summary>
-        ''' 生成执行计划
-        ''' </summary>
         Private Async Function GeneratePlanAsync(session As AgentSession,
                                                   systemPrompt As String,
                                                   skill As AgentSkill,
-                                                  Optional attempt As Integer = 0) As Task(Of ExecutionPlan)
+                                                  Optional planningValidationFeedback As String = "") As Task(Of ExecutionPlan)
             Dim plan As New ExecutionPlan()
             Dim failureReason As String = ""
             Try
-                Dim prompt = _promptManager.BuildPlanningPrompt(session, systemPrompt, skill)
+                Dim prompt = _promptManager.BuildPlanningPrompt(
+                    session,
+                    systemPrompt,
+                    skill,
+                    _memory,
+                    planningValidationFeedback)
                 Dim response = Await SendAIRequest(prompt, systemPrompt, _memory.GetRecentMessages(5))
 
                 Dim jsonStr = ExtractJson(response)
@@ -240,238 +280,69 @@ complexity 规则：
                     plan.Understanding = obj("understanding")?.ToString()
                     plan.Summary = obj("summary")?.ToString()
                     plan.CapabilityGap = obj("capabilityGap")?.ToString()
+                    plan.OutcomeContract = ParseOutcomeContract(TryCast(obj("outcomeContract"), JObject), session.AppType)
 
-                    Dim stepsArray = TryCast(obj("steps"), JArray)
-                    If stepsArray IsNot Nothing Then
-                        Dim stepNum = 1
-                        For Each item In stepsArray
-                            plan.Steps.Add(New PlanStep With {
-                                .StepNumber = stepNum,
-                                .Description = item("description")?.ToString(),
-                                .Code = item("code")?.ToString(),
-                                .Language = If(item("language")?.ToString(), "json")
-                            })
-                            stepNum += 1
-                        Next
-                    End If
+                    ' Deliberately ignore legacy `steps`.  They are predictions about future
+                    ' world state and must never steer adaptive execution.  The initial turn
+                    ' only supplies the frozen acceptance projection and user-facing summary.
                 End If
             Catch ex As Exception
                 failureReason = ex.Message
             End Try
 
-            If plan.Steps.Count = 0 AndAlso String.IsNullOrWhiteSpace(plan.CapabilityGap) Then
-                If String.IsNullOrWhiteSpace(failureReason) Then failureReason = "响应没有 steps 或 capabilityGap"
-                AppLogger.Warn("LoopEngine", $"规划无效 attempt={attempt}: {AppLogger.Redact(failureReason)}")
-                If attempt = 0 Then
-                    Dim correctedPrompt = systemPrompt & vbCrLf &
-                        "【规划纠错】上次响应不是有效计划。必须返回严格 JSON，并且提供非空 steps 或明确 capabilityGap。"
-                    Return Await GeneratePlanAsync(session, correctedPrompt, skill, attempt + 1)
-                End If
-                Return Nothing
+            If Not String.IsNullOrWhiteSpace(failureReason) Then
+                AppLogger.Warn("LoopEngine", $"初始验收投影生成不完整: {AppLogger.Redact(failureReason)}")
             End If
             Return plan
         End Function
 
-        Private Function ValidatePlanCoverage(spec As AgentTaskSpec, plan As ExecutionPlan) As String
-            If spec Is Nothing OrElse plan Is Nothing Then Return ""
+        Private Shared Function ParseOutcomeContract(value As JObject,
+                                                       appType As String) As OutcomeContract
+            If value Is Nothing Then Return Nothing
+            Dim requirements = TryCast(value("requirements"), JArray)
+            If requirements Is Nothing OrElse requirements.Count = 0 Then Return Nothing
 
-            Dim toolIds = GetPlannedToolIds(plan)
-            If spec.ExpectedOutputs.Contains("images") AndAlso
-               Not toolIds.Contains("InsertImage") AndAlso
-               Not PlanContainsCreateSlidesImage(plan) Then
-                Return "规划未覆盖用户要求的真实图片插入；没有可访问图片来源时必须明确报告 capability gap。"
-            End If
-            If spec.ExpectedOutputs.Contains("images") Then
-                Dim imagePathError = ValidatePlannedImagePaths(plan)
-                If Not String.IsNullOrWhiteSpace(imagePathError) Then Return imagePathError
-            End If
-            If spec.ExpectedSlideCount > 0 AndAlso
-               Not toolIds.Contains("CreateSlides") AndAlso
-               Not toolIds.Contains("InsertSlide") Then
-                Return $"规划未覆盖创建 {spec.ExpectedSlideCount} 张幻灯片的要求。"
-            End If
-            Return ""
-        End Function
-
-        Private Function ValidatePlannedImagePaths(plan As ExecutionPlan) As String
-            If plan?.Steps Is Nothing Then Return "图片计划为空。"
-
-            For Each stepItem In plan.Steps
-                Try
-                    Dim envelope = JObject.Parse(If(stepItem.Code, ""))
-                    Dim commands As New List(Of JObject)()
-                    If envelope("command") IsNot Nothing Then commands.Add(envelope)
-                    Dim commandArray = TryCast(envelope("commands"), JArray)
-                    If commandArray IsNot Nothing Then commands.AddRange(commandArray.OfType(Of JObject)())
-
-                    For Each commandObj In commands
-                        Dim commandName = commandObj("command")?.ToString()
-                        If String.Equals(commandName, "InsertImage", StringComparison.OrdinalIgnoreCase) Then
-                            Dim params = TryCast(commandObj("params"), JObject)
-                            Dim imagePath = params?("imagePath")?.ToString()
-                            If String.IsNullOrWhiteSpace(imagePath) Then
-                                Return "图片计划缺少 imagePath，不能开始部分修改。"
-                            End If
-                            If Not IO.File.Exists(imagePath) Then
-                                Return $"图片文件不可访问：{imagePath}。为避免只创建文字页，任务尚未执行。"
-                            End If
-                        ElseIf String.Equals(commandName, "CreateSlides", StringComparison.OrdinalIgnoreCase) Then
-                            Dim params = TryCast(commandObj("params"), JObject)
-                            Dim slides = TryCast(params?("slides"), JArray)
-                            If slides Is Nothing Then Continue For
-                            For Each slide In slides.OfType(Of JObject)()
-                                Dim imagePath = slide("imagePath")?.ToString()
-                                If Not String.IsNullOrWhiteSpace(imagePath) AndAlso Not IO.File.Exists(imagePath) Then
-                                    Return $"图片文件不可访问：{imagePath}。为避免只创建文字页，任务尚未执行。"
-                                End If
-                            Next
-                        End If
-                    Next
-                Catch
-                    ' Invalid plan JSON is handled by the normal tool-call parsing path.
-                End Try
+            Dim contract As New OutcomeContract With {
+                .SchemaVersion = If(value("schemaVersion")?.ToString(), "1.0")
+            }
+            Dim ids As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+            For index = 0 To requirements.Count - 1
+                Dim item = TryCast(requirements(index), JObject)
+                If item Is Nothing Then Continue For
+                Dim effectType = If(item("effectType")?.ToString(), "").Trim().ToLowerInvariant()
+                If String.IsNullOrWhiteSpace(effectType) Then Continue For
+                Dim requirementId = If(item("id")?.ToString(), $"goal-{index + 1}").Trim()
+                If String.IsNullOrWhiteSpace(requirementId) OrElse ids.Contains(requirementId) Then Continue For
+                ids.Add(requirementId)
+                contract.Requirements.Add(New OutcomeRequirement With {
+                    .Id = requirementId,
+                    .AppType = If(item("appType")?.ToString(), appType),
+                    .TargetRef = If(item("targetRef")?.ToString(), "").Trim(),
+                    .EffectType = effectType,
+                    .PropertyName = If(item("property")?.ToString(), "").Trim(),
+                    .Operator = If(item("operator")?.ToString(), "equals").Trim().ToLowerInvariant(),
+                    .ExpectedValue = item("expectedValue")?.DeepClone(),
+                    .DerivedFromCapability = If(item("derivedFromCapability")?.ToString(), "").Trim(),
+                    .CriterionIds = ParseStringList(TryCast(item("criterionIds"), JArray)),
+                    .Required = If(item("required")?.Value(Of Boolean)(), True),
+                    .Description = If(item("description")?.ToString(), "").Trim()
+                })
             Next
-            Return ""
+            If contract.Requirements.Count = 0 Then Return Nothing
+            Return contract
         End Function
 
-        Private Function PlanContainsCreateSlidesImage(plan As ExecutionPlan) As Boolean
-            If plan?.Steps Is Nothing Then Return False
-
-            For Each stepItem In plan.Steps
-                Try
-                    Dim envelope = JObject.Parse(If(stepItem.Code, ""))
-                    Dim commands As New List(Of JObject)()
-                    If envelope("command") IsNot Nothing Then commands.Add(envelope)
-                    Dim commandArray = TryCast(envelope("commands"), JArray)
-                    If commandArray IsNot Nothing Then commands.AddRange(commandArray.OfType(Of JObject)())
-
-                    For Each commandObj In commands
-                        If String.Equals(commandObj("command")?.ToString(), "CreateSlides", StringComparison.OrdinalIgnoreCase) AndAlso
-                           CreateSlidesParametersContainImage(TryCast(commandObj("params"), JObject)) Then
-                            Return True
-                        End If
-                    Next
-                Catch
-                    ' Invalid plan JSON is handled by the normal tool-call parsing path.
-                End Try
-            Next
-            Return False
-        End Function
-
-        Private Shared Function CreateSlidesParametersContainImage(parameters As JObject) As Boolean
-            Dim slides = TryCast(parameters?("slides"), JArray)
-            If slides Is Nothing Then Return False
-            Return slides.OfType(Of JObject)().Any(
-                Function(slide) Not String.IsNullOrWhiteSpace(slide("imagePath")?.ToString()))
-        End Function
-
-        Private Function ValidateExecutionOutcome(session As AgentSession) As String
-            If session Is Nothing OrElse session.Spec Is Nothing Then Return ""
-
-            Dim successfulActions = session.Iterations.
-                Where(Function(item) item IsNot Nothing AndAlso
-                                     item.Explanation IsNot Nothing AndAlso
-                                     item.Explanation.Success AndAlso
-                                     item.Action IsNot Nothing).
-                Select(Function(item) item.Action).
-                ToList()
-            If session.Spec.ExpectedOutputs.Contains("images") AndAlso
-               Not successfulActions.Any(
-                   Function(toolCall) String.Equals(toolCall.ToolId, "InsertImage", StringComparison.OrdinalIgnoreCase) OrElse
-                                      (String.Equals(toolCall.ToolId, "CreateSlides", StringComparison.OrdinalIgnoreCase) AndAlso
-                                       CreateSlidesParametersContainImage(toolCall.Parameters))) Then
-                Return "任务未完成：用户要求插入图片，但执行记录中没有成功产生真实图片的操作。"
-            End If
-
-            If session.Spec.ExpectedSlideCount > 0 Then
-                Dim created As Integer = 0
-                For Each action In successfulActions
-                    If String.Equals(action.ToolId, "CreateSlides", StringComparison.OrdinalIgnoreCase) Then
-                        Dim slides = TryCast(action.Parameters?("slides"), JArray)
-                        If slides IsNot Nothing Then created += slides.Count
-                    ElseIf String.Equals(action.ToolId, "InsertSlide", StringComparison.OrdinalIgnoreCase) Then
-                        created += 1
-                    End If
-                Next
-                If created < session.Spec.ExpectedSlideCount Then
-                    Return $"任务未完成：要求创建 {session.Spec.ExpectedSlideCount} 张幻灯片，执行记录仅确认 {created} 张。"
-                End If
-            End If
-            Return ""
-        End Function
-
-        Private Function GetPlannedToolIds(plan As ExecutionPlan) As HashSet(Of String)
-            Dim result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
-            If plan?.Steps Is Nothing Then Return result
-
-            For Each stepItem In plan.Steps
-                Try
-                    Dim obj = JObject.Parse(If(stepItem.Code, ""))
-                    Dim command = obj("command")?.ToString()
-                    If Not String.IsNullOrWhiteSpace(command) Then result.Add(command)
-                    Dim commands = TryCast(obj("commands"), JArray)
-                    If commands Is Nothing Then Continue For
-                    For Each item In commands.OfType(Of JObject)()
-                        command = item("command")?.ToString()
-                        If Not String.IsNullOrWhiteSpace(command) Then result.Add(command)
-                    Next
-                Catch
-                    ' Invalid plan JSON is handled by the normal tool-call parsing path.
-                End Try
+        Private Shared Function ParseStringList(values As JArray) As List(Of String)
+            Dim result As New List(Of String)()
+            If values Is Nothing Then Return result
+            For Each value In values
+                Dim text = If(value?.ToString(), "").Trim()
+                If Not String.IsNullOrWhiteSpace(text) AndAlso
+                   Not result.Contains(text, StringComparer.OrdinalIgnoreCase) Then result.Add(text)
             Next
             Return result
         End Function
 
-        ''' <summary>
-        ''' Think：调用LLM生成思考+行动
-        ''' </summary>
-        Private Async Function ThinkAsync(session As AgentSession,
-                                           planStep As PlanStep,
-                                           systemPrompt As String) As Task(Of String)
-            Dim lastObservation = _memory.GetWorkingString("lastObservation")
-            Dim prompt = _promptManager.BuildReactPrompt(planStep, _memory, lastObservation)
-            Dim history = _memory.GetRecentMessages(10)
-            Return Await SendAIRequest(prompt, systemPrompt, history)
-        End Function
-
-        ''' <summary>
-        ''' 反思并重新规划
-        ''' </summary>
-        Private Async Function ReflectAndReplanAsync(session As AgentSession,
-                                                      observation As String,
-                                                      systemPrompt As String) As Task(Of ExecutionPlan)
-            Try
-                Dim prompt = _promptManager.BuildReflectionPrompt(session, observation)
-                Dim response = Await SendAIRequest(prompt, systemPrompt, Nothing)
-
-                Dim jsonStr = ExtractJson(response)
-                If String.IsNullOrEmpty(jsonStr) Then Return Nothing
-
-                Dim decision = JObject.Parse(jsonStr)
-                Dim strategy = decision("strategy")?.ToString()?.ToLower()
-
-                Select Case strategy
-                    Case "retry"
-                        ' 重试当前计划
-                        Return session.Plan
-                    Case "skip"
-                        ' 跳过当前步骤继续
-                        Return session.Plan
-                    Case "replan"
-                        ' 重新生成计划
-                        Return Await GeneratePlanAsync(session, systemPrompt, session.Skill)
-                    Case Else
-                        Return Nothing
-                End Select
-            Catch ex As Exception
-                Debug.WriteLine($"[LoopEngine] 反思失败: {ex.Message}")
-                Return Nothing
-            End Try
-        End Function
-
-        ''' <summary>
-        ''' 解析工具调用
-        ''' </summary>
         Private Function ParseToolCall(response As String) As ToolCall
             Try
                 Dim jsonStr = ExtractJson(response)
@@ -496,29 +367,6 @@ complexity 规则：
             End Try
         End Function
 
-        Private Function ParseFixedToolCall(fixedObj As JObject, fallback As ToolCall) As ToolCall
-            If fixedObj Is Nothing Then Return fallback
-
-            Dim toolId = fixedObj("toolId")?.ToString()
-            Dim params = TryCast(fixedObj("parameters"), JObject)
-
-            If String.IsNullOrWhiteSpace(toolId) Then
-                Dim action = TryCast(fixedObj("action"), JObject)
-                If action IsNot Nothing Then
-                    toolId = action("tool")?.ToString()
-                    If params Is Nothing Then params = TryCast(action("params"), JObject)
-                End If
-            End If
-
-            If String.IsNullOrWhiteSpace(toolId) Then toolId = fallback.ToolId
-            If params Is Nothing Then params = If(fallback.Parameters, New JObject())
-
-            Return New ToolCall With {
-                .ToolId = toolId,
-                .Parameters = params
-            }
-        End Function
-
         Private Function BuildAvailableToolHint(appType As String,
                                                 Optional executionContext As ToolExecutionContext = Nothing) As String
             Dim tools = _toolRegistry.GetVisibleTools(appType, executionContext).
@@ -529,9 +377,6 @@ complexity 规则：
             Return String.Join(vbCrLf, tools)
         End Function
 
-        ''' <summary>
-        ''' 格式化观察结果
-        ''' </summary>
         Private Function FormatObservation(result As ToolResult) As String
             If result Is Nothing Then
                 Return "❌ [unknown] 无工具结果"
@@ -549,71 +394,46 @@ complexity 规则：
         End Function
 
         ''' <summary>
-        ''' Sends one repair request with ephemeral visual evidence when the host supplied it.
-        ''' Evidence is never copied into the textual prompt, history, memory, or trace. If the
-        ''' configured provider/model rejects image input, the existing text-only path remains
-        ''' the deterministic fallback for the same repair attempt.
+        ''' Adds redacted execution diagnostics to the model-only observation channel. The
+        ''' public iteration text remains concise, while the next adaptive decision receives
+        ''' the concrete parser/runtime error needed to repair code instead of guessing.
         ''' </summary>
-        Private Async Function SendRepairRequestAsync(fixPrompt As String,
-                                                      systemPrompt As String,
-                                                      result As ToolResult) As Task(Of String)
-            If _multimodalRepairDisabledForRun OrElse
-               result Is Nothing OrElse
-               result.VisualEvidence Is Nothing OrElse
-               result.VisualEvidence.Count = 0 OrElse
-               SendAIRequestWithMessages Is Nothing Then
-                Return Await SendAIRequest(fixPrompt, systemPrompt, Nothing)
+        Private Shared Function FormatModelObservation(result As ToolResult,
+                                                       publicObservation As String) As String
+            If result Is Nothing OrElse result.Success Then
+                Return If(publicObservation, "")
             End If
 
-            Dim content As New JArray From {
-                New JObject From {
-                    {"type", "text"},
-                    {"text", fixPrompt & vbCrLf & vbCrLf &
-                        "请结合附带的实际 PowerPoint 渲染截图诊断视觉问题；只返回约定的修正后工具调用 JSON。"}
-                }
+            Dim diagnostic As New JObject From {
+                {"success", False},
+                {"toolId", If(result.ToolId, "")},
+                {"errorCode", If(result.ErrorCode, ExceptionClassifier.CodeUnknown)},
+                {"message", If(result.Message, "")},
+                {"userMessage", If(result.UserMessage, "")},
+                {"debugDetail", If(result.DebugDetail, "")},
+                {"recoverable", result.Recoverable},
+                {"retryable", result.Retryable},
+                {"taskFatal", result.TaskFatal},
+                {"sessionFatal", result.SessionFatal},
+                {"data", CloneModelDiagnosticToken(result.Data)},
+                {"observation", CloneModelDiagnosticToken(result.Observation)}
             }
-            Dim evidenceCount As Integer = 0
-            For Each item In result.VisualEvidence
-                If item Is Nothing OrElse evidenceCount >= 2 Then Exit For
-                If item.ByteLength > 0 AndAlso
-                   item.ByteLength <= 2 * 1024 * 1024 AndAlso
-                   Not String.IsNullOrWhiteSpace(item.DataUrl) AndAlso
-                   item.DataUrl.Length <= 3 * 1024 * 1024 AndAlso
-                   item.DataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) Then
-                    content.Add(New JObject From {
-                        {"type", "image_url"},
-                        {"image_url", New JObject From {
-                            {"url", item.DataUrl},
-                            {"detail", "low"}
-                        }}
-                    })
-                    evidenceCount += 1
-                End If
-            Next
-            If evidenceCount = 0 Then Return Await SendAIRequest(fixPrompt, systemPrompt, Nothing)
+            Dim payload = AppLogger.Redact(diagnostic.ToString(Formatting.None))
+            Return $"{If(publicObservation, "")}{vbCrLf}Full structured tool failure for the next model decision (redacted):{vbCrLf}{payload}"
+        End Function
 
-            Dim messages As New JArray()
-            If Not String.IsNullOrWhiteSpace(systemPrompt) Then
-                messages.Add(New JObject From {
-                    {"role", "system"},
-                    {"content", systemPrompt}
-                })
-            End If
-            messages.Add(New JObject From {
-                {"role", "user"},
-                {"content", content}
-            })
-
+        Private Shared Function CloneModelDiagnosticToken(value As Object) As JToken
+            If value Is Nothing Then Return JValue.CreateNull()
             Try
-                Dim response = Await SendAIRequestWithMessages(messages)
-                If Not String.IsNullOrWhiteSpace(response) Then Return response
-                _multimodalRepairDisabledForRun = True
-                AppLogger.Warn("LoopEngine", "Multimodal repair returned an empty response; falling back to text-only repair")
+                Dim token = TryCast(value, JToken)
+                If token Is Nothing Then token = JToken.FromObject(value)
+                Return token.DeepClone()
             Catch ex As Exception
-                _multimodalRepairDisabledForRun = True
-                AppLogger.Warn("LoopEngine", $"Multimodal repair unavailable; falling back to text-only repair: {AppLogger.Redact(ex.Message)}")
+                Return New JObject From {
+                    {"serializationError", AppLogger.Redact(ex.Message)},
+                    {"fallback", AppLogger.Redact(Convert.ToString(value, Globalization.CultureInfo.InvariantCulture))}
+                }
             End Try
-            Return Await SendAIRequest(fixPrompt, systemPrompt, Nothing)
         End Function
 
         ''' <summary>
@@ -655,10 +475,25 @@ complexity 规则：
                     End If
                 End If
 
+                Dim satisfiedToken = observation("satisfied")
+                Dim hasSemanticVerification = satisfiedToken IsNot Nothing AndAlso satisfiedToken.Type = JTokenType.Boolean
+                If hasSemanticVerification AndAlso Not satisfiedToken.Value(Of Boolean)() Then
+                    Return ToolResult.Failed(
+                        result.ToolId,
+                        "宿主产生了变化，但观察结果不符合工具请求的预期状态",
+                        data:=result.Data,
+                        errorCode:=ExceptionClassifier.CodeVerifyFailed,
+                        userMessage:="Office 已产生变化，但实际结果与请求不一致，正在尝试修复",
+                        recoverable:=True,
+                        observation:=result.Observation,
+                        artifacts:=result.Artifacts)
+                End If
+
                 Dim changedToken = observation("changed")
                 If changedToken IsNot Nothing AndAlso
                    changedToken.Type = JTokenType.Boolean AndAlso
-                   Not changedToken.Value(Of Boolean)() Then
+                   Not changedToken.Value(Of Boolean)() AndAlso
+                   Not (hasSemanticVerification AndAlso satisfiedToken.Value(Of Boolean)()) Then
                     Return ToolResult.Failed(
                         result.ToolId,
                         "宿主返回成功，但观察结果未检测到实际变化",
@@ -670,7 +505,17 @@ complexity 规则：
                         artifacts:=result.Artifacts)
                 End If
             Catch ex As Exception
-                AppLogger.Warn("LoopEngine", $"Validate observation failed open: {AppLogger.Redact(ex.Message)}")
+                AppLogger.Warn("LoopEngine", $"Validate observation failed closed: {AppLogger.Redact(ex.Message)}")
+                Return ToolResult.Failed(
+                    result.ToolId,
+                    "无法解析宿主返回的结构化观察，不能确认操作结果",
+                    data:=result.Data,
+                    errorCode:=ExceptionClassifier.CodeObservationFailed,
+                    userMessage:="插件无法安全验证 Office 操作结果；请选择其他验证或执行路径",
+                    debugDetail:=ex.Message,
+                    recoverable:=False,
+                    observation:=result.Observation,
+                    artifacts:=result.Artifacts)
             End Try
             Return result
         End Function
@@ -686,7 +531,7 @@ complexity 规则：
                     text = JsonConvert.SerializeObject(data, Formatting.None)
                 End If
 
-                Const maxLen As Integer = 1800
+                Const maxLen As Integer = 12000
                 If text.Length > maxLen Then
                     Return text.Substring(0, maxLen) & "...(truncated)"
                 End If

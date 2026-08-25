@@ -7,19 +7,68 @@ Imports Newtonsoft.Json.Linq
 Namespace Agent
 
     ''' <summary>
+    ''' Trust provenance assigned by ToolRegistry registration paths.  This value is not
+    ''' deserialized from tool manifests and cannot be proposed by the model.
+    ''' </summary>
+    Public Enum ToolRegistrationProvenance
+        Custom = 0
+        HostManifest = 1
+        AgentInternal = 2
+        SkillScript = 3
+        Mcp = 4
+    End Enum
+
+    ''' <summary>
     ''' 工具描述符 - 描述一个可调用工具的结构
     ''' </summary>
     Public Class ToolDescriptor
+        Private _registrationProvenance As ToolRegistrationProvenance = ToolRegistrationProvenance.Custom
+        Private _registrationOwnerId As String = ""
+
         Public Property Id As String
         Public Property Name As String
         Public Property Description As String
         Public Property AppType As String              ' "excel" / "word" / "powerpoint" / "common"
         Public Property Category As String             ' "基础操作" / "数据操作" / "高级功能"
         Public Property RiskLevel As String = "safe"   ' "safe" / "medium" / "risky"
+        ''' <summary>
+        ''' Declares whether the tool only reads state, performs isolated computation, or
+        ''' may mutate external state. Safety policy must not infer this from localized names.
+        ''' </summary>
+        Public Property AccessMode As String = "write" ' "read" / "compute" / "write"
+        ''' <summary>
+        ''' Canonical observable effects this capability can produce.  These are outcome
+        ''' semantics, not permissions or a prescribed workflow.
+        ''' </summary>
+        Public Property OutcomeEffects As New List(Of String)()
         Public Property AvailabilityStatus As String = "available" ' "available" / "unavailable" / "error"
         Public Property LastError As String = ""
         Public Property IsVbaFallback As Boolean = False
         Public Property Parameters As New List(Of ToolParam)()
+
+        <JsonIgnore>
+        Public ReadOnly Property RegistrationProvenance As ToolRegistrationProvenance
+            Get
+                Return _registrationProvenance
+            End Get
+        End Property
+
+        <JsonIgnore>
+        Public ReadOnly Property RegistrationOwnerId As String
+            Get
+                Return _registrationOwnerId
+            End Get
+        End Property
+
+        ''' <summary>
+        ''' Registry-only trust assignment.  Keeping this non-public prevents a tool JSON
+        ''' document or model payload from promoting itself into the Office host baseline.
+        ''' </summary>
+        Friend Sub AssignRegistrationTrust(provenance As ToolRegistrationProvenance,
+                                           ownerId As String)
+            _registrationProvenance = provenance
+            _registrationOwnerId = If(ownerId, "").Trim()
+        End Sub
     End Class
 
     ''' <summary>
@@ -49,7 +98,7 @@ Namespace Agent
     End Class
 
     ''' <summary>
-    ''' Unified tool execution result used by observe, repair, trace, and explanation.
+    ''' Unified tool execution result used by observe, adaptive decision, trace, and explanation.
     ''' </summary>
     Public Class ToolResult
         Public Property Success As Boolean
@@ -76,8 +125,14 @@ Namespace Agent
         Public Property UserMessage As String = ""
         ''' <summary>调试细节（已脱敏），勿直接展示给用户。</summary>
         Public Property DebugDetail As String = ""
-        ''' <summary>是否适合 Agent 自动 repair / 重试。</summary>
+        ''' <summary>Legacy compatibility flag. It no longer controls retry or task termination.</summary>
         Public Property Recoverable As Boolean = True
+        ''' <summary>Whether the identical tool call may be retried for a transient failure.</summary>
+        Public Property Retryable As Boolean = False
+        ''' <summary>Whether this failure proves the current user task cannot continue.</summary>
+        Public Property TaskFatal As Boolean = False
+        ''' <summary>Whether the whole Agent session/runtime is no longer safe to continue.</summary>
+        Public Property SessionFatal As Boolean = False
 
         Public Shared Function Succeed(toolId As String, Optional message As String = "",
                                        Optional data As Object = Nothing,
@@ -94,7 +149,10 @@ Namespace Agent
                 .UndoPointId = If(undoPointId, ""),
                 .Artifacts = artifacts,
                 .ErrorCode = "",
-                .Recoverable = True
+                .Recoverable = True,
+                .Retryable = False,
+                .TaskFatal = False,
+                .SessionFatal = False
             }
         End Function
 
@@ -105,7 +163,10 @@ Namespace Agent
                                       Optional debugDetail As String = Nothing,
                                       Optional recoverable As Boolean = True,
                                       Optional observation As Object = Nothing,
-                                      Optional artifacts As Object = Nothing) As ToolResult
+                                      Optional artifacts As Object = Nothing,
+                                      Optional taskFatal As Boolean = False,
+                                      Optional sessionFatal As Boolean = False,
+                                      Optional retryable As Boolean = False) As ToolResult
             Dim code = If(String.IsNullOrWhiteSpace(errorCode), ExceptionClassifier.CodeUnknown, errorCode)
             Dim userMsg = If(String.IsNullOrWhiteSpace(userMessage), message, userMessage)
             Dim detail = If(String.IsNullOrWhiteSpace(debugDetail), message, debugDetail)
@@ -120,7 +181,10 @@ Namespace Agent
                 .ErrorCode = code,
                 .UserMessage = userMsg,
                 .DebugDetail = AppLogger.Redact(detail),
-                .Recoverable = recoverable
+                .Recoverable = recoverable,
+                .Retryable = If(taskFatal OrElse sessionFatal, False, retryable),
+                .TaskFatal = taskFatal OrElse sessionFatal,
+                .SessionFatal = sessionFatal
             }
         End Function
 
@@ -133,10 +197,13 @@ Namespace Agent
                           classified.ErrorCode,
                           classified.UserMessage,
                           classified.DebugDetail,
-                          classified.Recoverable)
+                          classified.Recoverable,
+                          taskFatal:=classified.TaskFatal,
+                          sessionFatal:=classified.SessionFatal,
+                          retryable:=classified.Retryable)
         End Function
 
-        ''' <summary>供 Loop observe/repair 使用的紧凑摘要。</summary>
+        ''' <summary>供 Loop observe/next-decision 使用的紧凑摘要。</summary>
         Public Function ToObserveSummary() As String
             If Success Then
                 Dim summary = ExtractObservationSummary()
@@ -145,7 +212,7 @@ Namespace Agent
             End If
             Dim code = If(String.IsNullOrWhiteSpace(ErrorCode), ExceptionClassifier.CodeUnknown, ErrorCode)
             Dim um = If(String.IsNullOrWhiteSpace(UserMessage), Message, UserMessage)
-            Return $"[{code}] recoverable={Recoverable}: {um}"
+            Return $"[{code}] retryable={Retryable} taskFatal={TaskFatal} sessionFatal={SessionFatal}: {um}"
         End Function
 
         Private Function ExtractObservationSummary() As String
@@ -184,6 +251,8 @@ Namespace Agent
     ''' 工具注册表 - 统一管理 MCP 工具和原生 Office 命令
     ''' </summary>
     Public Class ToolRegistry
+        Private Const HostManifestOwnerId As String = "office-host"
+        Private Const AgentMemoryOwnerId As String = "agent-memory"
         Private ReadOnly _tools As New Dictionary(Of String, ToolDescriptor)(StringComparer.OrdinalIgnoreCase)
         Private _mcpClient As StreamJsonRpcMCPClient
         Private ReadOnly _safetyGate As New Execution.SafetyGate()
@@ -211,34 +280,36 @@ Namespace Agent
         End Sub
 
         Private Sub RegisterBuiltInTools()
-            RegisterTool(New ToolDescriptor With {
+            RegisterTrustedTool(New ToolDescriptor With {
                 .Id = "memory.search",
                 .Name = "检索长期记忆",
                 .Description = "按关键词检索当前宿主可用的长期记忆。仅在 memory.enable_agentic_search 开启时注入给 Agent。",
                 .AppType = "common",
                 .Category = "记忆工具",
                 .RiskLevel = "safe",
+                .AccessMode = "read",
                 .Parameters = New List(Of ToolParam) From {
                     New ToolParam With {.Name = "keyword", .Type = "string", .Required = True, .Description = "要检索的关键词或自然语言问题"},
                     New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
                     New ToolParam With {.Name = "topN", .Type = "integer", .Required = False, .Description = "最多返回条数，默认使用 MemoryConfig.RagTopN"}
                 }
-            })
+            }, ToolRegistrationProvenance.AgentInternal, AgentMemoryOwnerId)
 
-            RegisterTool(New ToolDescriptor With {
+            RegisterTrustedTool(New ToolDescriptor With {
                 .Id = "memory.list_recent",
                 .Name = "查看近期长期记忆",
                 .Description = "列出近期长期记忆，供 Agent 解释当前可用记忆上下文。",
                 .AppType = "common",
                 .Category = "记忆工具",
                 .RiskLevel = "safe",
+                .AccessMode = "read",
                 .Parameters = New List(Of ToolParam) From {
                     New ToolParam With {.Name = "appType", .Type = "string", .Required = False, .Description = "Office 宿主类型，如 Excel/Word/PowerPoint"},
                     New ToolParam With {.Name = "limit", .Type = "integer", .Required = False, .Description = "最多返回条数，默认 10"}
                 }
-            })
+            }, ToolRegistrationProvenance.AgentInternal, AgentMemoryOwnerId)
 
-            RegisterTool(New ToolDescriptor With {
+            RegisterTrustedTool(New ToolDescriptor With {
                 .Id = "memory.promote",
                 .Name = "晋升长期记忆",
                 .Description = "将指定记忆晋升为长期记忆，用于保留用户偏好、事实和可复用工作经验。",
@@ -248,9 +319,9 @@ Namespace Agent
                 .Parameters = New List(Of ToolParam) From {
                     New ToolParam With {.Name = "memoryId", .Type = "integer", .Required = True, .Description = "要晋升的 atomic_memory id"}
                 }
-            })
+            }, ToolRegistrationProvenance.AgentInternal, AgentMemoryOwnerId)
 
-            RegisterTool(New ToolDescriptor With {
+            RegisterTrustedTool(New ToolDescriptor With {
                 .Id = "memory.promote_session",
                 .Name = "晋升当前会话高价值记忆",
                 .Description = "将指定会话中高重要性的短期记忆批量晋升为长期记忆。",
@@ -262,7 +333,7 @@ Namespace Agent
                     New ToolParam With {.Name = "threshold", .Type = "integer", .Required = False, .Description = "重要性阈值，默认 0.65"},
                     New ToolParam With {.Name = "limit", .Type = "integer", .Required = False, .Description = "最多晋升条数，默认 20"}
                 }
-            })
+            }, ToolRegistrationProvenance.AgentInternal, AgentMemoryOwnerId)
         End Sub
 
         ''' <summary>
@@ -276,7 +347,10 @@ Namespace Agent
                     Dim json = System.IO.File.ReadAllText(file)
                     Dim tool = JsonConvert.DeserializeObject(Of ToolDescriptor)(json)
                     If tool IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(tool.Id) Then
-                        RegisterOrMergeTool(tool)
+                        RegisterTrustedTool(
+                            tool,
+                            ToolRegistrationProvenance.HostManifest,
+                            HostManifestOwnerId)
                         loaded += 1
                     End If
                 Catch ex As Exception
@@ -332,24 +406,65 @@ Namespace Agent
         ''' 注册单个工具
         ''' </summary>
         Public Sub RegisterTool(tool As ToolDescriptor)
-            RegisterOrMergeTool(tool)
+            RegisterOrMergeTool(tool, ToolRegistrationProvenance.Custom, "")
         End Sub
 
-        Private Sub RegisterOrMergeTool(tool As ToolDescriptor)
+        Private Sub RegisterTrustedTool(tool As ToolDescriptor,
+                                        provenance As ToolRegistrationProvenance,
+                                        ownerId As String)
+            RegisterOrMergeTool(tool, provenance, ownerId)
+        End Sub
+
+        Private Sub RegisterOrMergeTool(tool As ToolDescriptor,
+                                        provenance As ToolRegistrationProvenance,
+                                        ownerId As String)
             If tool Is Nothing OrElse String.IsNullOrWhiteSpace(tool.Id) Then Return
+
+            Dim normalizedOwnerId = If(ownerId, "").Trim()
 
             Dim existing As ToolDescriptor = Nothing
             If _tools.TryGetValue(tool.Id, existing) Then
+                ' Public custom registrations have no trusted owner identity, so two distinct
+                ' callers with the same id must never merge risk/access metadata.
+                If provenance = ToolRegistrationProvenance.Custom Then
+                    If Object.ReferenceEquals(existing, tool) Then Return
+                    AppLogger.Warn(
+                        "ToolRegistry",
+                        $"Rejected ambiguous custom tool collision id={AppLogger.Redact(tool.Id)}")
+                    Return
+                End If
+                If existing.RegistrationProvenance <> provenance OrElse
+                   Not String.Equals(existing.RegistrationOwnerId,
+                                     normalizedOwnerId,
+                                     StringComparison.OrdinalIgnoreCase) Then
+                    AppLogger.Warn(
+                        "ToolRegistry",
+                        $"Rejected tool registration collision id={AppLogger.Redact(tool.Id)} existing={existing.RegistrationProvenance}/{AppLogger.Redact(existing.RegistrationOwnerId)} incoming={provenance}/{AppLogger.Redact(normalizedOwnerId)}")
+                    Return
+                End If
                 existing.AppType = MergeAppTypes(existing.AppType, tool.AppType)
                 If String.IsNullOrWhiteSpace(existing.Description) Then existing.Description = tool.Description
                 If String.IsNullOrWhiteSpace(existing.Name) Then existing.Name = tool.Name
                 If existing.Parameters Is Nothing OrElse existing.Parameters.Count = 0 Then existing.Parameters = tool.Parameters
+                If tool.OutcomeEffects IsNot Nothing AndAlso tool.OutcomeEffects.Count > 0 Then
+                    For Each effect In tool.OutcomeEffects
+                        If Not existing.OutcomeEffects.Contains(effect, StringComparer.OrdinalIgnoreCase) Then
+                            existing.OutcomeEffects.Add(effect)
+                        End If
+                    Next
+                End If
                 If String.IsNullOrWhiteSpace(existing.Category) OrElse existing.Category = "基础操作" Then existing.Category = tool.Category
+                If Not String.IsNullOrWhiteSpace(tool.AccessMode) AndAlso
+                   (String.IsNullOrWhiteSpace(existing.AccessMode) OrElse
+                    String.Equals(existing.AccessMode, "write", StringComparison.OrdinalIgnoreCase)) Then
+                    existing.AccessMode = tool.AccessMode
+                End If
                 If String.Equals(existing.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) AndAlso
                    Not String.Equals(tool.RiskLevel, "safe", StringComparison.OrdinalIgnoreCase) Then
                     existing.RiskLevel = tool.RiskLevel
                 End If
             Else
+                tool.AssignRegistrationTrust(provenance, normalizedOwnerId)
                 _tools(tool.Id) = tool
             End If
         End Sub
@@ -402,7 +517,10 @@ Namespace Agent
                                 })
                             End If
 
-                            _tools(toolId) = tool
+                            RegisterTrustedTool(
+                                tool,
+                                ToolRegistrationProvenance.SkillScript,
+                                skill.Name)
                         Next
                     End If
                 Next
@@ -440,7 +558,7 @@ Namespace Agent
                 Return tools
             End If
 
-            Return tools.Where(Function(t) executionContext.IsToolAllowed(t.Id)).ToList()
+            Return tools.Where(Function(t) executionContext.IsToolAllowed(t)).ToList()
         End Function
 
         Private Shared Function SupportsApp(tool As ToolDescriptor, appType As String) As Boolean
@@ -484,14 +602,25 @@ Namespace Agent
         End Function
 
         Public Function TryNormalizeToolCall(appType As String, toolCall As ToolCall, ByRef message As String) As Boolean
-            Return TryNormalizeToolCall(appType, toolCall, Nothing, message)
+            Dim ignoredErrorCode As String = ""
+            Return TryNormalizeToolCall(appType, toolCall, Nothing, message, ignoredErrorCode)
         End Function
 
         Public Function TryNormalizeToolCall(appType As String,
                                              toolCall As ToolCall,
                                              executionContext As ToolExecutionContext,
                                              ByRef message As String) As Boolean
+            Dim ignoredErrorCode As String = ""
+            Return TryNormalizeToolCall(appType, toolCall, executionContext, message, ignoredErrorCode)
+        End Function
+
+        Public Function TryNormalizeToolCall(appType As String,
+                                             toolCall As ToolCall,
+                                             executionContext As ToolExecutionContext,
+                                             ByRef message As String,
+                                             ByRef errorCode As String) As Boolean
             message = ""
+            errorCode = ExceptionClassifier.CodeNotFound
             If toolCall Is Nothing OrElse String.IsNullOrWhiteSpace(toolCall.ToolId) Then
                 message = "工具调用为空"
                 Return False
@@ -501,7 +630,14 @@ Namespace Agent
             If toolCall.Parameters Is Nothing Then toolCall.Parameters = New JObject()
             Dim direct = GetTool(original)
             If direct IsNot Nothing AndAlso SupportsApp(direct, appType) Then
+                If Not IsAllowedByExecutionContext(direct, executionContext) Then
+                    errorCode = ExceptionClassifier.CodeToolNotAllowed
+                    message = BuildToolAuthorizationMessage(direct, executionContext)
+                    Return False
+                End If
                 toolCall.ToolId = direct.Id
+                NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
+                errorCode = ""
                 Return True
             End If
 
@@ -509,7 +645,14 @@ Namespace Agent
             If Not String.IsNullOrWhiteSpace(aliasId) Then
                 Dim aliasTool = GetTool(aliasId)
                 If aliasTool IsNot Nothing AndAlso SupportsApp(aliasTool, appType) Then
+                    If Not IsAllowedByExecutionContext(aliasTool, executionContext) Then
+                        errorCode = ExceptionClassifier.CodeToolNotAllowed
+                        message = BuildToolAuthorizationMessage(aliasTool, executionContext)
+                        Return False
+                    End If
                     toolCall.ToolId = aliasTool.Id
+                    NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
+                    errorCode = ""
                     Return True
                 End If
             End If
@@ -520,7 +663,9 @@ Namespace Agent
                 ToList()
             If matches.Count = 1 Then
                 toolCall.ToolId = matches(0).Id
+                NormalizeBuiltInParameters(toolCall.ToolId, toolCall.Parameters)
                 message = $"已将工具 {original} 规范化为 {toolCall.ToolId}"
+                errorCode = ""
                 Return True
             End If
 
@@ -528,6 +673,39 @@ Namespace Agent
             message = $"未找到工具: {original}。只能使用当前 {If(appType, "Office")} 已注册工具，例如: {available}"
             Return False
         End Function
+
+        Private Shared Function BuildToolAuthorizationMessage(tool As ToolDescriptor,
+                                                              executionContext As ToolExecutionContext) As String
+            Dim toolId = If(tool?.Id, "未知工具")
+            If executionContext IsNot Nothing AndAlso executionContext.ReadOnlyTask Then
+                Return $"工具 {toolId} 已注册，但当前任务合同为只读，未授权执行 Office 写操作。请基于只读工具回答，或在用户目标确实要求修改时重新建立执行型 Goal。"
+            End If
+            Dim policy = If(executionContext?.AllowedToolsText(), "当前执行策略")
+            Return $"工具 {toolId} 已注册，但未获得当前任务的执行授权。授权策略: {policy}"
+        End Function
+
+        Private Shared Function IsAllowedByExecutionContext(tool As ToolDescriptor,
+                                                            executionContext As ToolExecutionContext) As Boolean
+            Return executionContext Is Nothing OrElse
+                Not executionContext.HasPrimarySkillGate() OrElse
+                executionContext.IsToolAllowed(tool)
+        End Function
+
+        ''' <summary>
+        ''' Normalize common model-produced parameter aliases before schema validation and
+        ''' execution. The canonical CreateSheet contract uses "name", while some providers
+        ''' emit the semantically equivalent "sheetName".
+        ''' </summary>
+        Private Shared Sub NormalizeBuiltInParameters(toolId As String, params As JObject)
+            If params Is Nothing OrElse String.IsNullOrWhiteSpace(toolId) Then Return
+
+            Select Case toolId.Trim().ToLowerInvariant()
+                Case "createsheet" ' CreateSheet: accept sheetName as an alias of name.
+                    If params("name") Is Nothing AndAlso params("sheetName") IsNot Nothing Then
+                        params("name") = params("sheetName").DeepClone()
+                    End If
+            End Select
+        End Sub
 
         Private Shared Function NormalizeToolKey(value As String) As String
             If String.IsNullOrWhiteSpace(value) Then Return ""
@@ -575,13 +753,21 @@ Namespace Agent
                 For Each mcpTool In mcpTools
                     If String.IsNullOrWhiteSpace(mcpTool.Name) Then Continue For
                     Dim descriptor = ConvertMcpToDescriptor(mcpTool)
-                    _tools(descriptor.Id) = descriptor
+                    RegisterTrustedTool(
+                        descriptor,
+                        ToolRegistrationProvenance.Mcp,
+                        ResolveMcpOwnerId())
                 Next
 
                 Debug.WriteLine($"[ToolRegistry] 从 MCP 服务器加载了 {mcpTools.Count} 个工具")
             Catch ex As Exception
                 Debug.WriteLine($"[ToolRegistry] 加载 MCP 工具失败: {ex.Message}")
             End Try
+        End Function
+
+        Private Function ResolveMcpOwnerId() As String
+            If _mcpClient Is Nothing Then Return "mcp-client"
+            Return "mcp-client:" & _mcpClient.TransportType.ToString()
         End Function
 
         ''' <summary>
@@ -650,20 +836,38 @@ Namespace Agent
         ''' <summary>
         ''' 执行工具调用
         ''' </summary>
-        Public Async Function ExecuteToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)
-            Return Await ExecuteToolAsync(Nothing, toolId, params)
+        Public Async Function ExecuteToolAsync(toolId As String,
+                                               params As JObject,
+                                               Optional cancellationToken As Threading.CancellationToken = Nothing) As Task(Of ToolResult)
+            Return Await ExecuteToolAsync(Nothing, toolId, params, cancellationToken)
         End Function
 
         Public Async Function ExecuteToolAsync(executionContext As ToolExecutionContext,
                                                toolId As String,
-                                               params As JObject) As Task(Of ToolResult)
+                                               params As JObject,
+                                               Optional cancellationToken As Threading.CancellationToken = Nothing) As Task(Of ToolResult)
             Dim sw = Diagnostics.Stopwatch.StartNew()
+            cancellationToken.ThrowIfCancellationRequested()
             If params Is Nothing Then params = New JObject()
 
             Dim tool = GetTool(toolId)
             If tool Is Nothing Then
                 sw.Stop()
                 Return ToolResult.Failed(toolId, $"未找到工具: {toolId}")
+            End If
+
+            If executionContext IsNot Nothing AndAlso
+               String.Equals(tool.Id, "OfficeObjectOperation", StringComparison.OrdinalIgnoreCase) AndAlso
+               Not executionContext.IsOfficeObjectOperationReady() Then
+                sw.Stop()
+                Dim message = "OfficeObjectOperation 仅用于已发现的长尾能力；请先调用 DiscoverOfficeCapability。已有专用工具时直接调用专用工具。"
+                Return ToolResult.Failed(tool.Id,
+                                         message,
+                                         New With {.requiredPriorTool = "DiscoverOfficeCapability"},
+                                         ExceptionClassifier.CodeToolNotAllowed,
+                                         message,
+                                         message,
+                                         recoverable:=True)
             End If
 
             ' VBA 默认禁用是全局安全边界，应先于宿主兼容性判断。
@@ -691,15 +895,15 @@ Namespace Agent
 
             If executionContext IsNot Nothing AndAlso
                executionContext.HasPrimarySkillGate() AndAlso
-               Not executionContext.IsToolAllowed(tool.Id) Then
+               Not executionContext.IsToolAllowed(tool) Then
                 sw.Stop()
-                Dim message = $"工具 {tool.Id} 不在当前 Skill 允许工具集合中"
+                Dim message = $"工具 {tool.Id} 不在当前执行授权策略中"
                 Return ToolResult.Failed(tool.Id,
                                          message,
                                          New With {
-                                             .primarySkill = executionContext.PrimarySkillName,
-                                             .allowedTools = executionContext.AllowedToolsText()
-                                         },
+                                              .primarySkill = executionContext.PrimarySkillName,
+                                              .authorizationPolicy = executionContext.AllowedToolsText()
+                                          },
                                          ExceptionClassifier.CodeToolNotAllowed,
                                          message,
                                          message,
@@ -718,7 +922,8 @@ Namespace Agent
             End If
 
             If String.Equals(toolId, "PythonCompute", StringComparison.OrdinalIgnoreCase) Then
-                Dim computeResult = Await Services.Python.PythonComputeService.ExecuteAsync(params)
+                Dim computeResult = Await Services.Python.PythonComputeService.ExecuteAsync(params, cancellationToken)
+                cancellationToken.ThrowIfCancellationRequested()
                 sw.Stop()
                 If computeResult.Success Then
                     Dim observation As New JObject From {
@@ -736,6 +941,9 @@ Namespace Agent
                     Return succeeded
                 End If
 
+                AppLogger.Warn(
+                    "PythonCompute",
+                    $"Execution failed code={AppLogger.Redact(computeResult.ErrorCode)} detail={AppLogger.Redact(computeResult.DebugDetail)}")
                 Return ToolResult.Failed(toolId,
                                          computeResult.ErrorMessage,
                                          data:=New With {
@@ -874,6 +1082,9 @@ Namespace Agent
                     End If
                     If String.IsNullOrWhiteSpace(hostResult.ToolId) Then hostResult.ToolId = toolId
                     If hostResult.ElapsedMs <= 0 Then hostResult.ElapsedMs = sw.ElapsedMilliseconds
+                    If hostResult.Success AndAlso executionContext IsNot Nothing Then
+                        executionContext.RecordSuccessfulTool(tool.Id)
+                    End If
                     Return hostResult
                 Catch ex As Exception
                     sw.Stop()
@@ -897,6 +1108,11 @@ Namespace Agent
             Dim message = If(String.IsNullOrWhiteSpace(decision.UserMessage),
                              decision.Reason,
                              decision.UserMessage)
+            ' A declarative schema error occurs before any host mutation, so the agent can
+            ' safely repair the batch. Policy denials and rejected approvals remain terminal.
+            Dim recoverable = String.Equals(errorCode,
+                                            ExceptionClassifier.CodeOperationSchemaInvalid,
+                                            StringComparison.OrdinalIgnoreCase)
             AppLogger.Warn("ToolRegistry", $"Safety denied toolId={tool.Id} action={decision.Action} code={errorCode}: {AppLogger.Redact(decision.Reason)}")
             Return ToolResult.Failed(tool.Id,
                                      message,
@@ -908,7 +1124,7 @@ Namespace Agent
                                      errorCode,
                                      message,
                                      decision.Reason,
-                                     recoverable:=False)
+                                     recoverable:=recoverable)
         End Function
 
         Private Async Function ExecuteMemoryToolAsync(toolId As String, params As JObject) As Task(Of ToolResult)

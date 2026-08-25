@@ -30,6 +30,9 @@ Namespace Agent.Harness
         Public Property UserMessage As String = ""
         Public Property DebugMessage As String = ""
         Public Property AgentSessionId As String = ""
+        Public Property ErrorCode As String = ""
+        Public Property TaskFatal As Boolean = False
+        Public Property SessionFatal As Boolean = False
         Public Property StartedAt As DateTime
         Public Property FinishedAt As DateTime
     End Class

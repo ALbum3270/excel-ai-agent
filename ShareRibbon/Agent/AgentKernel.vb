@@ -29,6 +29,7 @@ Namespace Agent
         Public Property SendAIRequest As Func(Of String, String, List(Of HistoryMessage), Task(Of String))
         Public Property SendAIRequestWithMessages As Func(Of JArray, Task(Of String))
         Public Property ExecuteCodeWithToolResult As Func(Of String, String, Boolean, ToolResult)
+        Public Property CaptureContextPack As Func(Of Context.ContextPack)
 
         ' MCP 客户端（由外部设置，可选）
         Public Property McpClient As StreamJsonRpcMCPClient
@@ -86,6 +87,10 @@ Namespace Agent
                                                         If SendAIRequestWithMessages Is Nothing Then Return Task.FromResult(Of String)(Nothing)
                                                         Return SendAIRequestWithMessages(messages)
                                                     End Function
+            _loopEngine.CaptureContextPack = Function()
+                                                 If CaptureContextPack Is Nothing Then Return Nothing
+                                                 Return CaptureContextPack.Invoke()
+                                             End Function
 
             _loopEngine.OnPlanGenerated = Sub(plan)
                                               RaiseEvent OnPlanGenerated(plan)
@@ -108,7 +113,14 @@ Namespace Agent
                                                End Sub
 
             _loopEngine.OnRequestApproval = Async Function(msg)
-                                                Dim tcs As New TaskCompletionSource(Of Boolean)()
+                                                ' Fail closed when no approval consumer is connected; otherwise
+                                                ' the Agent would await an uncompletable Task indefinitely.
+                                                If OnRequestApprovalEvent Is Nothing Then
+                                                    Throw New InvalidOperationException(
+                                                        "No approval handler is registered for this AgentKernel.")
+                                                End If
+                                                Dim tcs As New TaskCompletionSource(Of Boolean)(
+                                                    TaskCreationOptions.RunContinuationsAsynchronously)
                                                 RaiseEvent OnRequestApproval(msg, Sub(approved) tcs.TrySetResult(approved))
                                                 Return Await tcs.Task
                                             End Function
@@ -203,11 +215,13 @@ Namespace Agent
                                             Optional officeContext As Context.OfficeContext = Nothing,
                                             Optional contextPack As Context.ContextPack = Nothing,
                                             Optional taskSpec As AgentTaskSpec = Nothing,
-                                            Optional selectedSkills As List(Of SkillFileDefinition) = Nothing) As Task(Of AgentResult)
+                                            Optional selectedSkills As List(Of SkillFileDefinition) = Nothing,
+                                            Optional cancellationToken As Threading.CancellationToken = Nothing) As Task(Of AgentResult)
             Dim cid = AppLogger.BeginScope()
             AppLogger.Info("AgentKernel", $"ExecuteAsync start appType={appType} cid={cid}")
 
             Try
+                cancellationToken.ThrowIfCancellationRequested()
                 ' 创建会话
                 _session = New AgentSession(userRequest, appType, currentContent)
                 _session.Spec = taskSpec
@@ -240,18 +254,28 @@ Namespace Agent
                 If matchedSkill Is Nothing Then matchedSkill = SelectSkillForRequest(userRequest, appType)
                 If matchedSkill IsNot Nothing Then _session.Skill = matchedSkill
                 Dim executionContext As ToolExecutionContext = ToolExecutionContext.FromSession(_session, matchedSkill)
+                AppLogger.Info("AgentKernel",
+                               $"Primary skill={If(matchedSkill?.Name, "none")} " &
+                               $"allowedTools={executionContext.AllowedToolsText()} " &
+                               $"taskHints={String.Join(",", If(_session.Spec?.RequiredTools, New List(Of String)()))}")
 
-                ' 构建系统提示词（注入上下文 + 当前 Skill 可见工具）
-                Dim contextText = contextPack.ToPromptText()
+                ' System prompt contains only stable policy/tool facts. Mutable Office state
+                ' is injected from the freshly captured ContextPack on every Agent step.
+                Dim executionTools = _toolRegistry.GetVisibleTools(appType, executionContext)
+                AppLogger.Info("AgentKernel",
+                               $"Adaptive ReAct tool view count={executionTools.Count}")
                 Dim systemPrompt = _promptManager.BuildSystemPrompt(
                     appType,
-                    _toolRegistry.GetVisibleTools(appType, executionContext),
-                    _memory,
-                    contextText
+                    executionTools,
+                    _memory
                 )
 
                 ' 执行 ReAct Loop
-                Dim result = Await _loopEngine.RunAsync(_session, systemPrompt, matchedSkill)
+                Dim result = Await _loopEngine.RunAsync(
+                    _session,
+                    systemPrompt,
+                    matchedSkill,
+                    cancellationToken)
 
                 ' 保存记忆
                 _memory.AddTaskRecord(result)
@@ -271,7 +295,10 @@ Namespace Agent
                 AppLogger.Error("AgentKernel", "ExecuteAsync unhandled exception", ex)
                 Dim classified = ExceptionClassifier.Classify(ex)
                 Dim failed = AgentResult.Failed(If(_session?.Id, Guid.NewGuid().ToString()),
-                                                $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}")
+                                                $"执行异常: [{classified.ErrorCode}] {classified.UserMessage}",
+                                                taskFatal:=classified.TaskFatal,
+                                                sessionFatal:=classified.SessionFatal,
+                                                errorCode:=classified.ErrorCode)
                 RaiseEvent OnCompleted(failed)
                 Return failed
             Finally

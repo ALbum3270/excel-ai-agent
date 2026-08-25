@@ -70,6 +70,17 @@ Namespace Agent.OfficeOperations
                 ValidateOperation(batch.Operations(index), index, normalizedApp, operationIds, result)
             Next
 
+            Dim hasBatchCriteria = batch.SuccessCriteria IsNot Nothing AndAlso batch.SuccessCriteria.Count > 0
+            For index = 0 To batch.Operations.Count - 1
+                Dim operation = batch.Operations(index)
+                If operation Is Nothing Then Continue For
+                Dim action = If(operation.Action, "").Trim().ToLowerInvariant()
+                If action = "get" OrElse action = "collection_item" Then Continue For
+                If (operation.ExpectedEffects Is Nothing OrElse Not operation.ExpectedEffects.HasValues) AndAlso Not hasBatchCriteria Then
+                    result.Errors.Add($"OPERATION_SCHEMA_INVALID: operations[{index}] mutates Office state but declares no expectedEffects or successCriteria")
+                End If
+            Next
+
             If batch.SuccessCriteria IsNot Nothing Then
                 For index = 0 To batch.SuccessCriteria.Count - 1
                     Dim criterion = batch.SuccessCriteria(index)

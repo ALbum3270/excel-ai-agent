@@ -64,10 +64,11 @@ Public Class DefaultContextComposer
         Debug.WriteLine($"[DefaultContextComposer] UseContextBuilder={context.UseContextBuilder}, EnableMemory={context.EnableMemory}")
         Debug.WriteLine($"[DefaultContextComposer] Session message count: {sessionMessages.Count}")
 
+        Dim retrievalQuery = ChatQuestionText.ExtractUserQuestion(context.Question)
         Dim built = ChatContextBuilder.BuildMessages(
             scenario,
             appType,
-            context.Question,
+            retrievalQuery,
             sessionMessages,
             context.Question,
             context.SystemPrompt,
@@ -132,5 +133,30 @@ Public Class DefaultContextComposer
         End If
 
         Return "Excel"
+    End Function
+End Class
+
+''' <summary>
+''' Separates the user's natural-language question from the transport envelope and
+''' Office selection context appended for the model.
+''' </summary>
+Public NotInheritable Class ChatQuestionText
+    Private Const QuestionPrefix As String = "--- 我此次的问题："
+    Private Const QuestionSuffix As String = " ---"
+
+    Private Sub New()
+    End Sub
+
+    Public Shared Function ExtractUserQuestion(value As String) As String
+        If String.IsNullOrWhiteSpace(value) Then Return ""
+
+        Dim text = value.Trim()
+        If Not text.StartsWith(QuestionPrefix, StringComparison.Ordinal) Then Return text
+
+        Dim contentStart = QuestionPrefix.Length
+        Dim contentEnd = text.IndexOf(QuestionSuffix, contentStart, StringComparison.Ordinal)
+        If contentEnd <= contentStart Then Return text
+
+        Return text.Substring(contentStart, contentEnd - contentStart).Trim()
     End Function
 End Class

@@ -83,7 +83,8 @@ Namespace Agent.Harness
                     .RunId = runId,
                     .Turn = turn,
                     .StartedAt = startedAt,
-                    .ApprovalSignal = New TaskCompletionSource(Of Boolean)(TaskCreationOptions.RunContinuationsAsynchronously)
+                    .ApprovalSignal = CreateApprovalSignal(),
+                    .CancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
                 }
                 SyncLock _runLock
                     _pendingRuns(runId) = pending
@@ -95,7 +96,8 @@ Namespace Agent.Harness
                                                          officeContext,
                                                          contextPack,
                                                          turn.TaskSpec,
-                                                         turn.SelectedSkills)
+                                                         turn.SelectedSkills,
+                                                         pending.CancellationSource.Token)
                 Dim first = Await Task.WhenAny(pending.AgentTask, pending.ApprovalSignal.Task)
                 If first Is pending.ApprovalSignal.Task AndAlso Not pending.AgentTask.IsCompleted Then
                     keepPending = True
@@ -105,6 +107,7 @@ Namespace Agent.Harness
                         .RunId = runId,
                         .Status = HarnessRunStatus.AwaitingApproval,
                         .UserMessage = pending.ApprovalMessage,
+                        .ErrorCode = ExceptionClassifier.CodeSafetyNeedsApproval,
                         .StartedAt = startedAt
                     }
                 End If
@@ -117,15 +120,19 @@ Namespace Agent.Harness
                 Dim succeeded = agentResult IsNot Nothing AndAlso agentResult.Success
                 Dim status = If(succeeded, HarnessRunStatus.Succeeded, HarnessRunStatus.Failed)
                 Dim message = If(agentResult?.Message, If(succeeded, "执行完成", "执行失败"))
+                Dim errorCode = If(agentResult?.ErrorCode, If(succeeded, "", ExceptionClassifier.CodeUnknown))
 
                 RaisePhase(runId, If(succeeded, "completed", "failed"), message)
-                SafeCompleteRun(runId, If(succeeded, "succeeded", "failed"), message, If(succeeded, "", ExceptionClassifier.CodeUnknown), DateTime.Now)
+                SafeCompleteRun(runId, If(succeeded, "succeeded", "failed"), message, errorCode, DateTime.Now)
                 Return New HarnessRunResult With {
                     .RunId = runId,
                     .Status = status,
                     .UserMessage = message,
                     .DebugMessage = message,
                     .AgentSessionId = If(agentResult?.SessionId, ""),
+                    .ErrorCode = errorCode,
+                    .TaskFatal = If(agentResult?.TaskFatal, False),
+                    .SessionFatal = If(agentResult?.SessionFatal, False),
                     .StartedAt = startedAt,
                     .FinishedAt = DateTime.Now
                 }
@@ -150,6 +157,9 @@ Namespace Agent.Harness
                     .Status = HarnessRunStatus.Failed,
                     .UserMessage = classified.UserMessage,
                     .DebugMessage = classified.DebugDetail,
+                    .ErrorCode = classified.ErrorCode,
+                    .TaskFatal = classified.TaskFatal OrElse classified.SessionFatal,
+                    .SessionFatal = classified.SessionFatal,
                     .StartedAt = startedAt,
                     .FinishedAt = DateTime.Now
                 }
@@ -170,8 +180,16 @@ Namespace Agent.Harness
             End If
 
             cancellationToken.ThrowIfCancellationRequested()
-            Dim callback = pending.ApprovalCallback
-            pending.ApprovalCallback = Nothing
+            Dim callback As Action(Of Boolean) = Nothing
+            Dim nextApprovalSignal As TaskCompletionSource(Of Boolean) = Nothing
+            SyncLock pending.SyncRoot
+                callback = pending.ApprovalCallback
+                pending.ApprovalCallback = Nothing
+                ' Install the next signal before resuming the Agent. A resumed tool can reach
+                ' another approval synchronously, and that second request must not be lost.
+                nextApprovalSignal = CreateApprovalSignal()
+                pending.ApprovalSignal = nextApprovalSignal
+            End SyncLock
             If callback Is Nothing Then Return MissingRunResult(runId)
             SafeAppendApprovalStep(runId,
                                    -2,
@@ -184,12 +202,30 @@ Namespace Agent.Harness
             callback(approved)
             SafeSetRunStatus(runId, "running", If(approved, "审批通过，继续执行", "审批拒绝，正在收敛执行结果"), "")
 
+            Dim waitResult = Await Task.WhenAny(pending.AgentTask, nextApprovalSignal.Task)
+            cancellationToken.ThrowIfCancellationRequested()
+            If waitResult Is nextApprovalSignal.Task AndAlso Not pending.AgentTask.IsCompleted Then
+                SafeSetRunStatus(runId,
+                                 "awaiting_approval",
+                                 pending.ApprovalMessage,
+                                 ExceptionClassifier.CodeSafetyNeedsApproval)
+                RaisePhase(runId, "awaiting_approval", pending.ApprovalMessage)
+                Return New HarnessRunResult With {
+                    .RunId = runId,
+                    .Status = HarnessRunStatus.AwaitingApproval,
+                    .UserMessage = pending.ApprovalMessage,
+                    .ErrorCode = ExceptionClassifier.CodeSafetyNeedsApproval,
+                    .StartedAt = pending.StartedAt
+                }
+            End If
+
             Dim agentResult = Await pending.AgentTask
             pending.IsCompleted = True
             Dim succeeded = agentResult IsNot Nothing AndAlso agentResult.Success
             Dim status = If(succeeded, HarnessRunStatus.Succeeded, HarnessRunStatus.Failed)
             Dim message = If(agentResult?.Message, If(succeeded, "执行完成", "执行失败"))
-            SafeCompleteRun(runId, If(succeeded, "succeeded", "failed"), message, If(succeeded, "", ExceptionClassifier.CodeUnknown), DateTime.Now)
+            Dim errorCode = If(agentResult?.ErrorCode, If(succeeded, "", ExceptionClassifier.CodeUnknown))
+            SafeCompleteRun(runId, If(succeeded, "succeeded", "failed"), message, errorCode, DateTime.Now)
             RaisePhase(runId, If(succeeded, "completed", "failed"), message)
             RemovePendingRun(runId)
             _currentRunId = ""
@@ -199,6 +235,9 @@ Namespace Agent.Harness
                 .UserMessage = message,
                 .DebugMessage = message,
                 .AgentSessionId = If(agentResult?.SessionId, ""),
+                .ErrorCode = errorCode,
+                .TaskFatal = If(agentResult?.TaskFatal, False),
+                .SessionFatal = If(agentResult?.SessionFatal, False),
                 .StartedAt = pending.StartedAt,
                 .FinishedAt = DateTime.Now
             }
@@ -208,15 +247,22 @@ Namespace Agent.Harness
                                           cancellationToken As CancellationToken) As Task(Of HarnessRunResult) Implements IOfficeHarness.CancelAsync
             Dim pending = GetPendingRun(runId)
             If pending Is Nothing Then Return MissingRunResult(runId)
-            If pending.ApprovalCallback IsNot Nothing Then
-                Return Await ApproveAsync(runId, False, cancellationToken)
-            End If
+            cancellationToken.ThrowIfCancellationRequested()
 
+            Dim approvalCallback As Action(Of Boolean) = Nothing
+            SyncLock pending.SyncRoot
+                approvalCallback = pending.ApprovalCallback
+                pending.ApprovalCallback = Nothing
+            End SyncLock
+            pending.CancellationSource?.Cancel()
+            If approvalCallback IsNot Nothing Then approvalCallback(False)
+            SafeSetRunStatus(runId, "cancelling", "正在安全终止", ExceptionClassifier.CodeCancelled)
             Return New HarnessRunResult With {
                 .RunId = runId,
-                .Status = HarnessRunStatus.Failed,
-                .UserMessage = "当前步骤正在执行，尚不能安全中断宿主 COM 操作",
-                .DebugMessage = "CANCEL_NOT_AT_SAFE_POINT",
+                .Status = HarnessRunStatus.Cancelled,
+                .UserMessage = "正在安全终止",
+                .DebugMessage = "CANCELLATION_REQUESTED",
+                .ErrorCode = ExceptionClassifier.CodeCancelled,
                 .StartedAt = pending.StartedAt,
                 .FinishedAt = DateTime.Now
             }
@@ -271,8 +317,18 @@ Namespace Agent.Harness
                 callback(False)
                 Return
             End If
-            pending.ApprovalMessage = If(message, "该操作需要用户确认")
-            pending.ApprovalCallback = callback
+            Dim signal As TaskCompletionSource(Of Boolean) = Nothing
+            SyncLock pending.SyncRoot
+                ' A single Agent action may have only one outstanding approval. Reject an
+                ' overlapping request instead of overwriting the callback and orphaning a Task.
+                If pending.ApprovalCallback IsNot Nothing Then
+                    callback(False)
+                    Return
+                End If
+                pending.ApprovalMessage = If(message, "该操作需要用户确认")
+                pending.ApprovalCallback = callback
+                signal = pending.ApprovalSignal
+            End SyncLock
             SafeAppendApprovalStep(pending.RunId,
                                    -1,
                                    "approval.request",
@@ -281,7 +337,7 @@ Namespace Agent.Harness
                                    ExceptionClassifier.CodeSafetyNeedsApproval,
                                    New With {.message = pending.ApprovalMessage},
                                    DateTime.Now)
-            pending.ApprovalSignal.TrySetResult(True)
+            signal.TrySetResult(True)
         End Sub
 
         Private Sub SafeAppendApprovalStep(runId As String,
@@ -317,9 +373,13 @@ Namespace Agent.Harness
         End Function
 
         Private Sub RemovePendingRun(runId As String)
+            Dim removed As PendingHarnessRun = Nothing
             SyncLock _runLock
-                _pendingRuns.Remove(runId)
+                If _pendingRuns.TryGetValue(runId, removed) Then
+                    _pendingRuns.Remove(runId)
+                End If
             End SyncLock
+            removed?.CancellationSource?.Dispose()
         End Sub
 
         Private Shared Function MissingRunResult(runId As String) As HarnessRunResult
@@ -328,6 +388,7 @@ Namespace Agent.Harness
                 .Status = HarnessRunStatus.Failed,
                 .UserMessage = "未找到等待审批的任务",
                 .DebugMessage = "RUN_NOT_AWAITING_APPROVAL",
+                .ErrorCode = ExceptionClassifier.CodeApprovalUnavailable,
                 .FinishedAt = DateTime.Now
             }
         End Function
@@ -341,7 +402,13 @@ Namespace Agent.Harness
             Public Property ApprovalCallback As Action(Of Boolean)
             Public Property ApprovalMessage As String = ""
             Public Property IsCompleted As Boolean
+            Public Property CancellationSource As CancellationTokenSource
+            Public ReadOnly Property SyncRoot As New Object()
         End Class
+
+        Private Shared Function CreateApprovalSignal() As TaskCompletionSource(Of Boolean)
+            Return New TaskCompletionSource(Of Boolean)(TaskCreationOptions.RunContinuationsAsynchronously)
+        End Function
 
         Private Sub SafeStartRun(runId As String, turn As UserTurn, startedAt As DateTime)
             Try

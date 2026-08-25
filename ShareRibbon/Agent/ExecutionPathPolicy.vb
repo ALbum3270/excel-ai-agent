@@ -7,22 +7,13 @@ Namespace Agent
     ''' Product path policy for Office AI Agent.
     ''' Primary path: Analyze (AiNativeRuntime) → AgentKernel/LoopEngine → Tool/Capability Executor.
     '''
-    ''' Legacy paths (plain chat with intent and Ralph startLoop protocol) are compatibility only
-    ''' and must not become new feature entry points.
+    ''' Legacy Ralph startLoop protocol is compatibility only and must not become a new
+    ''' feature entry point. Smart-mode chat and tool use share the adaptive Agent path.
     ''' </summary>
     Public NotInheritable Class ExecutionPathPolicy
 
         Private Sub New()
         End Sub
-
-        ''' <summary>
-        ''' When AgentKernel fails to start, allow falling back to plain chat so the user still gets an answer.
-        ''' </summary>
-        Public Shared ReadOnly Property AllowChatFallbackOnAgentFailure As Boolean
-            Get
-                Return True
-            End Get
-        End Property
 
         ''' <summary>
         ''' Host ActionHarness (e.g. WordActionHarness) may handle deterministic high-confidence

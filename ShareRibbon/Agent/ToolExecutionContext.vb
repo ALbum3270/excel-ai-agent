@@ -9,7 +9,8 @@ Namespace Agent
 
     ''' <summary>
     ''' Carries per-run tool visibility and execution policy.
-    ''' H1: appType + selected Skill allowed-tools are enforced at execution time.
+    ''' Application host tools, read-only policy, and selected private extensions are
+    ''' represented independently so Skill retrieval cannot accidentally remove capabilities.
     ''' </summary>
     Public Class ToolExecutionContext
         Public Property AppType As String
@@ -20,6 +21,9 @@ Namespace Agent
         Public Property ApprovedTools As HashSet(Of String)
         Public Property ApprovedToolCalls As HashSet(Of String)
         Public Property EnforceAllowedTools As Boolean = True
+        Public Property ReadOnlyTask As Boolean
+        Public Property AllowApplicationHostTools As Boolean
+        Private _officeCapabilityDiscovered As Boolean
 
         Public Shared Function FromSession(session As AgentSession, skill As AgentSkill) As ToolExecutionContext
             Dim context As New ToolExecutionContext With {
@@ -30,37 +34,107 @@ Namespace Agent
                 .AllowedTools = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
                 .ApprovedTools = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
                 .ApprovedToolCalls = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase),
-                .EnforceAllowedTools = False
+                .EnforceAllowedTools = True,
+                .ReadOnlyTask = String.Equals(If(session?.Spec?.MutationPolicy, ""),
+                                              "read_only",
+                                              StringComparison.OrdinalIgnoreCase),
+                .AllowApplicationHostTools = True
             }
 
-            If skill IsNot Nothing AndAlso skill.RequiredTools IsNot Nothing Then
-                For Each toolId In skill.RequiredTools
-                    If Not String.IsNullOrWhiteSpace(toolId) Then
-                        context.AllowedTools.Add(toolId.Trim())
-                    End If
-                Next
-
-                context.EnforceAllowedTools = context.AllowedTools.Count > 0
-            End If
+            ' Explicit grants are independent of the trusted Office host baseline. Task
+            ' semantics and the selected Skill may opt into private/external capabilities;
+            ' neither list can remove host tools or self-promote a descriptor into the host.
+            AddExplicitGrants(context.AllowedTools, session?.Spec?.RequiredTools)
+            AddExplicitGrants(context.AllowedTools, skill?.RequiredTools)
 
             Return context
         End Function
 
+        Private Shared Sub AddExplicitGrants(target As HashSet(Of String),
+                                              toolIds As IEnumerable(Of String))
+            If target Is Nothing OrElse toolIds Is Nothing Then Return
+            For Each toolId In toolIds
+                If Not String.IsNullOrWhiteSpace(toolId) Then target.Add(toolId.Trim())
+            Next
+        End Sub
+
         Public Function HasPrimarySkillGate() As Boolean
-            Return EnforceAllowedTools AndAlso
-                   AllowedTools IsNot Nothing AndAlso
-                   AllowedTools.Count > 0
+            Return EnforceAllowedTools
         End Function
 
         Public Function IsToolAllowed(toolId As String) As Boolean
             If Not HasPrimarySkillGate() Then Return True
             If String.IsNullOrWhiteSpace(toolId) Then Return False
-            Return AllowedTools.Contains(toolId.Trim())
+            ' A string has no trustworthy provenance, owner, or access mode.  Runtime contexts
+            ' therefore fail closed and require the descriptor overload.  Manually constructed
+            ' strict contexts retain exact-id behavior for legacy harness callers.
+            If AllowApplicationHostTools Then Return False
+            Return AllowedTools IsNot Nothing AndAlso AllowedTools.Contains(toolId.Trim())
         End Function
 
+        Public Function IsToolAllowed(tool As ToolDescriptor) As Boolean
+            If Not HasPrimarySkillGate() Then Return True
+            If tool Is Nothing OrElse String.IsNullOrWhiteSpace(tool.Id) Then Return False
+            If ReadOnlyTask AndAlso Not IsNonMutating(tool) Then Return False
+
+            Dim explicitlyGranted = AllowedTools IsNot Nothing AndAlso
+                AllowedTools.Contains(tool.Id.Trim())
+            If Not AllowApplicationHostTools Then Return explicitlyGranted
+
+            Select Case tool.RegistrationProvenance
+                Case ToolRegistrationProvenance.HostManifest
+                    Return True
+                Case ToolRegistrationProvenance.SkillScript
+                    Return explicitlyGranted AndAlso
+                        Not String.IsNullOrWhiteSpace(tool.RegistrationOwnerId) AndAlso
+                        Not String.IsNullOrWhiteSpace(PrimarySkillName) AndAlso
+                        String.Equals(tool.RegistrationOwnerId,
+                                      PrimarySkillName.Trim(),
+                                      StringComparison.OrdinalIgnoreCase)
+                Case ToolRegistrationProvenance.AgentInternal,
+                     ToolRegistrationProvenance.Mcp,
+                     ToolRegistrationProvenance.Custom
+                    Return explicitlyGranted
+                Case Else
+                    Return False
+            End Select
+        End Function
+
+        Private Shared Function IsNonMutating(tool As ToolDescriptor) As Boolean
+            Return tool IsNot Nothing AndAlso
+                (String.Equals(tool.AccessMode, "read", StringComparison.OrdinalIgnoreCase) OrElse
+                 String.Equals(tool.AccessMode, "compute", StringComparison.OrdinalIgnoreCase))
+        End Function
+
+        ''' <summary>
+        ''' The generic object-operation interface is a second-stage capability. Keeping
+        ''' discovery state in the per-run context prevents a model from bypassing a
+        ''' registered high-level tool with invented COM-shaped commands.
+        ''' </summary>
+        Public Function IsOfficeObjectOperationReady() As Boolean
+            Return _officeCapabilityDiscovered
+        End Function
+
+        Public Sub RecordSuccessfulTool(toolId As String)
+            If String.Equals(If(toolId, "").Trim(),
+                             "DiscoverOfficeCapability",
+                             StringComparison.OrdinalIgnoreCase) Then
+                _officeCapabilityDiscovered = True
+            End If
+        End Sub
+
         Public Function AllowedToolsText() As String
-            If AllowedTools Is Nothing OrElse AllowedTools.Count = 0 Then Return ""
-            Return String.Join(", ", AllowedTools.OrderBy(Function(id) id))
+            If Not EnforceAllowedTools Then Return "unrestricted"
+            If ReadOnlyTask Then
+                Return "read-only Office host tools; explicit grants: " &
+                    String.Join(", ", If(AllowedTools, New HashSet(Of String)()).OrderBy(Function(id) id))
+            End If
+            If Not AllowApplicationHostTools Then
+                Return String.Join(", ", If(AllowedTools, New HashSet(Of String)()).OrderBy(Function(id) id))
+            End If
+            Dim explicitTools = If(AllowedTools, New HashSet(Of String)()).OrderBy(Function(id) id).ToList()
+            Return "trusted application host tools" &
+                If(explicitTools.Count = 0, "", "; explicit grants: " & String.Join(", ", explicitTools))
         End Function
 
         Public Sub ApproveTool(toolId As String, Optional params As JObject = Nothing)

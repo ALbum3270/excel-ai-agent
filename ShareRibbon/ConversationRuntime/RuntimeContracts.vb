@@ -9,7 +9,7 @@ Public Interface IContextComposer
 End Interface
 
 ''' <summary>
-''' Exposes enabled tools, including MCP tools, to the chat request builder.
+''' Exposes enabled native Office and MCP tools to the chat request builder.
 ''' </summary>
 Public Interface IToolBroker
     Function GetTools(context As ChatRequestContext) As JArray
@@ -119,4 +119,5 @@ Public Class ChatContextTaskSpecTrace
     Public Property Constraints As New List(Of String)()
     Public Property SuccessCriteria As New List(Of String)()
     Public Property RequiredTools As New List(Of String)()
+    Public Property GoalInterpretationFallbackReason As String
 End Class

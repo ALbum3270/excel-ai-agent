@@ -38,6 +38,10 @@ Namespace Agent
 
         ' === Working Memory (步骤级，内存) ===
         Private ReadOnly _workingContext As New Dictionary(Of String, Object)(StringComparer.OrdinalIgnoreCase)
+        Private ReadOnly _taskContextSnapshots As New List(Of String)()
+        Private Const MaxTaskContextSnapshots As Integer = 3
+        Private Const MaxTaskContextSnapshotChars As Integer = 12000
+        Private Const MaxPriorTaskContextChars As Integer = 20000
 
         ' === Short-term Memory (会话级，内存) ===
         Private ReadOnly _sessionHistory As New List(Of SessionMessage)()
@@ -87,8 +91,75 @@ Namespace Agent
         Public Sub ClearWorking()
             SyncLock _lock
                 _workingContext.Clear()
+                _taskContextSnapshots.Clear()
             End SyncLock
         End Sub
+
+        ''' <summary>
+        ''' Starts a task-scoped context ledger. The latest ContextPack remains authoritative
+        ''' for the active Office state; this ledger preserves bounded discovery facts when an
+        ''' action (for example CreateSheet) changes the active object.
+        ''' </summary>
+        Public Sub BeginTaskContext(initialContext As Context.ContextPack)
+            Dim snapshot = RenderTaskContextSnapshot(initialContext)
+            SyncLock _lock
+                _taskContextSnapshots.Clear()
+                If Not String.IsNullOrWhiteSpace(snapshot) Then
+                    _taskContextSnapshots.Add(snapshot)
+                End If
+            End SyncLock
+        End Sub
+
+        ''' <summary>
+        ''' Records a refreshed ContextPack without replacing previously discovered sources.
+        ''' The initial snapshot is retained and only the rolling middle snapshot is evicted.
+        ''' </summary>
+        Public Sub ObserveTaskContext(contextPack As Context.ContextPack)
+            Dim snapshot = RenderTaskContextSnapshot(contextPack)
+            If String.IsNullOrWhiteSpace(snapshot) Then Return
+
+            SyncLock _lock
+                If _taskContextSnapshots.Any(Function(item) String.Equals(item, snapshot, StringComparison.Ordinal)) Then
+                    Return
+                End If
+                If _taskContextSnapshots.Count >= MaxTaskContextSnapshots Then
+                    _taskContextSnapshots.RemoveAt(If(_taskContextSnapshots.Count > 1, 1, 0))
+                End If
+                _taskContextSnapshots.Add(snapshot)
+            End SyncLock
+        End Sub
+
+        ''' <summary>
+        ''' Returns prior task observations only. They are discovery hints, not proof that the
+        ''' old values are still current; callers must use a read tool before relying on values.
+        ''' </summary>
+        Public Function GetPriorTaskContexts(currentContext As Context.ContextPack) As String
+            Dim currentSnapshot = RenderTaskContextSnapshot(currentContext)
+            Dim result As New Text.StringBuilder()
+
+            SyncLock _lock
+                For index = 0 To _taskContextSnapshots.Count - 1
+                    Dim snapshot = _taskContextSnapshots(index)
+                    If String.Equals(snapshot, currentSnapshot, StringComparison.Ordinal) Then Continue For
+                    Dim remaining = MaxPriorTaskContextChars - result.Length
+                    If remaining <= 0 Then Exit For
+                    If result.Length > 0 Then result.AppendLine()
+                    result.AppendLine($"### Prior ContextPack {index + 1}")
+                    result.Append(If(snapshot.Length <= remaining, snapshot, snapshot.Substring(0, remaining)))
+                Next
+            End SyncLock
+
+            Return result.ToString()
+        End Function
+
+        Private Shared Function RenderTaskContextSnapshot(contextPack As Context.ContextPack) As String
+            If contextPack Is Nothing Then Return ""
+            Dim snapshot = If(contextPack.ToPromptText(), "").Trim()
+            If snapshot.Length > MaxTaskContextSnapshotChars Then
+                snapshot = snapshot.Substring(0, MaxTaskContextSnapshotChars)
+            End If
+            Return snapshot
+        End Function
 
 #End Region
 
